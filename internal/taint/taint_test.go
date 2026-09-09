@@ -49,7 +49,7 @@ func TestTaintBlocksEffectfulStepUntilSanitised(t *testing.T) {
 		Inputs:      map[string]*structpb.Value{"ref": ref},
 	}
 
-	denied := taint.Check(deploy)
+	denied := checkDispatch(t, deploy)
 	require.False(t, denied.Allow, "an AT_MOST_ONCE step must not act on untrusted data")
 	require.Contains(t, denied.Reason, "git:github:pushes",
 		"the refusal must name the trigger that admitted the value")
@@ -68,7 +68,7 @@ func TestTaintBlocksEffectfulStepUntilSanitised(t *testing.T) {
 	require.Equal(t, []string{"ref"}, record.Fields)
 
 	deploy.Inputs = cleared
-	allowed := taint.Check(deploy)
+	allowed := checkDispatch(t, deploy)
 	require.True(t, allowed.Allow, "sanitised data reaches the effectful step: %s", allowed.Reason)
 	require.Equal(t, "refs/heads/main", cleared["ref"].GetStringValue(),
 		"clearing a mark returns the value the mark carried, unchanged")
@@ -82,7 +82,7 @@ func TestTaintPropagatesThroughPureSteps(t *testing.T) {
 	in := []*dholev1.OutputRef{taint.MarkRef(&dholev1.OutputRef{Port: "payload"}, "git:github:pushes")}
 	out := []*dholev1.OutputRef{{Port: "parsed"}, {Port: "summary"}}
 
-	require.True(t, taint.Check(taint.Dispatch{
+	require.True(t, checkDispatch(t, taint.Dispatch{
 		Subject:     "step:parse",
 		EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
 		InputRefs:   in,
@@ -106,7 +106,7 @@ func TestTaintPropagatesThroughPureSteps(t *testing.T) {
 func TestTaintReachingPrivilegedEngineIsRefused(t *testing.T) {
 	in := []*dholev1.OutputRef{taint.MarkRef(&dholev1.OutputRef{Port: "payload"}, "http:public:hooks")}
 
-	decision := taint.Check(taint.Dispatch{
+	decision := checkDispatch(t, taint.Dispatch{
 		Subject:            "step:parse",
 		EffectClass:        dholev1.EffectClass_EFFECT_CLASS_PURE,
 		EngineCapabilities: []dholev1.Capability{dholev1.Capability_CAPABILITY_PRIVILEGED},
@@ -270,7 +270,7 @@ func TestNestedTaintIsDetected(t *testing.T) {
 	})), "a payload carrying no mark anywhere is clean")
 
 	// And the buried case must block an effectful step just as the plain one does.
-	decision := taint.Check(taint.Dispatch{
+	decision := checkDispatch(t, taint.Dispatch{
 		Subject:     "step:deploy",
 		EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
 		Inputs:      map[string]*structpb.Value{"push": nested},
@@ -308,7 +308,7 @@ func TestGateClearsNothingByExisting(t *testing.T) {
 	// nothing.
 	gate := taint.Gate{StepID: "step:sanitise", Fields: []string{"ref"}}
 	require.True(t, taint.IsTainted(inputs["ref"]))
-	require.False(t, taint.Check(taint.Dispatch{
+	require.False(t, checkDispatch(t, taint.Dispatch{
 		Subject:     "step:deploy",
 		EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
 		Inputs:      inputs,
@@ -366,7 +366,7 @@ func TestStepCannotLaunderItsOwnOutputs(t *testing.T) {
 	require.True(t, taint.RefTainted(out[0]),
 		"an engine's silence about taint is not a clearance")
 
-	require.False(t, taint.Check(taint.Dispatch{
+	require.False(t, checkDispatch(t, taint.Dispatch{
 		Subject:     "step:deploy",
 		EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
 		InputRefs:   out,

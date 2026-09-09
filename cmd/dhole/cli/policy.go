@@ -66,6 +66,8 @@ func policyTestCmd(o *options) *cobra.Command {
 		pluginRef   string
 		effect      string
 		capsFlag    []string
+		taintFlag   []string
+		engineCaps  []string
 		signed      bool
 		upstream    string
 		expectAllow bool
@@ -115,6 +117,10 @@ func policyTestCmd(o *options) *cobra.Command {
 			if err != nil {
 				return &usageError{cmd: cmd, err: err}
 			}
+			engineCapabilities, err := capabilities(engineCaps)
+			if err != nil {
+				return &usageError{cmd: cmd, err: err}
+			}
 			if upstream == "" && parsed.Defaults != nil {
 				upstream = parsed.Defaults.Upstream
 			}
@@ -128,6 +134,13 @@ func policyTestCmd(o *options) *cobra.Command {
 				PluginRef:    pluginRef,
 				Signed:       signed,
 				Upstream:     upstream,
+				// A dispatch is tainted exactly when something admitted the
+				// data, so naming a source is what makes it so: a --tainted
+				// flag separate from its sources could say untrusted-by-nobody,
+				// which no run can produce.
+				Tainted:            len(taintFlag) > 0,
+				TaintSources:       taintFlag,
+				EngineCapabilities: engineCapabilities,
 			})
 			if err != nil {
 				return err
@@ -155,6 +168,11 @@ func policyTestCmd(o *options) *cobra.Command {
 	flags.StringVar(&pluginRef, "plugin-ref", "", "plugin reference the step names")
 	flags.StringVar(&effect, "effect-class", "PURE", "effect class the step operates under")
 	flags.StringSliceVar(&capsFlag, "capability", nil, "capability the plugin manifest declares; repeatable")
+	flags.StringSliceVar(&taintFlag, "taint-source", nil,
+		"trigger that admitted untrusted data into this step; repeatable, and naming any "+
+			"makes the step tainted")
+	flags.StringSliceVar(&engineCaps, "engine-capability", nil,
+		"capability the ENGINE the step would run on advertises; repeatable")
 	flags.BoolVar(&signed, "signed", false, "the plugin carries a verified signature")
 	flags.StringVar(&upstream, "upstream", "", "registry or source the artifact came from")
 	flags.BoolVar(&expectAllow, "expect-allow", true, "fail unless the decision is this")

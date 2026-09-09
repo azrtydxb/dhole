@@ -32,12 +32,14 @@ type CacheReader interface {
 	Lookup(ctx context.Context, tenantID string, key *dholev1.Digest) ([]*dholev1.OutputRef, bool, error)
 }
 
-// Environment is where steps run: which kind of engine backend takes them, and
-// the digest of the environment that every cache key is folded over.
-// executor.Executor satisfies it.
+// Environment is the digest of the environment steps run in, which every
+// cache key is folded over. executor.Executor satisfies it.
+//
+// It deliberately does NOT say which kind of engine takes a step. That is the
+// matched instance's own advertisement (registry.Instance.EngineTypes), and
+// this plane's locally configured backend is a different answer on any fleet
+// whose engines are not all alike.
 type Environment interface {
-	// Kind is the executor backend's stable identifier.
-	Kind() string
 	// EnvironmentIdentity is the digest of the environment steps run in. A
 	// backend with no reproducible environment returns an empty string, and
 	// nothing is then cacheable.
@@ -122,9 +124,13 @@ func (s *Server) Plan(
 			step := byID[id]
 			planned := &dholev1.PlannedStep{StepId: id}
 
-			requirements := s.requirements(step)
-			if len(scheduler.Match(requirements, engines)) > 0 {
-				planned.EngineKind = s.env.Kind()
+			// The kind comes from the instance that MATCHED, not from this
+			// plane's own executor: on a heterogeneous fleet those are two
+			// different answers, and the local one is a guess dressed as a
+			// fact. An instance that advertised no engine type names none,
+			// rather than being credited with this plane's.
+			if matched := scheduler.Match(s.requirements(step), engines); len(matched) > 0 {
+				planned.EngineKind = kindOf(matched[0])
 			}
 
 			cacheable, reason := cache.Eligible(step, leaseScopeOf(step.GetLeaseScope()), envIdentity)
@@ -143,6 +149,16 @@ func (s *Server) Plan(
 		}
 	}
 	return connect.NewResponse(&dholev1.PlanResponse{Steps: steps}), nil
+}
+
+// kindOf is the executor backend an instance would run a step on: the first
+// kind it advertises. An engine offering several is matched on all of them
+// and takes the step on the first it named.
+func kindOf(e registry.Instance) string {
+	if len(e.EngineTypes) == 0 {
+		return ""
+	}
+	return e.EngineTypes[0]
 }
 
 // lookup answers whether one step's work is already recorded.

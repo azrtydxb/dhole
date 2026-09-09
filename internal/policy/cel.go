@@ -35,6 +35,10 @@ const (
 	keyPluginRef    = "plugin_ref"
 	keySigned       = "signed"
 	keyUpstream     = "upstream"
+
+	keyTainted            = "tainted"
+	keyTaintSources       = "taint_sources"
+	keyEngineCapabilities = "engine_capabilities"
 )
 
 // newEnv builds the CEL environment every policy is compiled in.
@@ -61,6 +65,17 @@ func inputMap(in Input) map[string]any {
 	for _, c := range in.Capabilities {
 		caps = append(caps, strings.TrimPrefix(c.String(), "CAPABILITY_"))
 	}
+	engineCaps := make([]string, 0, len(in.EngineCapabilities))
+	for _, c := range in.EngineCapabilities {
+		engineCaps = append(engineCaps, strings.TrimPrefix(c.String(), "CAPABILITY_"))
+	}
+	sources := in.TaintSources
+	if sources == nil {
+		// A rule reading `input.taint_sources` must see an empty list rather
+		// than null: `"x" in null` is an evaluation error, which denies, and
+		// a rule about tainted data would then refuse every clean dispatch.
+		sources = []string{}
+	}
 	return map[string]any{
 		keyTier:         in.Tier,
 		keyTenantID:     in.TenantID,
@@ -70,6 +85,10 @@ func inputMap(in Input) map[string]any {
 		keyPluginRef:    in.PluginRef,
 		keySigned:       in.Signed,
 		keyUpstream:     in.Upstream,
+
+		keyTainted:            in.Tainted,
+		keyTaintSources:       sources,
+		keyEngineCapabilities: engineCaps,
 	}
 }
 

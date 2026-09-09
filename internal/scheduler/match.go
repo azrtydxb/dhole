@@ -17,6 +17,18 @@ import (
 // lifecycle combination — and a function that needed a running NATS to answer
 // would be tested once, at the happy path, and then trusted.
 //
+// It does NOT filter on the engine TYPE an instance advertises, even though
+// registry.Instance now carries it. The engine types a step is compatible with
+// are declared by its plugin's manifest (catalog.Entry.EngineTypes), and
+// neither caller — Scheduler.dispatch nor api.Plan — resolves a manifest to
+// build executor.Requirements. A filter only one of the two could populate
+// would make the planner's answer disagree with the dispatcher's, which is the
+// one property both sides are written to preserve. The type belongs in
+// Requirements together with the manifest lookup that fills it, in one change
+// that moves both callers; until then a step needing a container engine and
+// matched to a process-only one fails at the far end, visibly, rather than
+// being reported as unschedulable by a planner and dispatched anyway.
+//
 // The filter is a conjunction and it never widens: an empty OS or Arch in the
 // requirements means the step does not care, but an empty one on the INSTANCE
 // means the instance never said, which is not the same as "anything" and is

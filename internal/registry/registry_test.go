@@ -437,3 +437,26 @@ func TestRegisterRequiresAnEngineID(t *testing.T) {
 	require.Error(t, reg.Heartbeat(ctx, heartbeat("")))
 	require.Error(t, reg.Heartbeat(ctx, nil))
 }
+
+// TestRegistryKeepsTheEngineTypesAnEngineAdvertises: an EngineRegistration
+// says which executor backends the engine offers, and that is the only place
+// the fact exists. A registry that drops it leaves every consumer — the
+// planner above all — to answer "which kind of engine takes this step" from
+// its own local configuration, which is a different answer on any fleet whose
+// engines are not all alike.
+func TestRegistryKeepsTheEngineTypesAnEngineAdvertises(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	announcement := registration("engine-mixed")
+	announcement.EngineTypes = []string{"container", "process"}
+	require.NoError(t, reg.Register(ctx, announcement))
+	require.NoError(t, reg.Heartbeat(ctx, &dholev1.EngineHeartbeat{EngineId: "engine-mixed"}))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	require.Equal(t, []string{"container", "process"}, instances[0].EngineTypes,
+		"the engine types survive the write and the read, or nothing downstream can "+
+			"tell a container engine from a process one")
+}

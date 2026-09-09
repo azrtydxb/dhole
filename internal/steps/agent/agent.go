@@ -45,6 +45,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/taint"
 	"github.com/azrtydxb/go-ai-sdk/agent"
@@ -138,6 +139,14 @@ type Options struct {
 	// EngineCapabilities are the capabilities of the engine an action would
 	// run on. A privileged engine refuses tainted data whatever the class.
 	EngineCapabilities []dholev1.Capability
+	// Tier is the trust tier the taint policy is keyed on. Empty is the
+	// strictest tier internal/taint knows.
+	Tier string
+	// TaintChecker is the policy the taint refusal is evaluated against. A
+	// nil one is a deployment that configured no taint policy: the built-in
+	// rules apply, unaudited, which is why a deployment with an audit trail
+	// passes its own checker.
+	TaintChecker *taint.Checker
 }
 
 // Step is the agent step type. It is safe for concurrent use.
@@ -155,8 +164,10 @@ type Step struct {
 	invoker      Invoker
 	gate         Gate
 	tenantID     string
+	tier         string
 	inputs       map[string]*structpb.Value
 	capabilities []dholev1.Capability
+	taint        *taint.Checker
 }
 
 // New validates the configuration and builds a Step.
@@ -180,6 +191,15 @@ func New(cfg Config, opts Options) (*Step, error) {
 	if err != nil {
 		return nil, err
 	}
+	checker := opts.TaintChecker
+	if checker == nil {
+		// No taint policy was configured, so the built-in rules are what
+		// judges this agent — the same rules, now evaluated as policy. An
+		// agent with no checker at all would be one that never asked.
+		if checker, err = taint.NewChecker(nil, policy.DiscardAudit{}); err != nil {
+			return nil, err
+		}
+	}
 	if opts.Gate == nil {
 		for _, name := range actions.Names() {
 			if step, _ := actions.Action(name); needsApproval(step) {
@@ -197,8 +217,10 @@ func New(cfg Config, opts Options) (*Step, error) {
 		invoker:      opts.Invoker,
 		gate:         opts.Gate,
 		tenantID:     opts.TenantID,
+		tier:         opts.Tier,
 		inputs:       opts.Inputs,
 		capabilities: opts.EngineCapabilities,
+		taint:        checker,
 	}, nil
 }
 
@@ -239,7 +261,7 @@ func (s *Step) Invoke(ctx context.Context, inv Invocation) (json.RawMessage, err
 
 	// 2. The taint, before anything effectful. This is the check that makes a
 	// webhook body unable to become a deploy.
-	if err := s.checkTaint(inv, action); err != nil {
+	if err := s.checkTaint(ctx, inv, action); err != nil {
 		return nil, err
 	}
 
@@ -255,7 +277,7 @@ func (s *Step) Invoke(ctx context.Context, inv Invocation) (json.RawMessage, err
 // over the agent's own inputs AND the call's. Both matter: the agent is acting
 // on what it read, and a refusal that only looked at the call's own arguments
 // would miss the webhook body entirely — which is the only interesting case.
-func (s *Step) checkTaint(inv Invocation, action *dholev1.Step) error {
+func (s *Step) checkTaint(ctx context.Context, inv Invocation, action *dholev1.Step) error {
 	inputs := make(map[string]*structpb.Value, len(s.inputs)+len(inv.Inputs))
 	for k, v := range s.inputs {
 		inputs[k] = v
@@ -264,12 +286,19 @@ func (s *Step) checkTaint(inv Invocation, action *dholev1.Step) error {
 		inputs[k] = v
 	}
 
-	decision := taint.Check(taint.Dispatch{
+	decision, err := s.taint.Check(ctx, taint.Dispatch{
+		TenantID:           s.tenantID,
+		Tier:               s.tier,
 		Subject:            inv.Action,
 		EffectClass:        action.GetEffectClass(),
 		EngineCapabilities: s.capabilities,
 		Inputs:             inputs,
 	})
+	if err != nil {
+		// A decision that could not be made or could not be recorded has
+		// permitted nothing.
+		return fmt.Errorf("%w: agent %q: %w", ErrTainted, inv.StepID, err)
+	}
 	if decision.Allow {
 		return nil
 	}

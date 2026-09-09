@@ -1,15 +1,11 @@
 package taint
 
 import (
-	"fmt"
-	"strings"
-
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
-	"github.com/azrtydxb/dhole/internal/policy"
 )
 
 // refTaintField is the field number a mark occupies on an OutputRef.
@@ -121,6 +117,13 @@ func Propagate(in []*dholev1.OutputRef, out []*dholev1.OutputRef) {
 // engine it would run on, and the data it would be given — as structured
 // inputs, as output refs from upstream steps, or both.
 type Dispatch struct {
+	// TenantID scopes the decision and its audit row. There is no unscoped
+	// taint check, and an empty one is refused rather than read as a
+	// wildcard.
+	TenantID string
+	// Tier is the trust tier the taint policy is keyed on. Empty means the
+	// strictest one this package knows, taint.Tier.
+	Tier string
 	// Subject names the step, and is what a denial reports.
 	Subject string
 	// EffectClass is the class the step operates under.
@@ -133,71 +136,7 @@ type Dispatch struct {
 	InputRefs []*dholev1.OutputRef
 }
 
-// Check answers whether tainted data may reach this dispatch. It returns a
-// policy.Decision so that a taint refusal reads and audits like every other
-// policy refusal (ADR 0012) rather than being a second, parallel vocabulary
-// for "no".
-//
-// Two rules, both failing closed:
-//
-//   - Only a PURE step may consume untrusted data. Parsing, validating and
-//     reshaping a webhook body is exactly what should happen to it; acting on
-//     it is not. An unspecified effect class is treated as effectful, because
-//     the cost of guessing wrong the other way is an attacker-triggered
-//     at-most-once action.
-//   - No untrusted data reaches an engine advertising PRIVILEGED, whatever the
-//     step's class. A privileged engine is a host-level foothold, and prompt
-//     injection into one is remote code execution.
-//
-// A clearance is not a state Check can see: a gate returns cleared VALUES, and
-// what makes this allow is that the data no longer carries a mark.
-func Check(d Dispatch) policy.Decision {
-	sources := map[string]struct{}{}
-	for _, v := range d.Inputs {
-		for _, s := range Sources(v) {
-			sources[s] = struct{}{}
-		}
-	}
-	for _, ref := range d.InputRefs {
-		for _, s := range RefSources(ref) {
-			sources[s] = struct{}{}
-		}
-	}
-	if len(sources) == 0 {
-		return policy.Decision{
-			Allow: true, Rule: "taint.clean", Reason: "no input carries a taint",
-		}
-	}
-	named := strings.Join(sorted(sources), ", ")
-
-	for _, c := range d.EngineCapabilities {
-		if c != dholev1.Capability_CAPABILITY_PRIVILEGED {
-			continue
-		}
-		return policy.Decision{
-			Allow: false,
-			Rule:  "taint.privileged-engine",
-			Reason: fmt.Sprintf(
-				"step %q carries data tainted by %s, which may not be dispatched to an engine "+
-					"advertising PRIVILEGED; clear it through a sanitisation gate first",
-				d.Subject, named),
-		}
-	}
-
-	if d.EffectClass == dholev1.EffectClass_EFFECT_CLASS_PURE {
-		return policy.Decision{
-			Allow: true,
-			Rule:  "taint.pure-step",
-			Reason: fmt.Sprintf("step %q is pure; data tainted by %s propagates to its outputs",
-				d.Subject, named),
-		}
-	}
-	return policy.Decision{
-		Allow: false,
-		Rule:  "taint.effectful-step",
-		Reason: fmt.Sprintf(
-			"step %q is %s and carries data tainted by %s; an effectful step may not act on "+
-				"untrusted data until a sanitisation gate clears it",
-			d.Subject, strings.TrimPrefix(d.EffectClass.String(), "EFFECT_CLASS_"), named),
-	}
-}
+// The decision itself is Checker.Check, in policy.go: whether tainted data may
+// reach a dispatch is a trust-tier decision, and ADR 0012 puts every one of
+// those in internal/policy, evaluated from CEL and audited. Four rules in Go
+// here were four rules an operator could not see, audit or change.
