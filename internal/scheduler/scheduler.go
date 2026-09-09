@@ -45,6 +45,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/obs"
 	"github.com/azrtydxb/dhole/internal/outbox"
+	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/wire"
@@ -58,6 +59,16 @@ import (
 // system. Stored values are a persistence contract — add types, never rename
 // one — and this one belongs to the same log as runstore's own.
 const StepUnschedulable runstore.EventType = "STEP_UNSCHEDULABLE"
+
+// StepPolicyDenied records that policy refused to let a step run, and which
+// rule refused it.
+//
+// It is an event for the same reason StepUnschedulable is, and for one more:
+// a refusal is the ONLY trace a denied step leaves in the run. Nothing was
+// dispatched, no engine ever saw it, and no status will ever come back — so a
+// denial that were merely logged would leave the run looking like one that is
+// slow. Stored values are a persistence contract: add types, never rename one.
+const StepPolicyDenied runstore.EventType = "STEP_POLICY_DENIED"
 
 // StepAwaitingReplay records that a step failed and will NOT be retried
 // automatically, because its effect class forbids it (ADR 0002). The run is
@@ -151,6 +162,31 @@ type BlobRefs interface {
 	Reference(ctx context.Context, tenantID string, d *dholev1.Digest, runID string) error
 }
 
+// Provenances answers what the artifact a step will actually run says about
+// itself: whether this tenant holds an accepted signature over the exact
+// pinned bytes, and which upstream those bytes came from.
+//
+// It exists because these two facts are the whole reason a policy decision
+// belongs at dispatch rather than at definition-save time. A save guard cannot
+// populate policy.Input.Signed or policy.Input.Upstream: nothing has resolved
+// the reference to a digest yet, nothing has mirrored it, and nothing has
+// verified a signature over it. A tier whose rule is "unsigned plugins may not
+// run in production" is therefore enforceable HERE and nowhere earlier.
+//
+// It is expressed as plain results rather than a shared struct so that the
+// implementation can live in internal/plugins — over its signature store and
+// its upstream registry — without that package importing this one.
+//
+// An error is not a permit. A source that cannot answer leaves Signed unknown,
+// and the caller turns that into a denial: see permit.
+type Provenances interface {
+	// Provenance reports whether pluginRef, pinned by the run's revision to
+	// pinnedDigest, is signed, and which upstream it came from. An empty
+	// pinnedDigest is a reference the lockfile does not cover.
+	Provenance(ctx context.Context, tenantID, pluginRef, pinnedDigest string) (
+		signed bool, upstream string, err error)
+}
+
 // Config is everything the scheduler needs. All of it is durable
 // infrastructure or a pure lookup: there is deliberately no place to keep
 // per-run state, because a field holding one would be the run position that
@@ -186,6 +222,16 @@ type Config struct {
 	Revisions Revisions
 	// BlobRefs pins the blobs a cache hit reuses. Required with Cache.
 	BlobRefs BlobRefs
+	// Policy is the evaluation point ADR 0012 puts in front of every
+	// dispatch. Nil means this deployment has wired no policy at all, exactly
+	// as a nil Cache means it has wired no cache: every step is then judged
+	// by nothing. A deployment that HAS a policy engine must pass it, or the
+	// tier's rules govern what may be saved and say nothing about what runs.
+	Policy policy.Engine
+	// Provenance supplies Signed and Upstream. Required with Policy: an Input
+	// whose Signed is hardcoded false is not a supply-chain policy, it is a
+	// policy that refuses everything, and one hardcoded true is worse.
+	Provenance Provenances
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Now is the clock, injectable for tests.
@@ -203,6 +249,8 @@ type Scheduler struct {
 	cache CacheStore
 	revs  Revisions
 	refs  BlobRefs
+	pol   policy.Engine
+	prov  Provenances
 
 	tier        string
 	os          string
@@ -243,9 +291,32 @@ func New(cfg Config) (*Scheduler, error) {
 				"a run built on unreferenced blobs is one the collector may empty under it")
 		}
 	}
-	if cfg.Cache == nil && (cfg.Revisions != nil || cfg.BlobRefs != nil) {
-		return nil, errors.New("scheduler: a revision store and a blob reference recorder are only " +
-			"used by the cache; passing them without one is a cache that was meant to be wired and was not")
+	// The dispatch-time decision needs the two facts save time cannot know,
+	// and the lockfile the pinned digest comes from. Half-wired, it would
+	// evaluate rules about signatures against an input nobody populated —
+	// which reads as "nothing is signed" and refuses every step, or worse,
+	// invites somebody to default it the other way.
+	if cfg.Policy != nil {
+		switch {
+		case cfg.Provenance == nil:
+			return nil, errors.New("scheduler: a policy engine needs a provenance source; " +
+				"Signed and Upstream are the whole reason this decision is made here and not at save time")
+		case cfg.Revisions == nil:
+			return nil, errors.New("scheduler: a policy engine needs a revision store; " +
+				"the digest a signature is checked over is the one the run's lockfile pinned")
+		}
+	}
+	if cfg.Policy == nil && cfg.Provenance != nil {
+		return nil, errors.New("scheduler: a provenance source is only read by policy; " +
+			"passing one without a policy engine is a decision that was meant to be wired and was not")
+	}
+	if cfg.Cache == nil && cfg.BlobRefs != nil {
+		return nil, errors.New("scheduler: a blob reference recorder is only " +
+			"used by the cache; passing it without one is a cache that was meant to be wired and was not")
+	}
+	if cfg.Cache == nil && cfg.Policy == nil && cfg.Revisions != nil {
+		return nil, errors.New("scheduler: a revision store is only used by the cache and by policy; " +
+			"passing one without either is a wiring that was meant to be finished and was not")
 	}
 
 	s := &Scheduler{
@@ -257,6 +328,8 @@ func New(cfg Config) (*Scheduler, error) {
 		cache:       cfg.Cache,
 		revs:        cfg.Revisions,
 		refs:        cfg.BlobRefs,
+		pol:         cfg.Policy,
+		prov:        cfg.Provenance,
 		tier:        cfg.Tier,
 		os:          cfg.OS,
 		arch:        cfg.Arch,
@@ -332,6 +405,20 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 
 	served := false
 	for _, step := range pl.ready {
+		// Policy BEFORE the cache and before the engine. A denied step must
+		// not be served from an entry either: those outputs were produced by
+		// a run judged under whatever policy was in force then, and handing
+		// them to this run would be the refused step succeeding by another
+		// route.
+		permitted, err := s.permit(ctx, tenantID, runID, step, state)
+		if err != nil {
+			return err
+		}
+		if !permitted {
+			// permit has recorded the refusal and closed the run. Nothing
+			// further in this pass: the run is over.
+			return nil
+		}
 		// The cache first, and only then the engine. This is the whole of
 		// ADR 0009's "skipped and its recorded outputs reused": a step that
 		// has already been done under this exact key is finished by writing
@@ -898,6 +985,10 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			state.completed = true
 		case runstore.RunCompleted:
 			state.completed = true
+		case StepPolicyDenied:
+			// Nothing to fold: a denial is always followed by RUN_FAILED, and
+			// that is what makes the run terminal. The event is here so the
+			// reason is in the log a person reads.
 		case StepUnschedulable:
 			reason, err := UnmarshalUnschedulable(e.Payload)
 			if err != nil {
@@ -984,11 +1075,11 @@ func plan(p *dholev1.Pipeline, g *dag.Graph, state *runState, now time.Time) pla
 // how many times, and how long the wait is.
 func (pl *planned) classify(step *dholev1.Step, state *runState, now time.Time) {
 	id := step.GetId()
-	policy := effects.RetryPolicy(step)
+	retry := effects.RetryPolicy(step)
 	attempts := state.attempts[id]
 
-	if !policy.AllowsRetry(attempts) {
-		if policy.MaxAttempts <= 1 {
+	if !retry.AllowsRetry(attempts) {
+		if retry.MaxAttempts <= 1 {
 			// Never automatically repeated: a person decides. This is the
 			// case the effect class exists for.
 			pl.blocked = append(pl.blocked, step)
@@ -997,7 +1088,7 @@ func (pl *planned) classify(step *dholev1.Step, state *runState, now time.Time) 
 		pl.exhausted = append(pl.exhausted, id)
 		return
 	}
-	if now.Before(state.failedAt[id].Add(effects.Backoff(policy, attempts))) {
+	if now.Before(state.failedAt[id].Add(effects.Backoff(retry, attempts))) {
 		pl.waiting++
 		return
 	}
@@ -1017,6 +1108,123 @@ func predecessorsOf(p *dholev1.Pipeline, g *dag.Graph) map[string][]string {
 	}
 	return preds
 }
+
+// permit is the second half of ADR 0012, and the half that was missing: the
+// policy decision made where a step is about to RUN, not where its definition
+// was saved.
+//
+// It reports whether the step may proceed. A refusal is recorded on the run's
+// log with the rule that decided and then closes the run as failed, because a
+// step that will never be dispatched is a step nothing will ever report on:
+// left open, the run would sit in flight forever and look like a slow system
+// rather than a refused one.
+//
+// EVERYTHING that is not an explicit allow denies. A policy that cannot be
+// read, a rule that errors, a provenance source that cannot answer: each one
+// leaves the question unanswered, and this check only ever runs on the way to
+// executing somebody else's code. internal/policy fails closed at save time
+// for the same reason; a dispatcher that failed open would undo it on the one
+// path where it matters.
+func (s *Scheduler) permit(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, state *runState,
+) (bool, error) {
+	if s.pol == nil {
+		return true, nil
+	}
+
+	signed, upstream, provErr := s.provenance(ctx, tenantID, step, state)
+	if provErr != nil {
+		return false, s.deny(ctx, tenantID, runID, step, policy.Decision{
+			Reason: fmt.Sprintf("the provenance of %q could not be established: %v",
+				step.GetPluginRef(), provErr),
+		}, signed, upstream)
+	}
+
+	decision, err := s.pol.Evaluate(ctx, policy.Input{
+		Tier:         s.tier,
+		TenantID:     tenantID,
+		Subject:      "step:" + step.GetId(),
+		Capabilities: step.GetCapabilities(),
+		EffectClass:  step.GetEffectClass(),
+		PluginRef:    step.GetPluginRef(),
+		Signed:       signed,
+		Upstream:     upstream,
+	})
+	if err != nil {
+		// Evaluate errors only for a caller bug or an audit write that
+		// failed. A decision nobody can answer for later must not take
+		// effect, so this is a denial too — with the error in the reason, so
+		// the operator reading the run sees a broken audit trail rather than
+		// a mysterious refusal.
+		decision = policy.Decision{
+			Rule:   decision.Rule,
+			Reason: fmt.Sprintf("policy error: %v", err),
+		}
+	}
+	if decision.Allow {
+		return true, nil
+	}
+	return false, s.deny(ctx, tenantID, runID, step, decision, signed, upstream)
+}
+
+// provenance resolves the two facts save time cannot know, for the digest THIS
+// run pinned.
+//
+// The lockfile is the source of the digest and the tag never is (ADR 0011): a
+// signature checked over whatever the tag means at dispatch would be a
+// signature over bytes the revision never approved.
+func (s *Scheduler) provenance(
+	ctx context.Context, tenantID string, step *dholev1.Step, state *runState,
+) (bool, string, error) {
+	ref := step.GetPluginRef()
+	rev, err := s.revs.Revision(ctx, tenantID, state.revisionID)
+	if err != nil {
+		return false, "", fmt.Errorf("reading the lockfile of revision %q: %w",
+			state.revisionID, err)
+	}
+	return s.prov.Provenance(ctx, tenantID, ref, rev.Lockfile[ref])
+}
+
+// deny records the refusal and closes the run.
+//
+// The facts the decision was made on travel with it — which plugin, signed or
+// not, from where — because the rule can only say what it refuses in general,
+// and the person reading a failed run needs to know which artifact it was.
+func (s *Scheduler) deny(
+	ctx context.Context,
+	tenantID, runID string,
+	step *dholev1.Step,
+	decision policy.Decision,
+	signed bool,
+	upstream string,
+) error {
+	payload, err := MarshalPolicyDenied(PolicyDenied{
+		Tier:      s.tier,
+		Rule:      decision.Rule,
+		Reason:    decision.Reason,
+		PluginRef: step.GetPluginRef(),
+		Signed:    signed,
+		Upstream:  upstream,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.append(ctx, tenantID, runstore.Event{
+		RunID:   runID,
+		StepID:  step.GetId(),
+		Attempt: state0Attempt,
+		Type:    StepPolicyDenied,
+		Payload: payload,
+	}); err != nil {
+		return err
+	}
+	return s.fail(ctx, tenantID, runID, []string{step.GetId()})
+}
+
+// state0Attempt is the attempt a denial is recorded against: none. A denied
+// step was never dispatched, so numbering the refusal as an attempt would put
+// work in the log that never existed.
+const state0Attempt uint32 = 0
 
 // dispatch places one ready step: match it to the fleet, claim its lease, and
 // write the event and the outbox row in one transaction.
@@ -1054,8 +1262,8 @@ func (s *Scheduler) dispatch(
 		return nil
 	}
 
-	policy := effects.RetryPolicy(step)
-	if policy.RequiresExclusiveLease {
+	retry := effects.RetryPolicy(step)
+	if retry.RequiresExclusiveLease {
 		// A step that must run at most once may only be sent by the plane
 		// that demonstrably holds its lease, and it is checked HERE rather
 		// than being left to the transaction below to undo: a fence that has
@@ -1086,7 +1294,7 @@ func (s *Scheduler) dispatch(
 	// makes a retry safe: the far end sees the repeat and declines to act
 	// twice (ADR 0002).
 	var idempotencyKey string
-	if policy.RequiresIdempotencyKey {
+	if retry.RequiresIdempotencyKey {
 		idempotencyKey = effects.IdempotencyKey(runID, step.GetId(), attempt)
 		if dispatchMsg.GetEnv() == nil {
 			dispatchMsg.Env = map[string]string{}
@@ -1372,6 +1580,30 @@ type Dispatched struct {
 // was ready could not be placed on any engine.
 type Unschedulable struct {
 	Reason string `json:"reason"`
+}
+
+// PolicyDenied is the payload of a STEP_POLICY_DENIED event: which rule
+// refused this step, what it says, and the facts it was decided on.
+//
+// Signed and Upstream are recorded rather than left to be looked up again,
+// because they are what the decision actually turned on and neither is stable:
+// a signature can be withdrawn and a mirror re-pointed, so a reader
+// reconstructing them tomorrow would be reading a different question's answer.
+type PolicyDenied struct {
+	Tier      string `json:"tier"`
+	Rule      string `json:"rule"`
+	Reason    string `json:"reason"`
+	PluginRef string `json:"plugin_ref,omitempty"`
+	Signed    bool   `json:"signed"`
+	Upstream  string `json:"upstream,omitempty"`
+}
+
+// MarshalPolicyDenied encodes the STEP_POLICY_DENIED payload.
+func MarshalPolicyDenied(d PolicyDenied) ([]byte, error) { return marshalPayload(d) }
+
+// UnmarshalPolicyDenied decodes the STEP_POLICY_DENIED payload.
+func UnmarshalPolicyDenied(b []byte) (PolicyDenied, error) {
+	return unmarshalPayload[PolicyDenied](b, string(StepPolicyDenied))
 }
 
 // AwaitingReplay is the payload of a STEP_AWAITING_REPLAY event: why a failed

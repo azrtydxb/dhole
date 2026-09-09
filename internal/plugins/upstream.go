@@ -142,6 +142,13 @@ type Upstreams interface {
 	// yet hold; under MirrorAlways it refuses with ErrNotMirrored.
 	Resolve(ctx context.Context, tenantID, ref string) (Artifact, error)
 
+	// Upstream returns the registration this tenant holds under namespace, or
+	// ErrUnknownUpstream. It is read at DISPATCH time as well as at sync
+	// time: a policy decision about which upstream an artifact came from, and
+	// about whose signature over it this tenant accepts, is answered from
+	// this registration and from nowhere else (ADR 0012).
+	Upstream(ctx context.Context, tenantID, namespace string) (Upstream, error)
+
 	// Dispatch opens a mirrored plugin's bytes after re-verifying its
 	// signature against its upstream's allowed signers. It NEVER contacts the
 	// upstream.
@@ -469,6 +476,16 @@ func (s *sqlUpstreams) mirrored(ctx context.Context, tenantID, namespace, plugin
 			namespace, pluginName, tag, digest)
 	}
 	return Artifact{Ref: localRef, Digest: newDigest(hex), Scheme: SchemeOCI, MediaType: mediaType}, nil
+}
+
+// Upstream returns one registration. It is the exported half of upstream, and
+// it refuses an empty tenant rather than reading across tenants: a
+// registration is a trust decision and there is no unscoped one.
+func (s *sqlUpstreams) Upstream(ctx context.Context, tenantID, namespace string) (Upstream, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Upstream{}, err
+	}
+	return s.upstream(ctx, tenantID, namespace)
 }
 
 // upstream reads one registration, scoped to its tenant.
