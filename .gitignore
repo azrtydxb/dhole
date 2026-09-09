@@ -1,0 +1,8 @@
+.DS_Store
+/dist/
+/bin/
+node_modules/
+*.db
+*.sqlite
+.procoder/ask/
+.procoder/state/
