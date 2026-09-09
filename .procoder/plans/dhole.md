@@ -236,7 +236,7 @@ Interfaces: produces `scheduler.Scheduler` with `Advance(ctx, tenantID, runID st
 - [x] Write `internal/scheduler/scheduler_test.go` asserting `TestAdvanceDispatchesOnlyReadySteps`: for the Task 3 diamond pipeline, the first `Advance` dispatches only `a`; after `a` succeeds, the next dispatches `b` and `c` but not `d`. Run — expect FAIL with "undefined: scheduler.New".
 - [x] Add `TestMatchFiltersByCapabilityOSAndArch` asserting a step requiring `PRIVILEGED` on `linux/arm64` matches only an instance advertising all three.
 - [x] Add `TestUnschedulableStepReportsWhy` asserting a step whose requirements match no instance produces an event whose payload contains "no engine advertises capability PRIVILEGED".
-- [ ] Wire `policy.Engine.Evaluate` into the scheduler before dispatch. This is the second half of Task 21, which could only do the definition-save side because the scheduler did not exist yet. The save guard also cannot populate `Input.Signed` or `Input.Upstream` — those come from Tasks 30 and 33 — so the scheduler is where a dispatch-time decision gets the full input.
+- [x] Wire `policy.Engine.Evaluate` into the scheduler before dispatch. This is the second half of Task 21, which could only do the definition-save side because the scheduler did not exist yet. The save guard also cannot populate `Input.Signed` or `Input.Upstream` — those come from Tasks 30 and 33 — so the scheduler is where a dispatch-time decision gets the full input.
 - [x] Implement `internal/scheduler/match.go` (pure filtering, no I/O) and `internal/scheduler/scheduler.go` reading the run's event log, computing ready steps from `dag.Graph`, claiming a lease, and enqueuing a `JobDispatch` through the outbox.
 - [x] Run `go test ./internal/scheduler` — expect PASS. Commit.
 
