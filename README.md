@@ -3,13 +3,26 @@
 An everything-pipeline engine: durable, typed workflows that run anywhere, driven by
 anything, editable by humans and agents alike.
 
-> **Status: early build.** A two-step pipeline runs end to end from a single
-> binary, and the same definition produces identical results against Postgres,
-> an out-of-process NATS and S3. The control plane, the engine protocol, the
-> executor interface, the content-addressed cache and store, policy, identity,
-> the plugin registry and the definition store are in place. The API, the web
-> editor and most engine backends are not. See `.procoder/plans/dhole.md` for
-> exactly what is done and what is next.
+> **Status: usable, not finished.** Pipelines run end to end from a single
+> binary and from a distributed control plane, and the same definition produces
+> identical results against SQLite or Postgres, embedded or out-of-process NATS,
+> and filesystem or S3 object stores.
+>
+> In place: the event-sourced run store, the scheduler, the outbox, durable
+> waits and human approval, leases and fencing, the content-addressed store and
+> the cache, the engine wire protocol with a conformance suite an engine in any
+> language is held to, the executor interface with host-process and Kubernetes
+> backends, CEL policy with trust tiers and audit, taint tracking, identity and
+> OIDC federation, the plugin catalog with `oci://` and `cas://` resolution,
+> signature verification, federated upstreams and lockfile resolution at save,
+> the definition store with revisions and a one-way git mirror, four triggers
+> (schedule, HTTP, git webhook, pipeline completion), the LLM, bounded-loop and
+> agent step types, the ConnectRPC API with a CLI derived from its descriptors,
+> the React Flow editor, importers for four other CI formats, and OpenTelemetry
+> throughout.
+>
+> Several things are deliberately unfinished — see **Still open** below, and
+> `.procoder/plans/dhole.md` for the task-by-task truth.
 
 ## What it is
 
@@ -139,10 +152,71 @@ queue and unsent outbox rows are still owed.
 
 ## Still open
 
-An RPC that creates a pipeline from nothing — `ApplyOperation` needs a `base_revision`, so
-today the GUI cannot author a new pipeline without a back door — an identity service on the
-contract, the YAML surface for effect classes and taint, and wiring the scheduler's fair
-queue and per-pipeline budgets, which are built and tested but not yet called.
+Named rather than glossed. Each of these is a real gap, and the plan carries the
+task that closes it.
+
+- **No RPC creates a pipeline from nothing.** `ApplyOperation` requires a
+  `base_revision`, so the GUI cannot author a new pipeline without a back door.
+  The contract also has no `CancelRun`, no `EngineService` and no catalog RPC —
+  which is why `dhole run cancel`, `engine list` and `engine drain` exist and
+  refuse rather than reading the registry behind the API's back.
+- **The containerd/OCI executor is not built** (Task 36). There is no container
+  runtime on the machine this was developed on, and a backend nobody can run is
+  a backend nobody has tested. `internal/executor/containerd` holds only the
+  decision about lazy pull; the executor itself is host-process and Kubernetes.
+- **The lazy-pull byte assertion is unwritten**, and honestly so: proving an
+  eStargz image transfers fewer bytes needs a containerd with the stargz
+  snapshotter _and_ the executor above.
+- **Environment identity belongs to the executor, not the sandbox** (Task 37b).
+  One Kubernetes executor running steps with different images reports one
+  identity for several environments, so run one executor per image where cache
+  correctness matters.
+- **The fair queue and per-pipeline budgets are built, tested and unwired.**
+  `scheduler.Queue` exists and nothing calls it yet.
+- **Policy is enforced at definition save, not yet at dispatch.** The
+  dispatch-time half needs the signature and upstream inputs the save guard
+  cannot see.
+- **The editing head is in memory**, so optimistic concurrency does not survive
+  a restart, and `defstore.Store` cannot list a pipeline's revisions.
+- **Not started:** the three acceptance pipelines, the VM executor, macOS and
+  Windows engines, dynamic pipelines, multiplayer editing, and tenant quotas and
+  metering.
+
+## Documentation
+
+[`docs/`](docs/) — start with the [quickstart](docs/quickstart.md), whose every
+command is executed by the test suite.
+
+| Page                                              | For                                          |
+| ------------------------------------------------- | -------------------------------------------- |
+| [Quickstart](docs/quickstart.md)                  | a pipeline running in fifteen minutes        |
+| [The engine wire contract](docs/wire-contract.md) | the protocol every engine is written against |
+| [Writing an engine](docs/writing-an-engine.md)    | contract, engine, `make conformance`         |
+| [Writing a plugin](docs/writing-a-plugin.md)      | manifests, capabilities, effect classes      |
+| [Policy authoring](docs/policy.md)                | CEL rules and how to test them               |
+| [Deployment topologies](docs/deployment.md)       | laptop, homelab, cluster, Helm               |
+| [Upgrades and version skew](docs/upgrades.md)     | what N and N-1 obliges                       |
+
+There is a reference page for every step type, trigger kind and executor kind,
+and `docs/docs_test.go` enumerates them from the source tree — so a backend
+added next month fails the gate until it is documented.
+
+## Installing a release
+
+Releases publish `dhole` and `dhole-engine` for Linux, macOS and Windows on
+amd64 and arm64, multi-arch images on `ghcr.io`, and a Helm chart. Every image
+is signed keylessly by the workflow that built it and carries an SPDX SBOM
+attestation:
+
+```
+cosign verify ghcr.io/azrtydxb/dhole:<version> \
+  --certificate-identity-regexp '^https://github.com/azrtydxb/dhole/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`helm install dhole charts/dhole` deploys the control plane, engines, and — for
+a deployment that has not brought its own — NATS and Postgres. See
+[deployment topologies](docs/deployment.md) for what to set before it matters.
 
 ## Stack
 
