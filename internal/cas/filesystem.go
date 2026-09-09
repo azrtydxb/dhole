@@ -183,3 +183,29 @@ func isLowerHex(s string) bool {
 	}
 	return true
 }
+
+// Delete removes the blob with digest d. It is the only removal path in the
+// store and exists for the collector alone: a blob is immutable and shared by
+// content, so nothing that merely finished with one may delete it.
+//
+// A blob that is already gone reports ErrNotFound rather than nil, so a
+// collector can distinguish work already done from work it did.
+func (f *filesystem) Delete(ctx context.Context, tenantID string, d *dholev1.Digest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := f.blobPath(tenantID, d)
+	if err != nil {
+		return err
+	}
+	switch err := os.Remove(path); {
+	case errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("%w: %s:%s", ErrNotFound, d.GetAlgo(), d.GetHex())
+	case err != nil:
+		return fmt.Errorf("cas: delete blob: %w", err)
+	}
+	return nil
+}
+
+// Compile-time proof that the filesystem store is the collector's Deleter.
+var _ Deleter = (*filesystem)(nil)
