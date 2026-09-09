@@ -207,11 +207,11 @@ Interfaces: produces `engine.Agent` with `Run(ctx) error`, `engine.Config{Engine
 Files: `internal/lease/lease.go`, `internal/lease/lease_test.go`, `internal/lease/kv.go`
 Interfaces: produces `lease.Manager` with `Claim(ctx, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error)`, `Renew(ctx, t Token) error`, `Validate(ctx, t Token) error`, `Expire(ctx) ([]Orphan, error)`; `Token{Value string; Fence uint64}`.
 
-- [ ] Write `internal/lease/lease_test.go` asserting `TestFenceIncrementsPerAttempt`: claiming attempt 1 then attempt 2 for the same step yields `Fence` values that strictly increase. Run — expect FAIL with "undefined: lease.New".
-- [ ] Add `TestAtMostOnceRejectsDuplicateDeliveryByFence`: claim a lease at fence 1, claim again producing fence 2, then `Validate` the fence-1 token and require an error satisfying `errors.Is(err, lease.ErrFenced)`.
-- [ ] Add `TestHeartbeatExpiryRedeliversAndCatalogPersists`: claim a lease with a 100ms TTL, do not renew, and require `Expire` returns that step as an orphan after the TTL.
-- [ ] Implement `internal/lease/kv.go` over the NATS KV bucket `dhole-leases` with per-key revision as the fence source, and `internal/lease/lease.go` wrapping it.
-- [ ] Run `go test ./internal/lease` — expect PASS. Commit.
+- [x] Write `internal/lease/lease_test.go` asserting `TestFenceIncrementsPerAttempt`: claiming attempt 1 then attempt 2 for the same step yields `Fence` values that strictly increase. Run — expect FAIL with "undefined: lease.New".
+- [x] Add `TestAtMostOnceRejectsDuplicateDeliveryByFence`: claim a lease at fence 1, claim again producing fence 2, then `Validate` the fence-1 token and require an error satisfying `errors.Is(err, lease.ErrFenced)`.
+- [x] Add `TestHeartbeatExpiryRedeliversAndCatalogPersists`: claim a lease with a 100ms TTL, do not renew, and require `Expire` returns that step as an orphan after the TTL.
+- [x] Implement `internal/lease/kv.go` over the NATS KV bucket `dhole-leases` with per-key revision as the fence source, and `internal/lease/lease.go` wrapping it.
+- [x] Run `go test ./internal/lease` — expect PASS. Commit.
 
 ## Task 14: Scheduler and dispatcher
 
