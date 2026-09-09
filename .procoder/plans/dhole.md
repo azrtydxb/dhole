@@ -458,12 +458,12 @@ Interfaces: produces `plugins.Resolver` with `Resolve(ctx, tenantID, ref string)
 Files: `internal/plugins/signature.go`, `internal/plugins/cosign.go`, `internal/plugins/signature_test.go`, `internal/runstore/migrations/0007_signatures.sql`
 Interfaces: produces `plugins.Signatures` with `Record(ctx, tenantID string, d *dholev1.Digest, sig plugins.Signature) error`, `Verify(ctx, tenantID string, d *dholev1.Digest, allowed []string) error`; `Signature{Identity, Issuer string; Payload []byte; Source cosign|manual}`.
 
-- [ ] Write `internal/plugins/signature_test.go` asserting `TestVerificationIsUniformAcrossSchemes`: the same signature record verifies for an `oci://` and a `cas://` artifact with identical code paths. Run — expect FAIL with "undefined: plugins.NewSignatures".
-- [ ] Add `TestUnsignedPluginIsNotDispatchedRegardlessOfCachedResolution` asserting that after a successful resolve, removing the signature record causes dispatch to fail with "signature verification failed" and marks the catalog entry untrusted.
-- [ ] Add `TestSignatureFromDisallowedIdentityIsRejected` asserting verification against an `allowed` list not containing the signer's identity fails.
-- [ ] Write `0007_signatures.sql` creating `artifact_signatures(tenant_id, digest, identity, issuer, payload, source)`.
-- [ ] Implement `internal/plugins/cosign.go` populating records from cosign attestations and `signature.go` verifying against the tier's allowed identities from policy.
-- [ ] Run `go test ./internal/plugins` — expect PASS. Commit.
+- [x] Write `internal/plugins/signature_test.go` asserting `TestVerificationIsUniformAcrossSchemes`: the same signature record verifies for an `oci://` and a `cas://` artifact with identical code paths. Run — expect FAIL with "undefined: plugins.NewSignatures".
+- [x] Add `TestUnsignedPluginIsNotDispatchedRegardlessOfCachedResolution` asserting that after a successful resolve, removing the signature record causes dispatch to fail with "signature verification failed" and marks the catalog entry untrusted.
+- [x] Add `TestSignatureFromDisallowedIdentityIsRejected` asserting verification against an `allowed` list not containing the signer's identity fails.
+- [x] Write `0007_signatures.sql` creating `artifact_signatures(tenant_id, digest, identity, issuer, payload, source)`.
+- [x] Implement `internal/plugins/cosign.go` populating records from cosign attestations and `signature.go` verifying against the tier's allowed identities from policy.
+- [x] Run `go test ./internal/plugins` — expect PASS. Commit.
 
 ## Task 34: Federated upstreams and local mirroring
 
