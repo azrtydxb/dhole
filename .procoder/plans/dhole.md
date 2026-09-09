@@ -625,13 +625,13 @@ Interfaces: produces `trigger.Trigger` with `Start(ctx, sink trigger.Sink) error
 Files: `internal/trigger/http/http.go`, `internal/trigger/git/git.go`, `internal/trigger/completion/completion.go`, `internal/trigger/http/http_test.go`, `internal/trigger/git/git_test.go`, `internal/trigger/completion/completion_test.go`
 Interfaces: produces `http.New(cfg)`, `git.New(cfg)` (GitHub, Gitea and Forgejo payloads), `completion.New(cfg)` satisfying `trigger.Trigger`.
 
-- [ ] Write `internal/trigger/http/http_test.go` asserting `TestHTTPTriggerMapsBodyToTypedInputs`: a POST whose JSON body has `{"ref":"main"}` fires with input `ref` set, and a body failing the pipeline's input schema returns HTTP 400 with the validation error. Run — expect FAIL with "undefined: http.New".
-- [ ] Write `internal/trigger/git/git_test.go` asserting `TestGitWebhookVerifiesSignatureAndRejectsForgery`: a GitHub push payload with a valid HMAC fires; one with a wrong signature returns 401 and does not fire.
-- [ ] Add `TestGitWebhookMarksPayloadTainted` asserting the fired run's inputs carry the taint marker from Task 51.
-- [ ] Write `internal/trigger/completion/completion_test.go` asserting `TestCompletionTriggerFiresDownstreamPipeline` and that a failed upstream run does not fire it.
-- [ ] Write `internal/trigger/trigger_test.go` asserting `TestAllFourTriggersStartSamePipeline` — one unchanged pipeline definition fired by schedule, HTTP, git webhook and completion.
-- [ ] Implement the three triggers, sharing input validation against the pipeline's declared input schema.
-- [ ] Run `go test ./internal/trigger/...` — expect PASS. Commit.
+- [x] Write `internal/trigger/http/http_test.go` asserting `TestHTTPTriggerMapsBodyToTypedInputs`: a POST whose JSON body has `{"ref":"main"}` fires with input `ref` set, and a body failing the pipeline's input schema returns HTTP 400 with the validation error. Run — expect FAIL with "undefined: http.New".
+- [x] Write `internal/trigger/git/git_test.go` asserting `TestGitWebhookVerifiesSignatureAndRejectsForgery`: a GitHub push payload with a valid HMAC fires; one with a wrong signature returns 401 and does not fire.
+- [x] Add `TestGitWebhookMarksPayloadTainted` asserting the fired run's inputs carry the taint marker from Task 51.
+- [x] Write `internal/trigger/completion/completion_test.go` asserting `TestCompletionTriggerFiresDownstreamPipeline` and that a failed upstream run does not fire it.
+- [x] Write `internal/trigger/trigger_test.go` asserting `TestAllFourTriggersStartSamePipeline` — one unchanged pipeline definition fired by schedule, HTTP, git webhook and completion.
+- [x] Implement the three triggers, sharing input validation against the pipeline's declared input schema.
+- [x] Run `go test ./internal/trigger/...` — expect PASS. Commit.
 
 ## Task 42: Weighted fair queuing and concurrency budgets
 
@@ -740,6 +740,20 @@ Interfaces: produces `loop.Node{Subgraph *dholev1.Pipeline; MaxIterations int; E
 - [ ] Run `go test ./internal/steps/...` — expect PASS. Commit.
 
 ## Task 51: Taint tracking
+
+**Reconciliation required, from Task 41.** `internal/trigger/taint.go` already
+marks webhook payloads, because the git trigger needed the marker before this
+task existed. It represents a taint as a one-field wrapper,
+`{"$dhole.taint": {"source": ..., "value": ...}}` — a wrapper rather than
+metadata alongside the value, because a trigger hands the scheduler only
+`map[string]*structpb.Value` and anything kept beside the value is lost at the
+first store and replay. This task MUST keep that representation: a taint
+package that looks for a different shape reads every payload already fired as
+clean, which is the one failure mode taint tracking exists to prevent. Move
+the four functions here under this task's planned names and either delegate
+from `internal/trigger/taint.go` or update the three triggers. Nothing in
+Task 41 clears a taint; the sanitisation gate is still this task's work.
+
 
 Files: `internal/taint/taint.go`, `internal/taint/propagate.go`, `internal/taint/taint_test.go`
 Interfaces: produces `taint.Mark(v *structpb.Value, source string) *structpb.Value`, `taint.IsTainted(v *structpb.Value) bool`, `taint.Propagate(in []*dholev1.OutputRef, out []*dholev1.OutputRef)`, `taint.Gate` step type clearing marks after explicit sanitisation.
