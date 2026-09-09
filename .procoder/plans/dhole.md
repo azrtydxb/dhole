@@ -47,7 +47,7 @@ decide what may be cached and what may be retried.
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
-  0011 policy_audit (21), 0012 upstreams (34), 0013 timers (20), 0014 trigger_schedules (40),
+  0011 policy_audit (21), 0012 upstreams (34), 0018 quotas_and_usage (58), 0013 timers (20), 0014 trigger_schedules (40),
   0015 outbox_deployment (18b), 0016 open_runs (18b), 0017 run_sequence (18b). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
@@ -484,6 +484,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 - [x] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
       there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
       tenant, not only whatever a plane prints at startup. Found building Task 48.
+- [ ] **The quota enforcer and the CAS guard are built and unwired.** Task 58's `Enforcer.AdmitRun`/`AdmitStep` and `GuardCAS` are tested but have no call sites: `internal/scheduler` and `internal/cas` belonged to other agents that round. Wire `AdmitStep` into the dispatch loop and `GuardCAS` around the blob store. Note `tenancy` deliberately does not import `scheduler` — the dependency runs the other way — so it mirrors two persistence contracts, guarded by `TestMirroredSchedulerContractsHaveNotDrifted`.
 - [ ] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and
       `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
       ready steps are still dispatched inline, and no per-pipeline cap is enforced. Wire them — enqueue ready
@@ -902,13 +903,13 @@ Interfaces: produces `importers.Importer` with `Import(ctx, src []byte) (*dholev
 Files: `internal/tenancy/provision.go`, `internal/tenancy/quota.go`, `internal/tenancy/meter.go`, `internal/tenancy/tenancy_test.go`, `internal/runstore/migrations/0009_tenancy.sql`
 Interfaces: produces `tenancy.Provision(ctx, name string) (Tenant, error)`, `tenancy.Quota{MaxConcurrentSteps, MaxRunsPerDay int; MaxCASBytes int64}`, `tenancy.Meter.Record(ctx, tenantID string, u Usage) error`.
 
-- [ ] Write `internal/tenancy/tenancy_test.go` asserting `TestProvisionCreatesIsolatedTenant`: a provisioned tenant receives its own NATS account credentials, and Task 22's isolation assertions hold against it. Run — expect FAIL with "undefined: tenancy.Provision".
-- [ ] Add `TestQuotaExceededRejectsNewRunsWithoutAffectingRunning` asserting a tenant at its daily run quota gets a clear rejection while its in-flight runs complete.
-- [ ] Add `TestCASQuotaBlocksWriteBeforeExceeding` asserting a blob write that would exceed `MaxCASBytes` fails with a quota error rather than partially writing.
-- [ ] Add `TestMeteredUsageMatchesActualStepSeconds` asserting recorded usage for a known 2s step is within 10% of 2 step-seconds.
-- [ ] Write `0009_tenancy.sql` creating `tenants`, `quotas`, `usage_records`.
-- [ ] Implement `provision.go`, `quota.go` enforced in the scheduler and CAS, and `meter.go` deriving usage from the run event log so metering is reconstructible.
-- [ ] Run `go test ./internal/tenancy` — expect PASS. Commit.
+- [x] Write `internal/tenancy/tenancy_test.go` asserting `TestProvisionCreatesIsolatedTenant`: a provisioned tenant receives its own NATS account credentials, and Task 22's isolation assertions hold against it. Run — expect FAIL with "undefined: tenancy.Provision".
+- [x] Add `TestQuotaExceededRejectsNewRunsWithoutAffectingRunning` asserting a tenant at its daily run quota gets a clear rejection while its in-flight runs complete.
+- [x] Add `TestCASQuotaBlocksWriteBeforeExceeding` asserting a blob write that would exceed `MaxCASBytes` fails with a quota error rather than partially writing.
+- [x] Add `TestMeteredUsageMatchesActualStepSeconds` asserting recorded usage for a known 2s step is within 10% of 2 step-seconds.
+- [x] Write `0009_tenancy.sql` creating `tenants`, `quotas`, `usage_records`.
+- [x] Implement `provision.go`, `quota.go` enforced in the scheduler and CAS, and `meter.go` deriving usage from the run event log so metering is reconstructible.
+- [x] Run `go test ./internal/tenancy` — expect PASS. Commit.
 
 ## Task 59: Documentation, release engineering and packaging
 
