@@ -8,14 +8,12 @@
  * — so the first test publishes a plugin with a field no web file has ever
  * heard of and requires it on screen.
  *
- * Where the schema comes from: the plugin's declaration reaches the browser
- * inline on the step's structured input port (`StructType.schema`), fetched
- * with GetPipeline. There is no catalog RPC on the contract yet — see the
- * report in the task and the note in PropertyPanel.tsx — so "publishing a
- * plugin" here means seeding a step whose declared input port carries that
- * plugin's input schema, done through the real ApplyOperation.
+ * Where the schema comes from: the CATALOG, through GetPlugin. The step names
+ * a published plugin and carries no inline schema of its own, so a panel that
+ * still read the definition would render nothing at all here. Until that RPC
+ * existed the browser could not reach catalog.Manifest.InputSchema and had to
+ * render whatever copy the definition happened to carry.
  */
-
 import {
   expect,
   test,
@@ -23,28 +21,13 @@ import {
   type Page,
 } from "@playwright/test";
 
-import { apiUrl, bootstrapToken, seedPipeline, type Seeded } from "./plane.js";
-
-/** rpc calls one RPC of the real contract with the fixture's real token. */
-async function rpc(
-  request: APIRequestContext,
-  method: string,
-  body: unknown,
-): Promise<Record<string, unknown>> {
-  const token = bootstrapToken();
-  const response = await request.post(
-    `${apiUrl}/dhole.v1.PipelineService/${method}`,
-    {
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      data: body,
-    },
-  );
-  expect(response.ok(), await response.text()).toBe(true);
-  return (await response.json()) as Record<string, unknown>;
-}
+import {
+  bootstrapToken,
+  createPipeline,
+  rpc,
+  seedUrl,
+  type Seeded,
+} from "./plane.js";
 
 /** A plugin's input schema, as the plugin author wrote it. Nothing in web/
  * knows these field names; they arrive from the control plane. */
@@ -57,7 +40,7 @@ const deployV1 = {
     plugin_ref: {
       type: "string",
       title: "plugin",
-      pattern: "^oci://",
+      pattern: "^acme/",
     },
     command: { type: "string", title: "command", default: "deploy" },
   },
@@ -76,15 +59,40 @@ const deployV2 = {
   },
 };
 
-/** publishStep adds a step whose declared input port carries `schema` — the
- * plugin's declaration, arriving over the wire rather than out of a web file.
- * It returns the revision the edit produced. */
-async function publishStep(
+/**
+ * publishPlugin puts a manifest in the plane's catalog and returns its ref.
+ *
+ * Through the seeder, and this one is NOT the hole Task 27b closed: nothing
+ * anywhere in Dhole publishes to the catalog — not the API, not the CLI, not
+ * the git mirror — so there is no contract call to prefer here. See
+ * e2e/seed/main.go.
+ */
+async function publishPlugin(
+  request: APIRequestContext,
+  version: string,
+  schema: unknown,
+): Promise<string> {
+  const response = await request.post(`${seedUrl}/plugin`, {
+    data: {
+      namespace: "acme",
+      name: "deploy",
+      version,
+      effectClass: "EFFECT_CLASS_AT_MOST_ONCE",
+      inputSchema: schema,
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as { ref: string }).ref;
+}
+
+/** addStep adds a step naming a published plugin — and carrying no schema of
+ * its own, so what the panel renders can only have come from the catalog. */
+async function addStep(
   request: APIRequestContext,
   seed: Seeded,
   base: string,
   stepId: string,
-  schema: unknown,
+  pluginRef: string,
 ): Promise<string> {
   const response = await rpc(request, "ApplyOperation", {
     pipelineId: seed.pipelineId,
@@ -93,19 +101,8 @@ async function publishStep(
       addStep: {
         step: {
           id: stepId,
-          pluginRef: "",
+          pluginRef,
           effectClass: "EFFECT_CLASS_AT_MOST_ONCE",
-          inputs: [
-            {
-              name: "config",
-              type: {
-                structured: {
-                  schemaId: (schema as { $id: string }).$id,
-                  schema: JSON.stringify(schema),
-                },
-              },
-            },
-          ],
         },
       },
     },
@@ -124,9 +121,6 @@ async function publishStep(
  * Chromium's local-network-access rules refuse a synthesised document's
  * requests to a loopback control plane, which would make every assertion here
  * about the browser's address-space policy instead of about the panel.
- *
- * The query keys are the harness's own, so opening the panel does not also
- * open a canvas on the same pipeline.
  */
 async function openPanel(
   page: Page,
@@ -134,10 +128,9 @@ async function openPanel(
   revision: string,
   stepId: string,
 ): Promise<void> {
-  const token = bootstrapToken();
   await page.addInitScript((value: string) => {
     window.localStorage.setItem("dhole.token", value);
-  }, token);
+  }, bootstrapToken());
   await page.goto(
     `/?panel.pipeline=${encodeURIComponent(seed.pipelineId)}` +
       `&panel.revision=${encodeURIComponent(revision)}` +
@@ -150,14 +143,9 @@ test("the panel is rendered from the plugin schema, not hardcoded", async ({
   page,
   request,
 }) => {
-  const seed = await seedPipeline(request);
-  const one = await publishStep(
-    request,
-    seed,
-    seed.revisionId,
-    "deploy",
-    deployV1,
-  );
+  const seed = await createPipeline(request);
+  const refV1 = await publishPlugin(request, "1.0.0", deployV1);
+  const one = await addStep(request, seed, seed.revisionId, "deploy", refV1);
 
   await openPanel(page, seed, one, "deploy");
   await expect(page.getByTestId("property-panel")).toBeVisible();
@@ -167,7 +155,8 @@ test("the panel is rendered from the plugin schema, not hardcoded", async ({
 
   // Version two of the plugin is published. No web file changed between these
   // two assertions; the only thing that changed is the declaration.
-  const two = await publishStep(request, seed, one, "deploy-next", deployV2);
+  const refV2 = await publishPlugin(request, "2.0.0", deployV2);
+  const two = await addStep(request, seed, one, "deploy-next", refV2);
   await openPanel(page, seed, two, "deploy-next");
   await expect(page.locator("[name=retries]")).toBeVisible();
 
@@ -208,22 +197,23 @@ function calls(page: Page): Sent[] {
   return sent;
 }
 
-function methods(sent: readonly Sent[]): string[] {
-  return sent.map((call) => call.method);
+/** reads are the RPCs the panel makes to show itself. What matters below is
+ * what it WRITES, so these are filtered out by name rather than by counting. */
+const reads = ["GetPipeline", "GetPlugin"];
+
+function writes(sent: readonly Sent[]): string[] {
+  return sent
+    .map((call) => call.method)
+    .filter((method) => !reads.includes(method));
 }
 
 test("a value the schema forbids is refused in the form, before any request", async ({
   page,
   request,
 }) => {
-  const seed = await seedPipeline(request);
-  const one = await publishStep(
-    request,
-    seed,
-    seed.revisionId,
-    "deploy",
-    deployV1,
-  );
+  const seed = await createPipeline(request);
+  const refV1 = await publishPlugin(request, "1.0.0", deployV1);
+  const one = await addStep(request, seed, seed.revisionId, "deploy", refV1);
   const sent = calls(page);
 
   await openPanel(page, seed, one, "deploy");
@@ -236,45 +226,39 @@ test("a value the schema forbids is refused in the form, before any request", as
   // plugin: the pattern is quoted back from the declaration.
   const error = page.getByTestId("field-error-plugin_ref");
   await expect(error).toBeVisible();
-  await expect(error).toContainText('must match pattern "^oci://"');
+  await expect(error).toContainText('must match pattern "^acme/"');
   // No review opened either: there is nothing to review.
   await expect(page.getByTestId("diff-view")).toHaveCount(0);
 
   // Nothing left the browser. Not the edit, and not the review's own
   // read-only Validate: "before any request is sent" is the requirement.
-  expect(methods(sent).filter((m) => m !== "GetPipeline")).toEqual([]);
+  expect(writes(sent)).toEqual([]);
 
   // The barrier: a value the schema ALLOWS goes all the way through, which
   // proves the recorder sees these calls at all.
-  await page.locator("[name=plugin_ref]").fill("oci://example/deploy:1");
+  await publishPlugin(request, "2.0.0", deployV2);
+  await page.locator("[name=plugin_ref]").fill("acme/deploy@2.0.0");
   await page.getByTestId("panel-save").click();
   await expect(page.getByTestId("diff-view")).toBeVisible();
   await page.getByTestId("diff-confirm").click();
   await expect(page.getByTestId("diff-applied")).toBeVisible();
 
-  expect(methods(sent).filter((m) => m !== "GetPipeline")).toEqual([
-    "Validate",
-    "ApplyOperation",
-  ]);
+  expect(writes(sent)).toEqual(["Validate", "ApplyOperation"]);
 });
 
 test("every save is reviewed, and cancelling applies nothing", async ({
   page,
   request,
 }) => {
-  const seed = await seedPipeline(request);
-  const one = await publishStep(
-    request,
-    seed,
-    seed.revisionId,
-    "deploy",
-    deployV1,
-  );
+  const seed = await createPipeline(request);
+  const refV1 = await publishPlugin(request, "1.0.0", deployV1);
+  await publishPlugin(request, "2.0.0", deployV2);
+  const one = await addStep(request, seed, seed.revisionId, "deploy", refV1);
   const sent = calls(page);
 
   await openPanel(page, seed, one, "deploy");
   await expect(page.getByTestId("property-panel")).toBeVisible();
-  await page.locator("[name=plugin_ref]").fill("oci://example/deploy:1");
+  await page.locator("[name=plugin_ref]").fill("acme/deploy@2.0.0");
 
   // Save does not save. It opens the review, which names the change in the
   // step's own terms.
@@ -285,63 +269,36 @@ test("every save is reviewed, and cancelling applies nothing", async ({
 
   await page.getByTestId("diff-cancel").click();
   await expect(review).toHaveCount(0);
-  expect(methods(sent)).not.toContain("ApplyOperation");
+  expect(writes(sent)).not.toContain("ApplyOperation");
 
   // And the definition the API holds is untouched by a cancelled review.
   const after = (await rpc(request, "GetPipeline", {
     pipelineId: seed.pipelineId,
     revisionId: one,
   })) as { pipeline?: { steps?: { id?: string; pluginRef?: string }[] } };
-  expect(
-    after.pipeline?.steps?.find((s) => s.id === "deploy")?.pluginRef,
-  ).toBeFalsy();
+  expect(after.pipeline?.steps?.find((s) => s.id === "deploy")?.pluginRef).toBe(
+    refV1,
+  );
 
   // Barrier again: confirming the same edit does apply it, once.
   await page.getByTestId("panel-save").click();
   await page.getByTestId("diff-confirm").click();
   await expect(page.getByTestId("diff-applied")).toBeVisible();
-  expect(methods(sent).filter((m) => m === "ApplyOperation")).toEqual([
+  expect(writes(sent).filter((m) => m === "ApplyOperation")).toEqual([
     "ApplyOperation",
   ]);
 });
 
-/** stubValidate answers the review's Validate call with `diagnostics`.
+/** The sentence internal/catalog.widenWarning writes, verbatim. It is the
+ * CONTROL PLANE's: internal/catalog computes it in ResolveStep
+ * (Entry.OverrideWarnings) and internal/api/validate.go hands it out as a
+ * warning diagnostic. The browser must not recompute it, so the suite drives
+ * the panel by what the server says.
  *
- * The widening warning is the CONTROL PLANE's: internal/catalog computes it in
- * ResolveStep (Entry.OverrideWarnings) and internal/api/validate.go hands it
- * out as a warning diagnostic. The browser must not recompute it, so the
- * suite drives the panel by what the server says rather than by what the edit
- * was — including the case where the server says nothing.
- *
- * It is stubbed rather than provoked because the e2e control plane is
- * constructed WITHOUT a catalog (api.Config.Catalog is nil in
- * web/e2e/fixture), so no plugin diagnostic can be produced there. The day
- * the served plane carries a catalog, this stub is deleted and the same
- * assertions run against the real warning.
- */
-async function stubValidate(
-  page: Page,
-  diagnostics: readonly Record<string, string>[],
-): Promise<void> {
-  await page.route("**/dhole.v1.PipelineService/Validate", (route) => {
-    const cors = {
-      "access-control-allow-origin": "*",
-      "access-control-allow-headers": "*",
-      "access-control-allow-methods": "POST, OPTIONS",
-      "access-control-expose-headers": "*",
-    };
-    if (route.request().method() === "OPTIONS") {
-      return route.fulfill({ status: 204, headers: cors });
-    }
-    return route.fulfill({
-      status: 200,
-      headers: { ...cors, "content-type": "application/json" },
-      body: JSON.stringify({ diagnostics }),
-    });
-  });
-}
-
-/** The sentence internal/catalog.widenWarning writes, verbatim. */
+ * It is provoked rather than stubbed. It used to be stubbed because the
+ * fixture control plane was built without a catalog and could produce no
+ * plugin diagnostic at all; `dhole serve` carries one, and the plugin below is
+ * really published, so the real warning is what arrives. */
 const widening =
   'step "deploy" widens effect class to EFFECT_CLASS_PURE over ' +
   "EFFECT_CLASS_AT_MOST_ONCE declared by acme/deploy@1.0.0: " +
@@ -351,24 +308,19 @@ test("a widening effect-class override is a policy decision point in the diff", 
   page,
   request,
 }) => {
-  const seed = await seedPipeline(request);
-  const one = await publishStep(
-    request,
-    seed,
-    seed.revisionId,
-    "deploy",
-    deployV1,
-  );
+  const seed = await createPipeline(request);
+  const refV1 = await publishPlugin(request, "1.0.0", deployV1);
+  await publishPlugin(request, "2.0.0", deployV2);
+  const one = await addStep(request, seed, seed.revisionId, "deploy", refV1);
   const sent = calls(page);
 
-  // First, the control: the SAME widening edit, with a control plane that
-  // reports nothing. A panel that decided this for itself would highlight
-  // here, and the property under test is that it does not.
-  await stubValidate(page, []);
   await openPanel(page, seed, one, "deploy");
   await expect(page.getByTestId("property-panel")).toBeVisible();
-  await page.locator("[name=plugin_ref]").fill("oci://example/deploy:1");
-  await page.locator("[name=effect_class]").selectOption("EFFECT_CLASS_PURE");
+
+  // First, the control: an edit the control plane has nothing to say about.
+  // A panel that decided this for itself would highlight here too, and the
+  // property under test is that it highlights only what it was told.
+  await page.locator("[name=plugin_ref]").fill("acme/deploy@2.0.0");
   await page.getByTestId("panel-save").click();
   await expect(page.getByTestId("diff-view")).toBeVisible();
   await expect(page.getByTestId("policy-decision")).toHaveCount(0);
@@ -377,6 +329,16 @@ test("a widening effect-class override is a policy decision point in the diff", 
   // The review asked the control plane about the pipeline it is PROPOSING,
   // not about the saved one: a warning about the definition as it stands
   // would never mention the override being reviewed.
+  await page.locator("[name=plugin_ref]").fill(refV1);
+  await page.locator("[name=effect_class]").selectOption("EFFECT_CLASS_PURE");
+  await page.getByTestId("panel-save").click();
+
+  const decision = page.getByTestId("policy-decision");
+  await expect(decision).toBeVisible();
+  // The control plane's sentence, not a paraphrase of it.
+  await expect(decision).toContainText(widening);
+  await expect(decision).toContainText("policy");
+
   const validate = sent.find((call) => call.method === "Validate");
   expect(validate).toBeDefined();
   const proposed = (
@@ -384,18 +346,5 @@ test("a widening effect-class override is a policy decision point in the diff", 
       pipeline?: { steps?: { id?: string; effectClass?: string }[] };
     }
   ).pipeline;
-  expect(proposed?.steps?.find((s) => s.id === "deploy")?.effectClass).toBe(
-    "EFFECT_CLASS_PURE",
-  );
-
-  // Now the same edit against a plane that reports the widening.
-  await stubValidate(page, [
-    { severity: "warning", stepId: "deploy", message: widening },
-  ]);
-  await page.getByTestId("panel-save").click();
-  const decision = page.getByTestId("policy-decision");
-  await expect(decision).toBeVisible();
-  // The control plane's sentence, not a paraphrase of it.
-  await expect(decision).toContainText(widening);
-  await expect(decision).toContainText("policy");
+  expect(proposed?.steps?.find((s) => s.id === "deploy")).toBeDefined();
 });

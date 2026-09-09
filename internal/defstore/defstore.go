@@ -87,6 +87,18 @@ type Store interface {
 
 	// Revision returns one revision's metadata without its definition.
 	Revision(ctx context.Context, tenantID, revisionID string) (Revision, error)
+
+	// Revisions returns a pipeline's revision history, oldest first, without
+	// the definitions. A pipeline with no revisions — including one that
+	// belongs to another tenant — is an empty list and not an error: "you
+	// have never edited this" and "this does not exist" are the same fact to
+	// a caller who may not be told the difference.
+	//
+	// This is a query rather than an optional capability because the API
+	// serves ListRevisions from it, and a store that could not list made
+	// that RPC answer CodeUnimplemented — a hole in the one contract ADR
+	// 0013 says serves the GUI, the CLI and agents equally.
+	Revisions(ctx context.Context, tenantID, pipelineID string) ([]Revision, error)
 }
 
 // SQLStore is the SQL implementation of Store, over the same database handle
@@ -272,6 +284,41 @@ func (s *SQLStore) Revision(ctx context.Context, tenantID, revisionID string) (R
 	return rev, nil
 }
 
+// Revisions returns the pipeline's revision history, oldest first.
+//
+// The order is created_at then id: the timestamps are RFC3339 with
+// nanoseconds in UTC, which sorts lexicographically in the same order it
+// sorts chronologically, and the id breaks a tie between two revisions
+// written inside the same clock tick so the listing is stable rather than
+// whatever the planner happened to return.
+func (s *SQLStore) Revisions(ctx context.Context, tenantID, pipelineID string) ([]Revision, error) {
+	if tenantID == "" {
+		return nil, ErrTenantRequired
+	}
+	const q = `SELECT id, pipeline_id, content_hash, state, lockfile, author, approver
+		FROM revisions
+		WHERE tenant_id = ? AND pipeline_id = ?
+		ORDER BY created_at, id`
+	rows, err := s.db.QueryContext(ctx, s.dialect.Rebind(q), tenantID, pipelineID)
+	if err != nil {
+		return nil, fmt.Errorf("list revisions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []Revision{}
+	for rows.Next() {
+		rev, err := scanRevisionRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list revisions: %w", err)
+		}
+		out = append(out, rev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list revisions: %w", err)
+	}
+	return out, nil
+}
+
 // Approve promotes a revision and demotes the one it supersedes.
 func (s *SQLStore) Approve(ctx context.Context, tenantID, revisionID, approver string) error {
 	if tenantID == "" {
@@ -340,8 +387,19 @@ func revisionRow(
 	return rev, nil
 }
 
+// scanner is the part of *sql.Row and *sql.Rows a revision is read through,
+// so the single-row read and the listing decode the same columns the same way.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
 // scanRevision reads one revisions row into a Revision.
 func scanRevision(row *sql.Row) (Revision, error) {
+	return scanRevisionRow(row)
+}
+
+// scanRevisionRow reads one revisions row from either cursor shape.
+func scanRevisionRow(row scanner) (Revision, error) {
 	var (
 		rev      Revision
 		state    string

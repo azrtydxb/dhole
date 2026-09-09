@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -150,6 +151,57 @@ func definitionStoreContract(t *testing.T, store defstore.Store) {
 		require.Equal(t, defstore.StateDraft, still.State)
 	})
 
+	t.Run("RevisionsListsThePipelinesHistoryOldestFirst", func(t *testing.T) {
+		ctx := context.Background()
+		scope := uniqueTenant(t)
+
+		first, err := store.Save(ctx, scope, pipeline("p1", "oci://dhole/build:1"), "ada")
+		require.NoError(t, err)
+		second, err := store.Save(ctx, scope, pipeline("p1", "oci://dhole/build:2"), "ada")
+		require.NoError(t, err)
+		third, err := store.Save(ctx, scope, pipeline("p1", "oci://dhole/build:3"), "ada")
+		require.NoError(t, err)
+		// Another pipeline of the same tenant, which must not appear below.
+		other, err := store.Save(ctx, scope, pipeline("p2", "oci://dhole/build:1"), "ada")
+		require.NoError(t, err)
+
+		require.NoError(t, store.Approve(ctx, scope, second.ID, "grace"))
+
+		history, err := store.Revisions(ctx, scope, "p1")
+		require.NoError(t, err)
+
+		ids := make([]string, 0, len(history))
+		for _, rev := range history {
+			ids = append(ids, rev.ID)
+		}
+		require.Equal(t, []string{first.ID, second.ID, third.ID}, ids,
+			"the history is the pipeline's revisions, oldest first, and nobody else's")
+		require.NotContains(t, ids, other.ID)
+
+		// The metadata is the same metadata Revision() answers with: a
+		// listing that lost the approval state would make the history a
+		// different fact from the record.
+		require.Equal(t, defstore.StateActive, history[1].State)
+		require.Equal(t, "grace", history[1].Approver)
+		require.Equal(t, "ada", history[0].Author)
+	})
+
+	t.Run("RevisionsOfAnotherTenantIsEmptyRatherThanTheirs", func(t *testing.T) {
+		ctx := context.Background()
+		mine := uniqueTenant(t)
+		theirs := uniqueTenant(t)
+
+		_, err := store.Save(ctx, mine, pipeline("p1", "oci://dhole/build:1"), "ada")
+		require.NoError(t, err)
+
+		history, err := store.Revisions(ctx, theirs, "p1")
+		require.NoError(t, err)
+		require.Empty(t, history, "a pipeline of another tenant has no history here")
+
+		_, err = store.Revisions(ctx, "", "p1")
+		require.ErrorIs(t, err, defstore.ErrTenantRequired)
+	})
+
 	t.Run("ReadsAreScopedToTheirTenant", func(t *testing.T) {
 		ctx := context.Background()
 		mine := uniqueTenant(t)
@@ -173,4 +225,63 @@ func definitionStoreContract(t *testing.T, store defstore.Store) {
 		_, err = store.Get(ctx, "", "p1", "rev_1")
 		require.ErrorIs(t, err, defstore.ErrTenantRequired)
 	})
+}
+
+// TestSQLiteStoresTheEditingHead and its Postgres twin hold the head table to
+// one contract on both dialects. The head is what makes base_revision a real
+// optimistic-concurrency check across control planes, and a compare-and-set
+// that compared on one dialect and overwrote on the other would lose edits on
+// exactly the deployment that runs more than one plane.
+func TestSQLiteStoresTheEditingHead(t *testing.T) {
+	// The migrated database rather than the single-file schema the other
+	// tests here open: the head lives in a later migration, and a test that
+	// applied only 0005 would be testing a schema no deployment runs.
+	db, err := runstore.OpenSQLite(filepath.Join(t.TempDir(), "heads.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	headsContract(t, defstore.NewHeads(db, runstore.DialectSQLite))
+}
+
+func TestPostgresStoresTheEditingHead(t *testing.T) {
+	headsContract(t, defstore.NewHeads(postgresDB(t), runstore.DialectPostgres))
+}
+
+func headsContract(t *testing.T, heads *defstore.SQLHeads) {
+	t.Helper()
+	ctx := context.Background()
+	scope := uniqueTenant(t)
+
+	_, known, err := heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.False(t, known, "a pipeline nobody has edited has no head, and that is not an error")
+
+	require.NoError(t, heads.CompareAndSetHead(ctx, scope, "p1", "", "rev_a"))
+	require.ErrorIs(t, heads.CompareAndSetHead(ctx, scope, "p1", "", "rev_b"),
+		defstore.ErrHeadMoved, "seeding a head twice is the race two planes run")
+
+	got, known, err := heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.True(t, known)
+	require.Equal(t, "rev_a", got)
+
+	require.ErrorIs(t, heads.CompareAndSetHead(ctx, scope, "p1", "rev_stale", "rev_b"),
+		defstore.ErrHeadMoved)
+	got, _, err = heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.Equal(t, "rev_a", got, "a refused move must not have written anything")
+
+	require.NoError(t, heads.CompareAndSetHead(ctx, scope, "p1", "rev_a", "rev_b"))
+	got, _, err = heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.Equal(t, "rev_b", got)
+
+	// Another tenant's pipeline of the same id is a different head.
+	other := uniqueTenant(t)
+	_, known, err = heads.Head(ctx, other, "p1")
+	require.NoError(t, err)
+	require.False(t, known)
+
+	_, _, err = heads.Head(ctx, "", "p1")
+	require.ErrorIs(t, err, defstore.ErrTenantRequired)
+	require.ErrorIs(t, heads.CompareAndSetHead(ctx, "", "p1", "", "rev_a"), defstore.ErrTenantRequired)
 }

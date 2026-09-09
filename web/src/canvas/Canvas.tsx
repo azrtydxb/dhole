@@ -260,6 +260,9 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
             effectClass: 0,
             leaseScope: 0,
             capabilities: [],
+            // No plugin values yet: a new step names no plugin, so there is
+            // nothing it declares to configure.
+            config: {},
             inputs: [...kind.inputs],
             outputs: [...kind.outputs],
           },

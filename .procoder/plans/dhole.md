@@ -47,7 +47,7 @@ decide what may be cached and what may be retried.
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
-  0011 policy_audit (21), 0012 upstreams (34), 0018 quotas_and_usage (58), 0013 timers (20), 0014 trigger_schedules (40),
+  0011 policy_audit (21), 0012 upstreams (34), 0018 quotas_and_usage (58), 0019 pipeline_heads (27b), 0013 timers (20), 0014 trigger_schedules (40),
   0015 outbox_deployment (18b), 0016 open_runs (18b), 0017 run_sequence (18b). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
@@ -459,7 +459,7 @@ Interfaces: produces service `PipelineService` with RPCs `GetPipeline`, `ApplyOp
 Files: `internal/defstore/`, `internal/api/`
 Interfaces: adds a revision-history query to `defstore.Store`; gives the editing head a home in the schema.
 
-- [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
+- [x] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
 - [x] **`policy.Input` carries no taint keys.** Task 51's `taint.Check` returns a `policy.Decision` but builds it itself, because `internal/policy` was a concurrent task's file. Add the taint fields to `policy.Input` and the CEL environment so an operator can write a taint rule instead of relying on the four built-in ones. Found building Task 51.
 - [x] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
 - [x] **`dhole serve` does not serve the API.** `internal/server` assembles the bus, scheduler, outbox
@@ -468,15 +468,15 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
       the server, and delete `web/e2e/fixture/main.go`, which says in its own header that it exists only until
       this is fixed. Found building Task 46.
-- [ ] **`PipelineService` has no catalog RPC.** The browser cannot read a plugin's
+- [x] **`PipelineService` has no catalog RPC.** The browser cannot read a plugin's
       `catalog.Manifest.InputSchema`, so Task 47's panel renders the declaration the DEFINITION carries — the
       step's structured input port's inline schema — instead. One function, `declarationOf()`, is what changes
       when a catalog RPC lands. Found building Task 47.
-- [ ] **A step has nowhere to store its plugin's input values.** `SetProperty` accepts only `plugin_ref`,
+- [x] **A step has nowhere to store its plugin's input values.** `SetProperty` accepts only `plugin_ref`,
       `effect_class` and `lease_scope`, so a field a plugin declares can be rendered and validated but not
       persisted; the panel shows those fields with that reason attached rather than hiding them. Add a step
       config field, or extend `SetProperty` over plugin inputs. Found building Task 47.
-- [ ] **No RPC creates a pipeline from scratch.** `ApplyOperation` requires an existing
+- [x] **No RPC creates a pipeline from scratch.** `ApplyOperation` requires an existing
       `base_revision`, so a brand-new pipeline cannot be created through the contract at all — both Task 46 and
       Task 48 had to seed one through a fixture-only HTTP route. That is a hole in ADR 0013 exactly where it
       matters: the GUI cannot create a pipeline without a back door. Add `CreatePipeline`, or let
@@ -484,6 +484,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 - [x] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
       there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
       tenant, not only whatever a plane prints at startup. Found building Task 48.
+- [ ] **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside tests — not the API, not the CLI, not the git mirror. So a plugin's declaration can be read through `GetPlugin` and there is no supported way to put one there; the e2e seeder has a `/plugin` route for exactly this reason. Found building Task 27b.
 - [ ] **The quota enforcer and the CAS guard are built and unwired.** Task 58's `Enforcer.AdmitRun`/`AdmitStep` and `GuardCAS` are tested but have no call sites: `internal/scheduler` and `internal/cas` belonged to other agents that round. Wire `AdmitStep` into the dispatch loop and `GuardCAS` around the blob store. Note `tenancy` deliberately does not import `scheduler` — the dependency runs the other way — so it mirrors two persistence contracts, guarded by `TestMirroredSchedulerContractsHaveNotDrifted`.
 - [ ] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and
       `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
@@ -491,9 +492,9 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       steps, drain with `Next(ctx, slots)` against the fleet's free capacity, `Acquire` before the lease claim,
       and release on EVERY terminal status, not only success. This is the same shape as the cache gap
       (Task 15b): everything built, one end unconnected.
-- [ ] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
+- [x] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
 - [x] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
-- [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
+- [x] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
 
 ## Task 28: Validate and plan endpoints
 

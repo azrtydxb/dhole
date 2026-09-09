@@ -11,6 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	_ "modernc.org/sqlite"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
@@ -197,6 +199,7 @@ func (a *recordingAdvancer) seen() []string {
 // harness is one API server behind a real HTTP client.
 type harness struct {
 	client   dholev1connect.PipelineServiceClient
+	engines  dholev1connect.EngineServiceClient
 	defs     defstore.Store
 	runs     runstore.Store
 	advancer *recordingAdvancer
@@ -225,6 +228,7 @@ func newHarness(t *testing.T, defs defstore.Store) *harness {
 
 	return &harness{
 		client:   dholev1connect.NewPipelineServiceClient(httpSrv.Client(), httpSrv.URL),
+		engines:  dholev1connect.NewEngineServiceClient(httpSrv.Client(), httpSrv.URL),
 		defs:     defs,
 		runs:     runs,
 		advancer: adv,
@@ -286,6 +290,9 @@ func basePipeline(tenantID string) *dholev1.Pipeline {
 			{
 				Id:      "c",
 				Outputs: []*dholev1.Port{blobPort("out")},
+				// A value its plugin declares, already set, so the inverse of
+				// overwriting it has something real to restore.
+				Config: map[string]string{"target": "production"},
 			},
 		},
 		Edges: []*dholev1.Edge{{FromStep: "a", FromPort: "out", ToStep: "b", ToPort: "in"}},
@@ -324,6 +331,12 @@ var operationFixtures = map[string]*dholev1.Operation{
 	"rename": {Kind: &dholev1.Operation_Rename{Rename: &dholev1.Rename{
 		StepId: "c", Name: "cache",
 	}}},
+	// Step "c" carries a config value already (basePipeline), so this fixture
+	// OVERWRITES one: the inverse has to restore the value that was there,
+	// which is the case a "set it back to empty" inverse would get wrong.
+	"set_step_config": {Kind: &dholev1.Operation_SetStepConfig{
+		SetStepConfig: &dholev1.SetStepConfig{StepId: "c", Key: "target", Value: "staging"},
+	}},
 }
 
 // operationKinds is every field of the Operation oneof, read from the
@@ -608,8 +621,23 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 	t.Helper()
 	ctx := context.Background()
 	switch rpc {
+	case "CreatePipeline":
+		_, err := h.client.CreatePipeline(ctx, connect.NewRequest(&dholev1.CreatePipelineRequest{PipelineId: "pipe-2"}))
+		return err
 	case "GetPipeline":
 		_, err := h.client.GetPipeline(ctx, connect.NewRequest(&dholev1.GetPipelineRequest{PipelineId: "pipe-1"}))
+		return err
+	case "GetPlugin":
+		_, err := h.client.GetPlugin(ctx, connect.NewRequest(&dholev1.GetPluginRequest{PluginRef: "acme/x@1"}))
+		return err
+	case "CancelRun":
+		_, err := h.client.CancelRun(ctx, connect.NewRequest(&dholev1.CancelRunRequest{RunId: "run-x"}))
+		return err
+	case "ListEngines":
+		_, err := h.engines.ListEngines(ctx, connect.NewRequest(&dholev1.ListEnginesRequest{}))
+		return err
+	case "DrainEngine":
+		_, err := h.engines.DrainEngine(ctx, connect.NewRequest(&dholev1.DrainEngineRequest{EngineId: "e1"}))
 		return err
 	case "ApplyOperation":
 		_, err := h.client.ApplyOperation(ctx, connect.NewRequest(&dholev1.ApplyOperationRequest{
@@ -647,16 +675,26 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 	}
 }
 
-// serviceRPCs is every method of the service, read from the descriptor so an
-// RPC added later is authenticated too or fails here.
+// serviceRPCs is every method of every dhole.v1 service, read from the
+// descriptors so an RPC added later — in this file or in a service that does
+// not exist yet — is authenticated too or fails here.
 func serviceRPCs(t *testing.T) []string {
 	t.Helper()
-	desc := dholev1.File_dhole_v1_api_proto.Services().ByName("PipelineService")
-	require.NotNil(t, desc)
-	names := make([]string, 0, desc.Methods().Len())
-	for i := range desc.Methods().Len() {
-		names = append(names, string(desc.Methods().Get(i).Name()))
-	}
+	var names []string
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		if fd.Package() != "dhole.v1" {
+			return true
+		}
+		services := fd.Services()
+		for i := range services.Len() {
+			methods := services.Get(i).Methods()
+			for j := range methods.Len() {
+				names = append(names, string(methods.Get(j).Name()))
+			}
+		}
+		return true
+	})
+	require.NotEmpty(t, names)
 	return names
 }
 
@@ -792,18 +830,38 @@ func TestListRevisionsReturnsTheTenantsRevisions(t *testing.T) {
 	require.Equal(t, []string{rev.ID, applied.Msg.GetRevision().GetId()}, ids)
 }
 
-// TestListRevisionsSaysSoWhenTheStoreCannotList records the gap honestly: the
-// definition store has no listing query yet, and an endpoint that answered
-// with an empty list would report "no revisions" for a pipeline that has many.
-func TestListRevisionsSaysSoWhenTheStoreCannotList(t *testing.T) {
+// TestListRevisionsReadsTheRealStoresHistory is what replaced the gap this
+// endpoint used to report: the definition store answers the history itself, so
+// ListRevisions is served rather than refused as unimplemented.
+//
+// It runs against the REAL SQL store rather than the recording double, because
+// the double's listing proved only that the server calls something.
+func TestListRevisionsReadsTheRealStoresHistory(t *testing.T) {
 	h := newRealHarness(t)
-	_, _ = seed(t, h, tenantA)
+	p, base := seed(t, h, tenantA)
+	ctx := context.Background()
 
-	_, err := h.client.ListRevisions(context.Background(),
-		authed(&dholev1.ListRevisionsRequest{PipelineId: "pipe-1"}, tokenAlice))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-	require.Contains(t, err.Error(), "list revisions")
+	applied, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+		PipelineId: p.GetId(), BaseRevision: base.ID, Operation: fixtureFor(t, "rename"),
+	}, tokenAlice))
+	require.NoError(t, err)
+
+	list, err := h.client.ListRevisions(ctx,
+		authed(&dholev1.ListRevisionsRequest{PipelineId: p.GetId()}, tokenAlice))
+	require.NoError(t, err, "the definition store can list, so this must not be unimplemented")
+
+	ids := make([]string, 0, len(list.Msg.GetRevisions()))
+	for _, r := range list.Msg.GetRevisions() {
+		ids = append(ids, r.GetId())
+	}
+	require.Equal(t, []string{base.ID, applied.Msg.GetRevision().GetId()}, ids,
+		"the history is the pipeline's revisions, oldest first")
+
+	// Another tenant sees none of it.
+	other, err := h.client.ListRevisions(ctx,
+		authed(&dholev1.ListRevisionsRequest{PipelineId: p.GetId()}, tokenBob))
+	require.NoError(t, err)
+	require.Empty(t, other.Msg.GetRevisions())
 }
 
 // TestApproveRevisionRecordsThePrincipalAsApprover.
@@ -945,4 +1003,87 @@ func TestUnknownOperationIsRejected(t *testing.T) {
 
 	_, _, _, err = api.Apply(basePipeline(tenantA), nil)
 	require.Error(t, err)
+}
+
+// TestSetStepConfigInvertsInEveryDirection covers the three shapes the
+// round-trip fixture cannot all be at once. The property is ADR 0020's: every
+// operation the API accepts can be undone exactly, or it does not belong in
+// the set.
+func TestSetStepConfigInvertsInEveryDirection(t *testing.T) {
+	h := newRealHarness(t)
+	original, base := seed(t, h, tenantA)
+	ctx := context.Background()
+
+	roundTrip := func(t *testing.T, op *dholev1.SetStepConfig) {
+		t.Helper()
+		applied, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   original.GetId(),
+			BaseRevision: base.ID,
+			Operation: &dholev1.Operation{Kind: &dholev1.Operation_SetStepConfig{
+				SetStepConfig: op,
+			}},
+		}, tokenAlice))
+		require.NoError(t, err)
+
+		undone, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   original.GetId(),
+			BaseRevision: applied.Msg.GetRevision().GetId(),
+			Operation:    applied.Msg.GetInverse(),
+		}, tokenAlice))
+		require.NoError(t, err)
+		// Revision identity IS the content hash, so landing back on the base
+		// revision id is exact equality rather than a resemblance.
+		require.Equal(t, base.ID, undone.Msg.GetRevision().GetId(),
+			"the inverse did not restore the definition it was taken from")
+	}
+
+	t.Run("SettingAKeyThatWasNeverThere", func(t *testing.T) {
+		roundTrip(t, &dholev1.SetStepConfig{StepId: "c", Key: "region", Value: "eu-west-1"})
+	})
+	t.Run("OverwritingAKeyThatHadAValue", func(t *testing.T) {
+		roundTrip(t, &dholev1.SetStepConfig{StepId: "c", Key: "target", Value: "staging"})
+	})
+	t.Run("RemovingTheOnlyKeyThereIs", func(t *testing.T) {
+		roundTrip(t, &dholev1.SetStepConfig{StepId: "c", Key: "target", Remove: true})
+	})
+
+	t.Run("RemovingAKeyThatIsNotThereIsRefused", func(t *testing.T) {
+		// The same reason removing an edge that does not exist is refused: the
+		// "inverse" of a removal that removed nothing would SET a value the
+		// step never had, so undoing it would add something.
+		_, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   original.GetId(),
+			BaseRevision: base.ID,
+			Operation: &dholev1.Operation{Kind: &dholev1.Operation_SetStepConfig{
+				SetStepConfig: &dholev1.SetStepConfig{StepId: "c", Key: "absent", Remove: true},
+			}},
+		}, tokenAlice))
+		require.Error(t, err)
+		require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		require.Contains(t, err.Error(), "no config value")
+	})
+
+	t.Run("AKeylessEditIsRefused", func(t *testing.T) {
+		_, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   original.GetId(),
+			BaseRevision: base.ID,
+			Operation: &dholev1.Operation{Kind: &dholev1.Operation_SetStepConfig{
+				SetStepConfig: &dholev1.SetStepConfig{StepId: "c", Value: "x"},
+			}},
+		}, tokenAlice))
+		require.Error(t, err)
+		require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	})
+}
+
+// TestStepConfigIsPartOfTheContentHash: two steps configured differently are
+// two different revisions, and therefore two different cache keys. A config
+// map outside the hash would let a reconfigured step be served from the cache
+// of the old configuration.
+func TestStepConfigIsPartOfTheContentHash(t *testing.T) {
+	one := basePipeline(tenantA)
+	two := basePipeline(tenantA)
+	two.GetSteps()[2].Config = map[string]string{"target": "staging"}
+	require.NotEqual(t, defstore.ContentHash(one), defstore.ContentHash(two),
+		"changing a step's configuration did not change the revision")
 }

@@ -9,9 +9,14 @@
  * the GUI, the CLI and agents share (ADR 0013). It mints a bootstrap
  * credential at start-up and writes it, mode 0600, beside its database, before
  * it opens the port Playwright waits for; that file is the suite's credential
- * for the default tenant. Anything else — a pipeline to edit, a second
- * tenant's token — comes from e2e/seed, which is what is left of the fixture
- * binary that used to stand in for the whole plane.
+ * for the default tenant, and a pipeline to edit is created through the
+ * contract like any other client would.
+ *
+ * The one thing e2e/seed is still for is a SECOND TENANT's credential. The
+ * plane mints a bootstrap token for the default tenant only, and a suite
+ * asserting that one tenant cannot see another's work needs a token for the
+ * other one; `dhole token issue` is the operator command, and the seeder is
+ * that call over HTTP so the browser side does not shell out.
  */
 import { readFileSync } from "node:fs";
 
@@ -41,21 +46,49 @@ export function bootstrapToken(): string {
   return readFileSync(path, "utf8").trim();
 }
 
+/** rpc calls one RPC of the contract over Connect's JSON protocol. */
+export async function rpc(
+  request: APIRequestContext,
+  method: string,
+  body: unknown,
+  token = bootstrapToken(),
+): Promise<Record<string, unknown>> {
+  const response = await request.post(
+    `${apiUrl}/dhole.v1.PipelineService/${method}`,
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      data: body as Record<string, unknown>,
+    },
+  );
+  expect(response.ok(), await response.text()).toBe(true);
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/** A counter, so each test's pipeline id is its own. Heads are per pipeline,
+ * and two tests sharing one would conflict for a reason neither is about. */
+let created = 0;
+
 /**
- * A pipeline of the caller's own. Heads are per pipeline, so two tests sharing
- * one would conflict with each other for a reason neither is about.
+ * A pipeline of the caller's own, created THROUGH THE CONTRACT.
  *
- * It goes through the seeder rather than the contract because the contract
- * cannot create a pipeline: ApplyOperation requires a base_revision, and no
- * RPC writes a first one. That is a real hole in ADR 0013 — the GUI cannot
- * create a pipeline either — and this helper is where it shows.
+ * It used to go through e2e/seed, which wrote a first revision straight into
+ * the plane's database, because ApplyOperation requires a base_revision and no
+ * RPC wrote one — so the GUI could not create a pipeline either, and the suite
+ * had to do something the product cannot. CreatePipeline closed that, and this
+ * helper is now exactly what the canvas itself would call.
  */
-export async function seedPipeline(
+export async function createPipeline(
   request: APIRequestContext,
 ): Promise<Seeded> {
-  const response = await request.post(`${seedUrl}/pipeline`);
-  expect(response.ok(), await response.text()).toBe(true);
-  return (await response.json()) as Seeded;
+  created += 1;
+  const pipelineId = `canvas-e2e-${process.pid}-${created}`;
+  const response = await rpc(request, "CreatePipeline", { pipelineId });
+  const revision = (response as { revision?: { id?: string } }).revision;
+  expect(revision?.id, JSON.stringify(response)).toBeTruthy();
+  return { pipelineId, revisionId: revision?.id ?? "" };
 }
 
 /**

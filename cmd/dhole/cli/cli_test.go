@@ -219,11 +219,16 @@ func serverCommands() []struct {
 		args     []string
 		succeeds bool
 	}{
+		{"pipeline create", []string{"pipeline", "create", "p2"}, true},
+		{"plugin get", []string{"plugin", "get", "acme/deploy@1.0.0"}, false},
+		{"engine list", []string{"engine", "list"}, false},
+		{"engine drain", []string{"engine", "drain", "e1"}, false},
+		{"run cancel", []string{"run", "cancel", "run_1"}, false},
 		{"pipeline get", []string{"pipeline", "get", "p1"}, true},
 		{"pipeline apply", []string{"pipeline", "apply", "p1", "--base", "rev_1", "--operation", operation}, false},
 		{"pipeline validate", []string{"pipeline", "validate", "p1"}, false},
 		{"pipeline plan", []string{"pipeline", "plan", "p1"}, false},
-		{"pipeline revisions", []string{"pipeline", "revisions", "p1"}, false},
+		{"pipeline revisions", []string{"pipeline", "revisions", "p1"}, true},
 		{"pipeline approve", []string{"pipeline", "approve", "rev_1"}, true},
 		{"run start", []string{"run", "start", "p1"}, false},
 		{"run watch", []string{"run", "watch", "run_1"}, false},
@@ -293,6 +298,13 @@ func (s *oneRevisionStore) Revision(_ context.Context, _, revisionID string) (de
 		return defstore.Revision{}, defstore.ErrNotFound
 	}
 	return s.rev(), nil
+}
+
+func (s *oneRevisionStore) Revisions(_ context.Context, _, pipelineID string) ([]defstore.Revision, error) {
+	if pipelineID != "p1" {
+		return nil, nil
+	}
+	return []defstore.Revision{s.rev()}, nil
 }
 
 func (s *oneRevisionStore) rev() defstore.Revision {

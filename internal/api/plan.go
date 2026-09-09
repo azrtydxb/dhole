@@ -46,9 +46,15 @@ type Environment interface {
 	EnvironmentIdentity() (string, error)
 }
 
-// StepResolver resolves the plugin a step names. catalog.Store satisfies it.
+// StepResolver is the catalog, narrowed to the two questions the API asks of
+// it: what does this step resolve to, and what does this plugin declare.
+// catalog.Store satisfies it.
 type StepResolver interface {
+	// ResolveStep resolves a step against the plugin it names, applying the
+	// effect-class defaulting rule and reporting a widening override.
 	ResolveStep(ctx context.Context, tenantID string, step *dholev1.Step) (catalog.Entry, error)
+	// Resolve returns what one published reference declares.
+	Resolve(ctx context.Context, tenantID, ref string) (catalog.Entry, error)
 }
 
 // Plan is a dry run: what would execute, in what order, what would be served

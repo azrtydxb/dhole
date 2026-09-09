@@ -1,4 +1,4 @@
-// Command seed gives each canvas test a pipeline of its own to edit.
+// Command seed mints a credential for a tenant other than the bootstrapped one.
 //
 // It is what is LEFT of e2e/fixture, which was a whole parallel control plane
 // standing in for a `dhole serve` that did not mount internal/api. It does
@@ -7,31 +7,38 @@
 // uses is the bootstrap token `dhole serve` mints and writes beside its
 // database.
 //
-// What could not go with the fixture is seeding. ApplyOperation takes a
-// base_revision — an edit that cannot conflict overwrites somebody else's
-// silently — and the contract has no call that creates a pipeline from
-// nothing: a definition arrives through `dhole pipeline apply` against an
-// existing one, or through the git mirror, neither of which the canvas suite
-// is about. So the first revision has to be written directly to the store,
-// which is all this program does. It goes away the day the contract can
-// create a pipeline.
+// Seeding a pipeline used to live here too, because ApplyOperation requires a
+// base_revision and the contract had no call that wrote a first one. It does
+// now — CreatePipeline — so the suite creates pipelines the way the canvas
+// does, and this program no longer touches the definition store at all.
 //
-// A pipeline PER TEST, because the editing head is per pipeline: two tests
-// sharing one would conflict with each other for a reason neither is about.
+// Publishing a plugin is here for a DIFFERENT reason, and it is worth naming
+// so nobody mistakes it for the hole that has just been closed: nothing
+// anywhere in Dhole publishes to the catalog. Not the API, not the CLI, not
+// the git mirror — internal/catalog.Publish has no caller outside tests. That
+// is a real gap and a task of its own; until it has one, a suite that needs a
+// published plugin has to write the row, and this is where it does.
+//
+// What is left is the second tenant. `dhole serve` prints the bootstrap
+// credential for the default tenant only, and a suite asserting that one
+// tenant cannot see another's runs needs a token for the other one; `dhole
+// token issue` is the command an operator uses, and this is the same call over
+// HTTP so the browser side of the suite does not have to shell out.
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
-	"sync/atomic"
 	"time"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
-	"github.com/azrtydxb/dhole/internal/defstore"
+	"github.com/azrtydxb/dhole/internal/catalog"
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
@@ -43,12 +50,6 @@ import (
 // browser side of the suite does not have to shell out.
 type issued struct {
 	Token string `json:"token"`
-}
-
-// seeded is one empty pipeline and the revision to base the first edit on.
-type seeded struct {
-	PipelineID string `json:"pipelineId"`
-	RevisionID string `json:"revisionId"`
 }
 
 func main() {
@@ -65,6 +66,23 @@ func main() {
 	}
 }
 
+// published is one plugin the suite wants in the catalog.
+type published struct {
+	Namespace   string `json:"namespace"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	EffectClass string `json:"effectClass"`
+	InputSchema any    `json:"inputSchema"`
+}
+
+// digestOf is a stand-in for the artefact digest a real publish would carry.
+// The catalog refuses a manifest without one, and these plugins have no
+// artefact behind them at all.
+func digestOf(schema []byte) string {
+	sum := sha256.Sum256(schema)
+	return hex.EncodeToString(sum[:])
+}
+
 func run(addr, dsn, waitFor string) error {
 	if err := awaitListener(waitFor); err != nil {
 		return err
@@ -79,13 +97,9 @@ func run(addr, dsn, waitFor string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	// WithoutPinning because these pipelines name no plugin: there is nothing
-	// to resolve, and the option is how a caller says so out loud.
-	defs := defstore.New(db, defstore.WithoutPinning())
-
 	local := identity.NewLocal(identity.NewSQLStore(db))
+	plugins := catalog.New(db, runstore.DialectSQLite)
 
-	var n atomic.Uint64
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
 		tenant := r.URL.Query().Get("tenant")
@@ -106,15 +120,42 @@ func run(addr, dsn, waitFor string) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(issued{Token: token})
 	})
-	mux.HandleFunc("POST /pipeline", func(w http.ResponseWriter, r *http.Request) {
-		id := fmt.Sprintf("canvas-e2e-%d", n.Add(1))
-		rev, err := defs.Save(r.Context(), "default", &dholev1.Pipeline{Id: id}, "e2e-seed")
+
+	mux.HandleFunc("POST /plugin", func(w http.ResponseWriter, r *http.Request) {
+		var body published
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		inputSchema, err := json.Marshal(body.InputSchema)
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		effect, ok := dholev1.EffectClass_value[body.EffectClass]
+		if !ok {
+			http.Error(w, "unknown effect class "+body.EffectClass, http.StatusBadRequest)
+			return
+		}
+		manifest := catalog.Manifest{
+			Namespace:   body.Namespace,
+			Name:        body.Name,
+			Version:     body.Version,
+			Digest:      &dholev1.Digest{Algo: "sha256", Hex: digestOf(inputSchema)},
+			Kind:        catalog.KindStep,
+			EffectClass: dholev1.EffectClass(effect),
+			InputSchema: inputSchema,
+			// A manifest with no output schema is refused by the catalog,
+			// and these plugins are about their inputs.
+			OutputSchema: []byte(`{"$id":"https://example.test/out.json","type":"object"}`),
+			EngineTypes:  []string{"process"},
+		}
+		if err := plugins.Publish(r.Context(), "default", manifest); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(seeded{PipelineID: id, RevisionID: rev.ID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"ref": manifest.Ref()})
 	})
 	// A pipeline of a named SHAPE. The run view needs particular ones — two
 	// pure steps where the second consumes the first, a step with no effect
@@ -150,7 +191,7 @@ func run(addr, dsn, waitFor string) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", addr, err)
 	}
-	fmt.Printf("seed: seeding pipelines on http://%s\n", listener.Addr())
+	fmt.Printf("seed: issuing tenant credentials on http://%s\n", listener.Addr())
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second}
 	return srv.Serve(listener)

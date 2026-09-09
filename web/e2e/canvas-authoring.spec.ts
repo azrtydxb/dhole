@@ -22,7 +22,12 @@ import {
 } from "@playwright/test";
 
 import { ApplyOperationRequestSchema } from "../src/gen/dhole/v1/api_pb.js";
-import { apiUrl, bootstrapToken, seedPipeline, type Seeded } from "./plane.js";
+import {
+  apiUrl,
+  bootstrapToken,
+  createPipeline,
+  type Seeded,
+} from "./plane.js";
 
 interface WirePort {
   name?: string;
@@ -146,7 +151,7 @@ async function revisionId(page: Page): Promise<string> {
 }
 
 test("the canvas authors a pipeline end to end", async ({ page, request }) => {
-  const seed = await seedPipeline(request);
+  const seed = await createPipeline(request);
   await openCanvas(page, seed);
 
   await addStep(page, "a", "blob-source");
@@ -202,7 +207,7 @@ test("a blob output refuses a structured input at drop time", async ({
   page,
   request,
 }) => {
-  const seed = await seedPipeline(request);
+  const seed = await createPipeline(request);
   const sent = applyOperations(page);
   await openCanvas(page, seed);
 
@@ -309,7 +314,7 @@ test("node positions are in no operation and in no document", async ({
   page,
   request,
 }) => {
-  const seed = await seedPipeline(request);
+  const seed = await createPipeline(request);
   const sent = applyOperations(page);
   await openCanvas(page, seed);
 

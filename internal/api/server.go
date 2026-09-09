@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/gen/dhole/v1/dholev1connect"
@@ -37,18 +38,6 @@ import (
 // nothing new to send.
 const DefaultPollInterval = 250 * time.Millisecond
 
-// RevisionLister is the listing query ListRevisions needs.
-//
-// It is a separate, optional interface because defstore.Store does not offer
-// one yet: it can fetch a revision, the active revision and the definition
-// behind either, but it cannot enumerate a pipeline's history. A store that
-// cannot list makes ListRevisions answer CodeUnimplemented rather than an
-// empty list, because "no revisions" is a lie about a pipeline that has many.
-type RevisionLister interface {
-	// Revisions returns the pipeline's revisions, oldest first.
-	Revisions(ctx context.Context, tenantID, pipelineID string) ([]defstore.Revision, error)
-}
-
 // Advancer is the scheduler, narrowed to what StartRun needs. A run that is
 // recorded and never advanced never starts.
 type Advancer interface {
@@ -58,22 +47,31 @@ type Advancer interface {
 // Heads records each pipeline's current editing head, which is what an edit's
 // base_revision is compared against.
 //
-// It is an interface, and its only implementation here keeps the heads in
-// memory, because the definition store has no notion of a head: revisions are
-// content-addressed and carry no parent, so "is this base the latest?" cannot
-// be answered from the rows as they stand. In one control-plane process this
-// is a real optimistic-concurrency check; across several it is not, and it
-// must be replaced by a stored head column before the control plane is run
-// horizontally. A head this store has not seen is accepted once, seeding it.
+// The move is a COMPARE-and-set rather than a write. Reading the head and
+// then writing the new one is two statements with a window between them, and
+// two control planes in that window both find the base current and both
+// accept — which is exactly the check base_revision exists to be. Naming the
+// head the writer read closes it: the plane that lost writes nothing and is
+// told so.
+//
+// A pipeline with no recorded head is seeded by a move from the empty string,
+// and that move loses to whoever seeded it first for the same reason.
 type Heads interface {
 	// Head returns the pipeline's head revision, and whether one is known.
 	Head(ctx context.Context, tenantID, pipelineID string) (string, bool, error)
-	// SetHead records a new head.
-	SetHead(ctx context.Context, tenantID, pipelineID, revisionID string) error
+	// CompareAndSetHead moves the head from `from` to `to`, and does nothing
+	// if the head is not `from`. An empty `from` means "no head yet".
+	// Returns defstore.ErrHeadMoved when the head was not `from`.
+	CompareAndSetHead(ctx context.Context, tenantID, pipelineID, from, to string) error
 }
 
-// MemoryHeads is the in-process Heads. Keys carry the tenant, so two tenants
-// editing pipelines of the same id never see each other's head.
+// MemoryHeads is the in-process Heads, and it is a TEST DOUBLE rather than a
+// deployment option: it is a real optimistic-concurrency check for one process
+// and no check whatever between two, which is the gap defstore.SQLHeads
+// closes. A control plane serving real traffic passes the stored one.
+//
+// Keys carry the tenant, so two tenants editing pipelines of the same id never
+// see each other's head.
 type MemoryHeads struct {
 	mu    sync.Mutex
 	heads map[string]string
@@ -92,11 +90,20 @@ func (m *MemoryHeads) Head(_ context.Context, tenantID, pipelineID string) (stri
 	return id, ok, nil
 }
 
-// SetHead records the head.
-func (m *MemoryHeads) SetHead(_ context.Context, tenantID, pipelineID, revisionID string) error {
+// CompareAndSetHead moves the head only when it is where the caller left it.
+func (m *MemoryHeads) CompareAndSetHead(_ context.Context, tenantID, pipelineID, from, to string) error {
+	if to == "" {
+		return errors.New("api: set head: a revision id is required")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.heads[tenantID+"/"+pipelineID] = revisionID
+	key := tenantID + "/" + pipelineID
+	current, known := m.heads[key]
+	if (known && current != from) || (!known && from != "") {
+		return fmt.Errorf("%w: pipeline %q is no longer at %s",
+			defstore.ErrHeadMoved, pipelineID, from)
+	}
+	m.heads[key] = to
 	return nil
 }
 
@@ -111,13 +118,23 @@ type Config struct {
 	// Advancer is handed each new run. Optional: without one, a run is
 	// recorded and waits for whatever else advances it.
 	Advancer Advancer
-	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads.
+	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads,
+	// which is a check within this process only: a deployment running more
+	// than one control plane MUST pass defstore.NewHeads.
 	Heads Heads
 	// Cache answers whether a step's work has been done before. Plan reads
 	// it and never writes it.
 	Cache CacheReader
-	// Fleet is the live engine registry a plan matches steps against.
+	// Fleet is the live engine registry a plan matches steps against, and
+	// that EngineService lists.
 	Fleet Fleet
+	// Drain stops new work reaching one engine. Optional: without one,
+	// DrainEngine says so rather than pretending.
+	Drain Drainer
+	// Control reaches an engine holding a step, which is what makes a
+	// cancellation stop the work rather than only the bookkeeping. Optional,
+	// with the same rule.
+	Control EngineControl
 	// Environment is where steps would run: the engine kind and the digest
 	// every cache key is computed against. An executor.Executor satisfies it.
 	Environment Environment
@@ -152,8 +169,11 @@ type Server struct {
 	heads Heads
 	cache CacheReader
 	fleet Fleet
-	env   Environment
-	cat   StepResolver
+	drain Drainer
+	// control is the one inbound path to an engine. See control.go.
+	control EngineControl
+	env     Environment
+	cat     StepResolver
 	// live and archive are the two copies of a step's log: the ephemeral
 	// subject and the durable object. See stream.go for why both exist.
 	live    LiveLogs
@@ -187,6 +207,8 @@ func NewServer(cfg Config) (*Server, error) {
 		heads:   cfg.Heads,
 		cache:   cfg.Cache,
 		fleet:   cfg.Fleet,
+		drain:   cfg.Drain,
+		control: cfg.Control,
 		env:     cfg.Environment,
 		cat:     cfg.Catalog,
 		live:    cfg.LiveLogs,
@@ -212,11 +234,84 @@ func NewServer(cfg Config) (*Server, error) {
 func (s *Server) Handler(opts ...connect.HandlerOption) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(dholev1connect.NewPipelineServiceHandler(s, opts...))
+	// The fleet, on the same mux and the same credential. A service declared
+	// in the contract and served from somewhere else would be a second API.
+	mux.Handle(dholev1connect.NewEngineServiceHandler(s, opts...))
 	// The two SSE streams a browser holds open. They are plain HTTP because
 	// EventSource speaks neither Connect nor gRPC, and they authenticate
 	// through the same Server.principal every RPC above uses (stream.go).
 	s.registerStreams(mux)
 	return mux
+}
+
+// CreatePipeline creates a pipeline and writes its first revision.
+//
+// It exists because nothing else in this service can write one: ApplyOperation
+// requires a base_revision, and that requirement is load-bearing rather than
+// incidental — an edit that cannot conflict silently overwrites someone
+// else's. So creation is its own act, and the alternative of letting an empty
+// base mean "create" is refused: a client that lost its base would then read
+// as a client starting fresh, in precisely the situation where the two must
+// not be confused.
+//
+// The id is taken; a second create of the same id is refused rather than
+// returning the existing pipeline or overwriting it. The refusal is the head
+// seeding, which is one statement and therefore holds between control planes
+// as well as within one.
+func (s *Server) CreatePipeline(
+	ctx context.Context, req *connect.Request[dholev1.CreatePipelineRequest],
+) (*connect.Response[dholev1.CreatePipelineResponse], error) {
+	p, err := s.principal(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	pipelineID := req.Msg.GetPipelineId()
+	if pipelineID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("api: a pipeline_id is required"))
+	}
+
+	// The friendly refusal. It is a read and therefore racy on its own, which
+	// is why the head seeding below is the one that actually decides.
+	existing, err := s.defs.Revisions(ctx, p.TenantID, pipelineID)
+	if err != nil {
+		return nil, storeError("list revisions", err)
+	}
+	if len(existing) > 0 {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf(
+			"api: pipeline %q already exists, with %d revision(s)", pipelineID, len(existing)))
+	}
+
+	// The definition is built here rather than taken as given: the id is
+	// pipeline_id and the tenant is the credential's, because there is no
+	// unscoped record in this system and a caller does not get to name the
+	// tenant it writes into.
+	definition, ok := proto.Clone(req.Msg.GetPipeline()).(*dholev1.Pipeline)
+	if !ok || definition == nil {
+		definition = &dholev1.Pipeline{}
+	}
+	definition.Id = pipelineID
+	definition.Tenant = &dholev1.Tenant{Id: p.TenantID}
+
+	rev, err := s.defs.Save(ctx, p.TenantID, definition, p.Subject)
+	if err != nil {
+		return nil, storeError("save revision", err)
+	}
+	// Seeding the head is what makes the create atomic: two callers racing on
+	// the same id both save a revision — they are content-addressed and
+	// harmless — and exactly one of them seeds the head. The other is told the
+	// id is taken.
+	if err := s.heads.CompareAndSetHead(ctx, p.TenantID, pipelineID, "", rev.ID); err != nil {
+		if errors.Is(err, defstore.ErrHeadMoved) {
+			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf(
+				"api: pipeline %q already exists", pipelineID))
+		}
+		return nil, storeError("record head", err)
+	}
+
+	return connect.NewResponse(&dholev1.CreatePipelineResponse{
+		Pipeline: definition,
+		Revision: wireRevision(rev),
+	}), nil
 }
 
 // GetPipeline reads one revision of one pipeline.
@@ -301,7 +396,21 @@ func (s *Server) ApplyOperation(
 	if err != nil {
 		return nil, storeError("save revision", err)
 	}
-	if err := s.heads.SetHead(ctx, p.TenantID, pipelineID, rev.ID); err != nil {
+	// The head moves from exactly the revision this edit was read against.
+	// Another plane that moved it in the meantime wins, and this caller is
+	// told to rebase rather than having its edit silently overwrite one it
+	// never saw — the check within a process the read above makes, held
+	// between processes too.
+	from := ""
+	if known {
+		from = base
+	}
+	if err := s.heads.CompareAndSetHead(ctx, p.TenantID, pipelineID, from, rev.ID); err != nil {
+		if errors.Is(err, defstore.ErrHeadMoved) {
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf(
+				"api: revision conflict: pipeline %q moved away from %s while this edit was being applied",
+				pipelineID, base))
+		}
 		return nil, storeError("record head", err)
 	}
 
@@ -324,13 +433,7 @@ func (s *Server) ListRevisions(
 	if req.Msg.GetPipelineId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("api: a pipeline_id is required"))
 	}
-	lister, ok := s.defs.(RevisionLister)
-	if !ok {
-		return nil, connect.NewError(connect.CodeUnimplemented, errors.New(
-			"api: the configured definition store cannot list revisions; "+
-				"defstore.Store has no history query yet, and an empty list here would be a lie"))
-	}
-	revs, err := lister.Revisions(ctx, p.TenantID, req.Msg.GetPipelineId())
+	revs, err := s.defs.Revisions(ctx, p.TenantID, req.Msg.GetPipelineId())
 	if err != nil {
 		return nil, storeError("list revisions", err)
 	}
@@ -515,7 +618,7 @@ func (s *Server) runnableRevision(
 
 // terminal says whether an event ends the run, and so the stream.
 func terminal(t runstore.EventType) bool {
-	return t == runstore.RunCompleted || t == scheduler.RunFailed
+	return t == runstore.RunCompleted || t == scheduler.RunFailed || t == runstore.RunCancelled
 }
 
 // wireRevision is the store's revision as the wire carries it.

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/executor"
@@ -123,6 +124,10 @@ func (s *sandbox) recordUsage(state *os.ProcessState) {
 
 // Exec runs a command to completion. A non-zero exit is reported as an exit
 // code, not an error: only failing to run the command at all is an error.
+// cancelDrainDelay bounds how long Wait may spend draining a cancelled
+// command's output after the group has been killed.
+const cancelDrainDelay = 5 * time.Second
+
 func (s *sandbox) Exec(ctx context.Context, cmd executor.Cmd) (int32, error) {
 	if len(cmd.Args) == 0 {
 		return 0, errors.New("process executor: exec with no command")
@@ -152,6 +157,19 @@ func (s *sandbox) Exec(ctx context.Context, cmd executor.Cmd) (int32, error) {
 	// signal reaches the whole tree. Without this, terminating a shell leaves
 	// its children running on the host forever.
 	setProcessGroup(c)
+	// Cancellation kills the GROUP, not the leader.
+	//
+	// exec.CommandContext's default kills c.Process alone, and the process
+	// group above exists precisely because a step is a tree. Killing only its
+	// root leaves the rest running on the host AND holding the pipes this
+	// command's stdout and stderr are read through — so Wait blocks draining
+	// a pipe nobody will ever close, and a cancelled step never returns.
+	c.Cancel = func() error { return signalProcessGroup(c.Process.Pid, executor.SIGKILL) }
+	// And a bound on the drain even so. A grandchild that escaped the group,
+	// or one that ignores SIGKILL while stuck in the kernel, must not turn a
+	// cancellation into a hang: after this, Wait returns and the pipes are
+	// closed under it.
+	c.WaitDelay = cancelDrainDelay
 
 	if err := c.Start(); err != nil {
 		return 0, fmt.Errorf("process executor: start %q: %w", cmd.Args[0], err)

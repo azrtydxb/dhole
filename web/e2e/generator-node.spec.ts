@@ -30,7 +30,12 @@ import {
   type Page,
 } from "@playwright/test";
 
-import { apiUrl, bootstrapToken, seedPipeline, type Seeded } from "./plane.js";
+import {
+  apiUrl,
+  bootstrapToken,
+  createPipeline,
+  type Seeded,
+} from "./plane.js";
 
 /** The plugin ref a generator node carries — internal/dynamic.PluginRef. */
 const generatorPluginRef = "builtin:generator";
@@ -78,7 +83,7 @@ async function apply(
  * for the fragment to hang off, and the builtin plugin ref that says what kind
  * of node it is. */
 async function seedGenerator(request: APIRequestContext): Promise<Seeded> {
-  const seed = await seedPipeline(request);
+  const seed = await createPipeline(request);
   let revision = await apply(request, seed.pipelineId, seed.revisionId, {
     addStep: {
       step: {

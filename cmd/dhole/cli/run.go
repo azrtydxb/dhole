@@ -94,26 +94,49 @@ func runLogsCmd(o *options) *cobra.Command {
 	return cmd
 }
 
-// runCancelCmd exists, and refuses.
+// runCancelCmd stops a run.
 //
-// There is no CancelRun in the contract. The command is here rather than
-// absent because a person will type it, and "no such command" tells them
-// nothing, while this tells them exactly where the gap is. What it must never
-// do is reach around the API to stop a run some other way: that would make the
-// CLI able to do something the GUI and an agent cannot, which is the same bug
-// as the reverse and is what ADR 0013 forbids.
-func runCancelCmd(_ *options) *cobra.Command {
-	return &cobra.Command{
+// It used to exist and refuse: the contract declared no CancelRun, and the
+// command was here rather than absent because a person will type it and "no
+// such command" tells them nothing. What it must never have done — and did
+// not — was reach around the API to stop a run some other way, which would
+// have made the CLI able to do something the GUI and an agent cannot.
+func runCancelCmd(o *options) *cobra.Command {
+	var reason string
+	cmd := &cobra.Command{
 		Use:   "cancel <run-id>",
-		Short: "cancel a run (the contract has no CancelRun yet)",
-		Args:  exactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return fmt.Errorf(
-				"cannot cancel %s: dhole.v1.PipelineService declares no CancelRun, and the CLI "+
-					"will not reach around the API to stop a run (ADR 0013). Add the RPC first",
-				args[0])
+		Short: "stop a run, and the engines running its steps",
+		Long: "Both halves happen: the run is closed in its own log, and every\n" +
+			"engine holding one of its steps is told to stop. Closing the log\n" +
+			"alone would leave the sandboxes running and the capacity taken.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.checkOutput(cmd); err != nil {
+				return err
+			}
+			ctx, cancel := o.context(cmd)
+			defer cancel()
+
+			res, err := o.client().CancelRun(ctx, connect.NewRequest(&dholev1.CancelRunRequest{
+				RunId: args[0], Reason: reason,
+			}))
+			if err != nil {
+				return o.fail("cancel run", err)
+			}
+			return o.emit(res.Msg, func(w io.Writer) {
+				_, _ = fmt.Fprintf(w, "run %s cancelled\n", res.Msg.GetRunId())
+				for _, step := range res.Msg.GetSteps() {
+					_, _ = fmt.Fprintf(w, "  told %s to stop step %s attempt %d\n",
+						step.GetEngineId(), step.GetStepId(), step.GetAttempt())
+				}
+				if len(res.Msg.GetSteps()) == 0 {
+					_, _ = fmt.Fprintln(w, "  nothing was in flight")
+				}
+			})
 		},
 	}
+	cmd.Flags().StringVar(&reason, "reason", "", "recorded on the run's log")
+	return cmd
 }
 
 // followRun streams the run's log to stdout. stepsOnly drops the run-level

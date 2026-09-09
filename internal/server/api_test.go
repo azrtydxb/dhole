@@ -23,6 +23,15 @@ import (
 // fight over a socket instead of testing anything.
 func startWithAPI(ctx context.Context, t *testing.T) *server.Server {
 	t.Helper()
+	srv, _ := startWithAPIIn(ctx, t)
+	return srv
+}
+
+// startWithAPIIn is startWithAPI, also returning the state directory — which
+// is where the plane's database is, and therefore the only way for a test to
+// publish into the catalog the plane serves. There is no PublishPlugin RPC.
+func startWithAPIIn(ctx context.Context, t *testing.T) (*server.Server, string) {
+	t.Helper()
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
 		Mode:     server.ModeEmbedded,
@@ -37,7 +46,7 @@ func startWithAPI(ctx context.Context, t *testing.T) *server.Server {
 		defer cancel()
 		require.NoError(t, srv.Stop(stopCtx))
 	})
-	return srv
+	return srv, dir
 }
 
 // apiClient is a REAL client of the served contract: the generated Connect
@@ -48,8 +57,13 @@ func apiClient(t *testing.T, srv *server.Server) dholev1connect.PipelineServiceC
 	t.Helper()
 	addr := srv.APIAddr()
 	require.NotEmpty(t, addr, "the plane is not listening for API calls")
-	return dholev1connect.NewPipelineServiceClient(&http.Client{Timeout: 30 * time.Second}, "http://"+addr)
+	return dholev1connect.NewPipelineServiceClient(httpClient(), "http://"+addr)
 }
+
+// httpClient is the transport every real client in this package uses. The
+// timeout is generous because WatchRun follows a run for as long as the run
+// lasts.
+func httpClient() *http.Client { return &http.Client{Timeout: 120 * time.Second} }
 
 // brokenPipeline has one edge pointing at a step that does not exist, so a
 // Validate that really reached internal/api and really ran the type checker
@@ -182,4 +196,161 @@ func TestNoAPIMeansNoListener(t *testing.T) {
 func TestServeDefaultsToTheAddressTheCLIDialsFor(t *testing.T) {
 	require.True(t, strings.HasSuffix(server.DefaultAPIAddr, ":7777"),
 		"the default API address moved away from the port the CLI dials")
+}
+
+// createPipeline creates one pipeline through the contract and returns the
+// revision its creation produced.
+func createPipeline(
+	ctx context.Context, t *testing.T,
+	client dholev1connect.PipelineServiceClient, token, id string,
+) string {
+	t.Helper()
+	req := connect.NewRequest(&dholev1.CreatePipelineRequest{PipelineId: id})
+	req.Header().Set("Authorization", "Bearer "+token)
+	res, err := client.CreatePipeline(ctx, req)
+	require.NoError(t, err)
+	return res.Msg.GetRevision().GetId()
+}
+
+// apply is one ApplyOperation with a credential on it.
+func apply(
+	ctx context.Context, client dholev1connect.PipelineServiceClient, token string,
+	msg *dholev1.ApplyOperationRequest,
+) (*dholev1.ApplyOperationResponse, error) {
+	req := connect.NewRequest(msg)
+	req.Header().Set("Authorization", "Bearer "+token)
+	res, err := client.ApplyOperation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return res.Msg, nil
+}
+
+// TestAPipelineCanBeCreatedThroughTheContract is the hole ADR 0013 could not
+// have: ApplyOperation requires a base_revision, and until CreatePipeline
+// existed nothing in the contract wrote a first one. Both the canvas suite and
+// the CLI suite reached around the API to seed a pipeline directly into the
+// definition store, which means the GUI could not create a pipeline either.
+//
+// It goes through the shipping binary, because a handler built in-process
+// proves the handler works and says nothing about whether it is mounted.
+func TestAPipelineCanBeCreatedThroughTheContract(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	srv := startWithAPI(ctx, t)
+	client := apiClient(t, srv)
+	token := srv.BootstrapToken()
+
+	created := createPipeline(ctx, t, client, token, "made-through-the-contract")
+	require.NotEmpty(t, created)
+
+	// The revision it produced is a real base an edit can be made against,
+	// which is the whole point: creation and editing are one story.
+	applied, err := apply(ctx, client, token, &dholev1.ApplyOperationRequest{
+		PipelineId:   "made-through-the-contract",
+		BaseRevision: created,
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_AddStep{
+			AddStep: &dholev1.AddStep{Step: &dholev1.Step{Id: "a", Name: "fetch"}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, applied.GetPipeline().GetSteps(), 1)
+
+	// The definition carries the tenant from the credential, never from the
+	// request: there is no unscoped record in this system.
+	require.Equal(t, "default", applied.GetPipeline().GetTenant().GetId())
+}
+
+// TestCreatePipelineRefusesAnIdThatIsAlreadyTaken: a create that quietly
+// returned the existing pipeline would let one caller's canvas open on
+// another's work, and a create that overwrote it would destroy that work.
+func TestCreatePipelineRefusesAnIdThatIsAlreadyTaken(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	srv := startWithAPI(ctx, t)
+	client := apiClient(t, srv)
+	token := srv.BootstrapToken()
+
+	createPipeline(ctx, t, client, token, "taken")
+
+	req := connect.NewRequest(&dholev1.CreatePipelineRequest{PipelineId: "taken"})
+	req.Header().Set("Authorization", "Bearer "+token)
+	_, err := client.CreatePipeline(ctx, req)
+	require.Error(t, err, "a duplicate pipeline id was accepted")
+	require.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+}
+
+// TestTheEditingHeadSurvivesAPlaneRestart is the head being STORED rather than
+// remembered, asserted through the shipping binary.
+//
+// While the head lived in a map inside api.Server, a restarted plane knew
+// nothing of the edits the previous one had accepted: an unqualified read fell
+// back to the approved revision, and a pipeline that had never been approved
+// answered "no active revision" for a definition that plainly existed. Worse,
+// and invisible here, two planes over the same store each accepted an edit
+// against the same base. The head is now a row, so a second plane over the
+// same database — which is what a restart is — resolves the same head.
+func TestTheEditingHeadSurvivesAPlaneRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	cfg := server.Config{
+		Mode:     server.ModeEmbedded,
+		StoreDSN: filepath.Join(dir, "dhole.db"),
+		BlobRoot: filepath.Join(dir, "state"),
+		APIAddr:  "127.0.0.1:0",
+	}
+
+	first, err := server.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, first.Start(ctx))
+
+	created := createPipeline(ctx, t, apiClient(t, first), first.BootstrapToken(), "head-survives")
+
+	applied, err := apply(ctx, apiClient(t, first), first.BootstrapToken(), &dholev1.ApplyOperationRequest{
+		PipelineId:   "head-survives",
+		BaseRevision: created,
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_AddStep{
+			AddStep: &dholev1.AddStep{Step: &dholev1.Step{Id: "a", Name: "fetch"}},
+		}},
+	})
+	require.NoError(t, err)
+	head := applied.GetRevision().GetId()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	require.NoError(t, first.Stop(stopCtx))
+	stopCancel()
+
+	// The same state directory, a new process's worth of memory.
+	second, err := server.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, second.Start(ctx))
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		require.NoError(t, second.Stop(c))
+	})
+
+	client := apiClient(t, second)
+	req := connect.NewRequest(&dholev1.GetPipelineRequest{PipelineId: "head-survives"})
+	req.Header().Set("Authorization", "Bearer "+second.BootstrapToken())
+	got, err := client.GetPipeline(ctx, req)
+	require.NoError(t, err, "the restarted plane lost the editing head")
+	require.Equal(t, head, got.Msg.GetRevision().GetId(),
+		"the restarted plane resolved a different head from the one it had accepted")
+
+	// And the edit that was already applied cannot be applied again against
+	// the revision it superseded.
+	_, err = apply(ctx, client, second.BootstrapToken(), &dholev1.ApplyOperationRequest{
+		PipelineId:   "head-survives",
+		BaseRevision: created,
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_Rename{
+			Rename: &dholev1.Rename{StepId: "a", Name: "other"},
+		}},
+	})
+	require.Error(t, err, "the restarted plane accepted an edit against a superseded base")
+	require.Equal(t, connect.CodeAborted, connect.CodeOf(err))
 }

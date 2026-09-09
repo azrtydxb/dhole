@@ -34,6 +34,7 @@ type surface struct {
 // its own tests while the API grew a corner it could not reach.
 func surfaces() map[string]surface {
 	return map[string]surface{
+		"CreatePipeline":  {group: groupPipeline, build: pipelineCreateCmd},
 		"GetPipeline":     {group: groupPipeline, build: pipelineGetCmd},
 		"ApplyOperation":  {group: groupPipeline, build: pipelineApplyCmd},
 		"Validate":        {group: groupPipeline, build: pipelineValidateCmd},
@@ -42,6 +43,10 @@ func surfaces() map[string]surface {
 		"ApproveRevision": {group: groupPipeline, build: pipelineApproveCmd},
 		"StartRun":        {group: groupRun, build: runStartCmd},
 		"WatchRun":        {group: groupRun, build: runWatchCmd},
+		"CancelRun":       {group: groupRun, build: runCancelCmd},
+		"GetPlugin":       {group: groupPlugin, build: pluginGetCmd},
+		"ListEngines":     {group: groupEngine, build: engineListCmd},
+		"DrainEngine":     {group: groupEngine, build: engineDrainCmd},
 	}
 }
 
@@ -49,12 +54,16 @@ func surfaces() map[string]surface {
 const (
 	groupPipeline = "pipeline"
 	groupRun      = "run"
+	groupEngine   = "engine"
+	groupPlugin   = "plugin"
 )
 
 // groupHelp is what each group says for itself.
 var groupHelp = map[string]string{
 	groupPipeline: "read, edit, validate, plan and approve pipeline definitions",
-	groupRun:      "start, follow and inspect runs",
+	groupRun:      "start, follow, cancel and inspect runs",
+	groupEngine:   "the live engine fleet",
+	groupPlugin:   "published plugins and what they declare",
 }
 
 // contractCommands builds one command per RPC of every dhole.v1 service, from

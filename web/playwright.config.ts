@@ -62,7 +62,7 @@ export default defineConfig({
     {
       // Waits for the plane's port before it opens the database, so the
       // migrations are applied by the plane that owns it rather than raced
-      // with it.
+      // with it. It reads and writes the identity tables only.
       command:
         `go run ./e2e/seed --addr ${new URL(seedUrl).host}` +
         ` --store-dsn ${stateDir}/dhole.db --wait-for ${new URL(apiUrl).host}`,

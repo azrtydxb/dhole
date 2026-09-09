@@ -14,6 +14,10 @@ import {
   messageDesc,
   serviceDesc,
 } from "@bufbuild/protobuf/codegenv2";
+import type { Capability, Digest, EffectClass } from "./common_pb.js";
+import { file_dhole_v1_common } from "./common_pb.js";
+import type { InFlight } from "./engine_pb.js";
+import { file_dhole_v1_engine } from "./engine_pb.js";
 import type { Edge, Pipeline, Step } from "./pipeline_pb.js";
 import { file_dhole_v1_pipeline } from "./pipeline_pb.js";
 import type { Message } from "@bufbuild/protobuf";
@@ -24,8 +28,8 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_api: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkijQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSABCBgoEa2luZCJsCgZDaGFuZ2USIgoEa2luZBgBIAEoDjIULmRob2xlLnYxLkNoYW5nZUtpbmQSDwoHc3RlcF9pZBgCIAEoCRIcCgRlZGdlGAMgASgLMg4uZGhvbGUudjEuRWRnZRIPCgdzdW1tYXJ5GAQgASgJIikKBERpZmYSIQoHY2hhbmdlcxgBIAMoCzIQLmRob2xlLnYxLkNoYW5nZSLXAQoIUmV2aXNpb24SCgoCaWQYASABKAkSEwoLcGlwZWxpbmVfaWQYAiABKAkSFAoMY29udGVudF9oYXNoGAMgASgJEg0KBXN0YXRlGAQgASgJEjIKCGxvY2tmaWxlGAUgAygLMiAuZGhvbGUudjEuUmV2aXNpb24uTG9ja2ZpbGVFbnRyeRIOCgZhdXRob3IYBiABKAkSEAoIYXBwcm92ZXIYByABKAkaLwoNTG9ja2ZpbGVFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIj4KEkdldFBpcGVsaW5lUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSJhChNHZXRQaXBlbGluZVJlc3BvbnNlEiQKCHBpcGVsaW5lGAEgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUSJAoIcmV2aXNpb24YAiABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiJrChVBcHBseU9wZXJhdGlvblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSFQoNYmFzZV9yZXZpc2lvbhgCIAEoCRImCglvcGVyYXRpb24YAyABKAsyEy5kaG9sZS52MS5PcGVyYXRpb24iqAEKFkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbhIcCgRkaWZmGAIgASgLMg4uZGhvbGUudjEuRGlmZhIkCgdpbnZlcnNlGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uEiQKCHBpcGVsaW5lGAQgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiYQoPVmFsaWRhdGVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhMKC3JldmlzaW9uX2lkGAIgASgJEiQKCHBpcGVsaW5lGAMgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiTgoKRGlhZ25vc3RpYxIQCghzZXZlcml0eRgBIAEoCRIPCgdtZXNzYWdlGAIgASgJEg8KB3N0ZXBfaWQYAyABKAkSDAoEcG9ydBgEIAEoCSI9ChBWYWxpZGF0ZVJlc3BvbnNlEikKC2RpYWdub3N0aWNzGAEgAygLMhQuZGhvbGUudjEuRGlhZ25vc3RpYyI3CgtQbGFuUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSJkCgtQbGFubmVkU3RlcBIPCgdzdGVwX2lkGAEgASgJEhEKCWNhY2hlX2hpdBgCIAEoCBITCgtlbmdpbmVfa2luZBgDIAEoCRIcChRub25fY2FjaGVhYmxlX3JlYXNvbhgEIAEoCSI0CgxQbGFuUmVzcG9uc2USJAoFc3RlcHMYASADKAsyFS5kaG9sZS52MS5QbGFubmVkU3RlcCIrChRMaXN0UmV2aXNpb25zUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCSI+ChVMaXN0UmV2aXNpb25zUmVzcG9uc2USJQoJcmV2aXNpb25zGAEgAygLMhIuZGhvbGUudjEuUmV2aXNpb24iLQoWQXBwcm92ZVJldmlzaW9uUmVxdWVzdBITCgtyZXZpc2lvbl9pZBgBIAEoCSI/ChdBcHByb3ZlUmV2aXNpb25SZXNwb25zZRIkCghyZXZpc2lvbhgBIAEoCzISLmRob2xlLnYxLlJldmlzaW9uIjsKD1N0YXJ0UnVuUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSI3ChBTdGFydFJ1blJlc3BvbnNlEg4KBnJ1bl9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSIhCg9XYXRjaFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJIosBChBXYXRjaFJ1blJlc3BvbnNlEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEAoIc2VxdWVuY2UYBCABKAQSDAoEdHlwZRgFIAEoCRIPCgdwYXlsb2FkGAYgASgMEhQKDGF0X3VuaXhfbmFubxgHIAEoAypyCgpDaGFuZ2VLaW5kEhsKF0NIQU5HRV9LSU5EX1VOU1BFQ0lGSUVEEAASFQoRQ0hBTkdFX0tJTkRfQURERUQQARIXChNDSEFOR0VfS0lORF9SRU1PVkVEEAISFwoTQ0hBTkdFX0tJTkRfQ0hBTkdFRBADMt4ECg9QaXBlbGluZVNlcnZpY2USSgoLR2V0UGlwZWxpbmUSHC5kaG9sZS52MS5HZXRQaXBlbGluZVJlcXVlc3QaHS5kaG9sZS52MS5HZXRQaXBlbGluZVJlc3BvbnNlElMKDkFwcGx5T3BlcmF0aW9uEh8uZGhvbGUudjEuQXBwbHlPcGVyYXRpb25SZXF1ZXN0GiAuZGhvbGUudjEuQXBwbHlPcGVyYXRpb25SZXNwb25zZRJBCghWYWxpZGF0ZRIZLmRob2xlLnYxLlZhbGlkYXRlUmVxdWVzdBoaLmRob2xlLnYxLlZhbGlkYXRlUmVzcG9uc2USNQoEUGxhbhIVLmRob2xlLnYxLlBsYW5SZXF1ZXN0GhYuZGhvbGUudjEuUGxhblJlc3BvbnNlElAKDUxpc3RSZXZpc2lvbnMSHi5kaG9sZS52MS5MaXN0UmV2aXNpb25zUmVxdWVzdBofLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXNwb25zZRJWCg9BcHByb3ZlUmV2aXNpb24SIC5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXF1ZXN0GiEuZGhvbGUudjEuQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USQQoIU3RhcnRSdW4SGS5kaG9sZS52MS5TdGFydFJ1blJlcXVlc3QaGi5kaG9sZS52MS5TdGFydFJ1blJlc3BvbnNlEkMKCFdhdGNoUnVuEhkuZGhvbGUudjEuV2F0Y2hSdW5SZXF1ZXN0GhouZGhvbGUudjEuV2F0Y2hSdW5SZXNwb25zZTABQokBCgxjb20uZGhvbGUudjFCCEFwaVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
-    [file_dhole_v1_pipeline],
+    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIkwKDVNldFN0ZXBDb25maWcSDwoHc3RlcF9pZBgBIAEoCRILCgNrZXkYAiABKAkSDQoFdmFsdWUYAyABKAkSDgoGcmVtb3ZlGAQgASgIIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkiwQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSAASMgoPc2V0X3N0ZXBfY29uZmlnGAcgASgLMhcuZGhvbGUudjEuU2V0U3RlcENvbmZpZ0gAQgYKBGtpbmQibAoGQ2hhbmdlEiIKBGtpbmQYASABKA4yFC5kaG9sZS52MS5DaGFuZ2VLaW5kEg8KB3N0ZXBfaWQYAiABKAkSHAoEZWRnZRgDIAEoCzIOLmRob2xlLnYxLkVkZ2USDwoHc3VtbWFyeRgEIAEoCSIpCgREaWZmEiEKB2NoYW5nZXMYASADKAsyEC5kaG9sZS52MS5DaGFuZ2Ui1wEKCFJldmlzaW9uEgoKAmlkGAEgASgJEhMKC3BpcGVsaW5lX2lkGAIgASgJEhQKDGNvbnRlbnRfaGFzaBgDIAEoCRINCgVzdGF0ZRgEIAEoCRIyCghsb2NrZmlsZRgFIAMoCzIgLmRob2xlLnYxLlJldmlzaW9uLkxvY2tmaWxlRW50cnkSDgoGYXV0aG9yGAYgASgJEhAKCGFwcHJvdmVyGAcgASgJGi8KDUxvY2tmaWxlRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASI+ChJHZXRQaXBlbGluZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiYQoTR2V0UGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iUgoVQ3JlYXRlUGlwZWxpbmVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEiQKCHBpcGVsaW5lGAIgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiZAoWQ3JlYXRlUGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iawoVQXBwbHlPcGVyYXRpb25SZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhUKDWJhc2VfcmV2aXNpb24YAiABKAkSJgoJb3BlcmF0aW9uGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uIqgBChZBcHBseU9wZXJhdGlvblJlc3BvbnNlEiQKCHJldmlzaW9uGAEgASgLMhIuZGhvbGUudjEuUmV2aXNpb24SHAoEZGlmZhgCIAEoCzIOLmRob2xlLnYxLkRpZmYSJAoHaW52ZXJzZRgDIAEoCzITLmRob2xlLnYxLk9wZXJhdGlvbhIkCghwaXBlbGluZRgEIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lImEKD1ZhbGlkYXRlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCRIkCghwaXBlbGluZRgDIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lIk4KCkRpYWdub3N0aWMSEAoIc2V2ZXJpdHkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIPCgdzdGVwX2lkGAMgASgJEgwKBHBvcnQYBCABKAkiPQoQVmFsaWRhdGVSZXNwb25zZRIpCgtkaWFnbm9zdGljcxgBIAMoCzIULmRob2xlLnYxLkRpYWdub3N0aWMiNwoLUGxhblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiZAoLUGxhbm5lZFN0ZXASDwoHc3RlcF9pZBgBIAEoCRIRCgljYWNoZV9oaXQYAiABKAgSEwoLZW5naW5lX2tpbmQYAyABKAkSHAoUbm9uX2NhY2hlYWJsZV9yZWFzb24YBCABKAkiNAoMUGxhblJlc3BvbnNlEiQKBXN0ZXBzGAEgAygLMhUuZGhvbGUudjEuUGxhbm5lZFN0ZXAiKwoUTGlzdFJldmlzaW9uc1JlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkiPgoVTGlzdFJldmlzaW9uc1Jlc3BvbnNlEiUKCXJldmlzaW9ucxgBIAMoCzISLmRob2xlLnYxLlJldmlzaW9uIi0KFkFwcHJvdmVSZXZpc2lvblJlcXVlc3QSEwoLcmV2aXNpb25faWQYASABKAkiPwoXQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiI7Cg9TdGFydFJ1blJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiNwoQU3RhcnRSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiIQoPV2F0Y2hSdW5SZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCSKLAQoQV2F0Y2hSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhAKCHNlcXVlbmNlGAQgASgEEgwKBHR5cGUYBSABKAkSDwoHcGF5bG9hZBgGIAEoDBIUCgxhdF91bml4X25hbm8YByABKAMiJgoQR2V0UGx1Z2luUmVxdWVzdBISCgpwbHVnaW5fcmVmGAEgASgJIpMCCgZQbHVnaW4SCwoDcmVmGAEgASgJEhEKCW5hbWVzcGFjZRgCIAEoCRIMCgRuYW1lGAMgASgJEg8KB3ZlcnNpb24YBCABKAkSIAoGZGlnZXN0GAUgASgLMhAuZGhvbGUudjEuRGlnZXN0EgwKBGtpbmQYBiABKAkSKwoMZWZmZWN0X2NsYXNzGAcgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSKgoMY2FwYWJpbGl0aWVzGAggAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIUCgxpbnB1dF9zY2hlbWEYCSABKAkSFQoNb3V0cHV0X3NjaGVtYRgKIAEoCRIUCgxlbmdpbmVfdHlwZXMYCyADKAkiNQoRR2V0UGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIjIKEENhbmNlbFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSJECg1DYW5jZWxsZWRTdGVwEg8KB3N0ZXBfaWQYASABKAkSDwoHYXR0ZW1wdBgCIAEoDRIRCgllbmdpbmVfaWQYAyABKAkiSwoRQ2FuY2VsUnVuUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEiYKBXN0ZXBzGAIgAygLMhcuZGhvbGUudjEuQ2FuY2VsbGVkU3RlcCK6AQoGRW5naW5lEgoKAmlkGAEgASgJEg0KBXN0YXRlGAIgASgJEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIZChFwcm90b2NvbF92ZXJzaW9ucxgHIAMoDRIlCglpbl9mbGlnaHQYCCADKAsyEi5kaG9sZS52MS5JbkZsaWdodCIUChJMaXN0RW5naW5lc1JlcXVlc3QiOAoTTGlzdEVuZ2luZXNSZXNwb25zZRIhCgdlbmdpbmVzGAEgAygLMhAuZGhvbGUudjEuRW5naW5lIicKEkRyYWluRW5naW5lUmVxdWVzdBIRCgllbmdpbmVfaWQYASABKAkiNwoTRHJhaW5FbmdpbmVSZXNwb25zZRIgCgZlbmdpbmUYASABKAsyEC5kaG9sZS52MS5FbmdpbmUqcgoKQ2hhbmdlS2luZBIbChdDSEFOR0VfS0lORF9VTlNQRUNJRklFRBAAEhUKEUNIQU5HRV9LSU5EX0FEREVEEAESFwoTQ0hBTkdFX0tJTkRfUkVNT1ZFRBACEhcKE0NIQU5HRV9LSU5EX0NIQU5HRUQQAzKnAQoNRW5naW5lU2VydmljZRJKCgtMaXN0RW5naW5lcxIcLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVxdWVzdBodLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVzcG9uc2USSgoLRHJhaW5FbmdpbmUSHC5kaG9sZS52MS5EcmFpbkVuZ2luZVJlcXVlc3QaHS5kaG9sZS52MS5EcmFpbkVuZ2luZVJlc3BvbnNlMr8GCg9QaXBlbGluZVNlcnZpY2USUwoOQ3JlYXRlUGlwZWxpbmUSHy5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlcXVlc3QaIC5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlc3BvbnNlEkoKC0dldFBpcGVsaW5lEhwuZGhvbGUudjEuR2V0UGlwZWxpbmVSZXF1ZXN0Gh0uZGhvbGUudjEuR2V0UGlwZWxpbmVSZXNwb25zZRJTCg5BcHBseU9wZXJhdGlvbhIfLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVxdWVzdBogLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USQQoIVmFsaWRhdGUSGS5kaG9sZS52MS5WYWxpZGF0ZVJlcXVlc3QaGi5kaG9sZS52MS5WYWxpZGF0ZVJlc3BvbnNlEjUKBFBsYW4SFS5kaG9sZS52MS5QbGFuUmVxdWVzdBoWLmRob2xlLnYxLlBsYW5SZXNwb25zZRJECglHZXRQbHVnaW4SGi5kaG9sZS52MS5HZXRQbHVnaW5SZXF1ZXN0GhsuZGhvbGUudjEuR2V0UGx1Z2luUmVzcG9uc2USUAoNTGlzdFJldmlzaW9ucxIeLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXF1ZXN0Gh8uZGhvbGUudjEuTGlzdFJldmlzaW9uc1Jlc3BvbnNlElYKD0FwcHJvdmVSZXZpc2lvbhIgLmRob2xlLnYxLkFwcHJvdmVSZXZpc2lvblJlcXVlc3QaIS5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXNwb25zZRJBCghTdGFydFJ1bhIZLmRob2xlLnYxLlN0YXJ0UnVuUmVxdWVzdBoaLmRob2xlLnYxLlN0YXJ0UnVuUmVzcG9uc2USQwoIV2F0Y2hSdW4SGS5kaG9sZS52MS5XYXRjaFJ1blJlcXVlc3QaGi5kaG9sZS52MS5XYXRjaFJ1blJlc3BvbnNlMAESRAoJQ2FuY2VsUnVuEhouZGhvbGUudjEuQ2FuY2VsUnVuUmVxdWVzdBobLmRob2xlLnYxLkNhbmNlbFJ1blJlc3BvbnNlQokBCgxjb20uZGhvbGUudjFCCEFwaVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    [file_dhole_v1_common, file_dhole_v1_engine, file_dhole_v1_pipeline],
   );
 
 /**
@@ -155,6 +159,54 @@ export const SetPropertySchema: GenMessage<SetProperty> =
   messageDesc(file_dhole_v1_api, 4);
 
 /**
+ * SetStepConfig sets or removes one value a step passes to its plugin.
+ *
+ * One key at a time, and not a whole map, so that every edit has an exact
+ * inverse expressible as another SetStepConfig (ADR 0020): setting a key that
+ * was absent inverts to removing it, setting one that had a value inverts to
+ * restoring that value, and removing one inverts to setting it back.
+ *
+ * Removing a key that is not there is REFUSED, for the same reason removing an
+ * edge that does not exist is: the "inverse" of a removal that removed nothing
+ * would set a value the step never had, so undoing it would add something.
+ *
+ * @generated from message dhole.v1.SetStepConfig
+ */
+export type SetStepConfig = Message<"dhole.v1.SetStepConfig"> & {
+  /**
+   * @generated from field: string step_id = 1;
+   */
+  stepId: string;
+
+  /**
+   * The field name, as the plugin's input schema declares it.
+   *
+   * @generated from field: string key = 2;
+   */
+  key: string;
+
+  /**
+   * @generated from field: string value = 3;
+   */
+  value: string;
+
+  /**
+   * Remove the key instead of setting it. value is ignored.
+   *
+   * @generated from field: bool remove = 4;
+   */
+  remove: boolean;
+};
+
+/**
+ * Describes the message dhole.v1.SetStepConfig.
+ * Use `create(SetStepConfigSchema)` to create a new message.
+ */
+export const SetStepConfigSchema: GenMessage<SetStepConfig> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 5);
+
+/**
  * Rename changes a step's display name.
  *
  * Any name is accepted, the empty one included: a name is a label and the id
@@ -181,7 +233,7 @@ export type Rename = Message<"dhole.v1.Rename"> & {
  */
 export const RenameSchema: GenMessage<Rename> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 5);
+  messageDesc(file_dhole_v1_api, 6);
 
 /**
  * Operation is one edit. The GUI emits one per interaction; the CLI and an
@@ -238,6 +290,13 @@ export type Operation = Message<"dhole.v1.Operation"> & {
         value: RemoveStep;
         case: "removeStep";
       }
+    | {
+        /**
+         * @generated from field: dhole.v1.SetStepConfig set_step_config = 7;
+         */
+        value: SetStepConfig;
+        case: "setStepConfig";
+      }
     | { case: undefined; value?: undefined };
 };
 
@@ -247,7 +306,7 @@ export type Operation = Message<"dhole.v1.Operation"> & {
  */
 export const OperationSchema: GenMessage<Operation> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 6);
+  messageDesc(file_dhole_v1_api, 7);
 
 /**
  * Change is one element the operation touched. Exactly one of step_id and
@@ -286,7 +345,7 @@ export type Change = Message<"dhole.v1.Change"> & {
  */
 export const ChangeSchema: GenMessage<Change> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 7);
+  messageDesc(file_dhole_v1_api, 8);
 
 /**
  * Diff is what an operation changed.
@@ -306,7 +365,7 @@ export type Diff = Message<"dhole.v1.Diff"> & {
  */
 export const DiffSchema: GenMessage<Diff> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 8);
+  messageDesc(file_dhole_v1_api, 9);
 
 /**
  * Revision is one immutable definition of a pipeline, as the wire sees it.
@@ -360,7 +419,7 @@ export type Revision = Message<"dhole.v1.Revision"> & {
  */
 export const RevisionSchema: GenMessage<Revision> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 9);
+  messageDesc(file_dhole_v1_api, 10);
 
 /**
  * GetPipelineRequest asks for one revision of one pipeline. An empty
@@ -386,7 +445,7 @@ export type GetPipelineRequest = Message<"dhole.v1.GetPipelineRequest"> & {
  */
 export const GetPipelineRequestSchema: GenMessage<GetPipelineRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 10);
+  messageDesc(file_dhole_v1_api, 11);
 
 /**
  * GetPipelineResponse carries the definition and the revision it came from.
@@ -411,7 +470,73 @@ export type GetPipelineResponse = Message<"dhole.v1.GetPipelineResponse"> & {
  */
 export const GetPipelineResponseSchema: GenMessage<GetPipelineResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 11);
+  messageDesc(file_dhole_v1_api, 12);
+
+/**
+ * CreatePipelineRequest creates a pipeline and writes its first revision.
+ *
+ * It is a separate RPC rather than an ApplyOperation with an empty base,
+ * because an empty base_revision is a REFUSAL and has to stay one: an edit
+ * that cannot conflict silently overwrites whatever someone else wrote. A
+ * client that lost track of its base would then be indistinguishable from one
+ * asking to start something new, which is exactly the case where the
+ * difference matters most. Creation says so in its own name.
+ *
+ * @generated from message dhole.v1.CreatePipelineRequest
+ */
+export type CreatePipelineRequest =
+  Message<"dhole.v1.CreatePipelineRequest"> & {
+    /**
+     * @generated from field: string pipeline_id = 1;
+     */
+    pipelineId: string;
+
+    /**
+     * The definition to start from. Optional: the empty pipeline is the normal
+     * case, because everything after it is an Operation like any other. Its own
+     * id and tenant are ignored — the id is pipeline_id and the tenant comes
+     * from the credential, never from the request.
+     *
+     * @generated from field: dhole.v1.Pipeline pipeline = 2;
+     */
+    pipeline?: Pipeline | undefined;
+  };
+
+/**
+ * Describes the message dhole.v1.CreatePipelineRequest.
+ * Use `create(CreatePipelineRequestSchema)` to create a new message.
+ */
+export const CreatePipelineRequestSchema: GenMessage<CreatePipelineRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 13);
+
+/**
+ * CreatePipelineResponse is the new pipeline and the revision an edit may be
+ * based on. It is the same shape GetPipeline answers with, so a client can
+ * create and then edit without a second read.
+ *
+ * @generated from message dhole.v1.CreatePipelineResponse
+ */
+export type CreatePipelineResponse =
+  Message<"dhole.v1.CreatePipelineResponse"> & {
+    /**
+     * @generated from field: dhole.v1.Pipeline pipeline = 1;
+     */
+    pipeline?: Pipeline | undefined;
+
+    /**
+     * @generated from field: dhole.v1.Revision revision = 2;
+     */
+    revision?: Revision | undefined;
+  };
+
+/**
+ * Describes the message dhole.v1.CreatePipelineResponse.
+ * Use `create(CreatePipelineResponseSchema)` to create a new message.
+ */
+export const CreatePipelineResponseSchema: GenMessage<CreatePipelineResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 14);
 
 /**
  * ApplyOperationRequest applies one edit to the revision the caller last saw.
@@ -444,7 +569,7 @@ export type ApplyOperationRequest =
  */
 export const ApplyOperationRequestSchema: GenMessage<ApplyOperationRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 12);
+  messageDesc(file_dhole_v1_api, 15);
 
 /**
  * ApplyOperationResponse is the new revision, what changed, and the operation
@@ -485,7 +610,7 @@ export type ApplyOperationResponse =
  */
 export const ApplyOperationResponseSchema: GenMessage<ApplyOperationResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 13);
+  messageDesc(file_dhole_v1_api, 16);
 
 /**
  * ValidateRequest asks for structured diagnostics on a revision, or on a
@@ -516,7 +641,7 @@ export type ValidateRequest = Message<"dhole.v1.ValidateRequest"> & {
  */
 export const ValidateRequestSchema: GenMessage<ValidateRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 14);
+  messageDesc(file_dhole_v1_api, 17);
 
 /**
  * Diagnostic is one problem, positioned at the step and port it is about.
@@ -553,7 +678,7 @@ export type Diagnostic = Message<"dhole.v1.Diagnostic"> & {
  */
 export const DiagnosticSchema: GenMessage<Diagnostic> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 15);
+  messageDesc(file_dhole_v1_api, 18);
 
 /**
  * ValidateResponse is every diagnostic found. An empty list means the
@@ -574,7 +699,7 @@ export type ValidateResponse = Message<"dhole.v1.ValidateResponse"> & {
  */
 export const ValidateResponseSchema: GenMessage<ValidateResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 16);
+  messageDesc(file_dhole_v1_api, 19);
 
 /**
  * PlanRequest asks what a run of this revision would do, without doing any of
@@ -600,7 +725,7 @@ export type PlanRequest = Message<"dhole.v1.PlanRequest"> & {
  */
 export const PlanRequestSchema: GenMessage<PlanRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 17);
+  messageDesc(file_dhole_v1_api, 20);
 
 /**
  * PlannedStep is one step of a dry run: whether it would be served from cache,
@@ -637,7 +762,7 @@ export type PlannedStep = Message<"dhole.v1.PlannedStep"> & {
  */
 export const PlannedStepSchema: GenMessage<PlannedStep> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 18);
+  messageDesc(file_dhole_v1_api, 21);
 
 /**
  * PlanResponse is the dry run.
@@ -657,7 +782,7 @@ export type PlanResponse = Message<"dhole.v1.PlanResponse"> & {
  */
 export const PlanResponseSchema: GenMessage<PlanResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 19);
+  messageDesc(file_dhole_v1_api, 22);
 
 /**
  * ListRevisionsRequest asks for a pipeline's revision history.
@@ -677,7 +802,7 @@ export type ListRevisionsRequest = Message<"dhole.v1.ListRevisionsRequest"> & {
  */
 export const ListRevisionsRequestSchema: GenMessage<ListRevisionsRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 20);
+  messageDesc(file_dhole_v1_api, 23);
 
 /**
  * ListRevisionsResponse is that history, oldest first.
@@ -698,7 +823,7 @@ export type ListRevisionsResponse =
  */
 export const ListRevisionsResponseSchema: GenMessage<ListRevisionsResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 21);
+  messageDesc(file_dhole_v1_api, 24);
 
 /**
  * ApproveRevisionRequest promotes a revision to active. The approver is the
@@ -720,7 +845,7 @@ export type ApproveRevisionRequest =
  */
 export const ApproveRevisionRequestSchema: GenMessage<ApproveRevisionRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 22);
+  messageDesc(file_dhole_v1_api, 25);
 
 /**
  * ApproveRevisionResponse is the revision as it now stands.
@@ -741,7 +866,7 @@ export type ApproveRevisionResponse =
  */
 export const ApproveRevisionResponseSchema: GenMessage<ApproveRevisionResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 23);
+  messageDesc(file_dhole_v1_api, 26);
 
 /**
  * StartRunRequest starts a run. An empty revision_id means the pipeline's
@@ -767,7 +892,7 @@ export type StartRunRequest = Message<"dhole.v1.StartRunRequest"> & {
  */
 export const StartRunRequestSchema: GenMessage<StartRunRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 24);
+  messageDesc(file_dhole_v1_api, 27);
 
 /**
  * StartRunResponse names the new run and the revision it pinned.
@@ -792,7 +917,7 @@ export type StartRunResponse = Message<"dhole.v1.StartRunResponse"> & {
  */
 export const StartRunResponseSchema: GenMessage<StartRunResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 25);
+  messageDesc(file_dhole_v1_api, 28);
 
 /**
  * WatchRunRequest follows one run.
@@ -812,7 +937,7 @@ export type WatchRunRequest = Message<"dhole.v1.WatchRunRequest"> & {
  */
 export const WatchRunRequestSchema: GenMessage<WatchRunRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 26);
+  messageDesc(file_dhole_v1_api, 29);
 
 /**
  * WatchRunResponse is one entry of the run's event log — the run's only position
@@ -866,7 +991,367 @@ export type WatchRunResponse = Message<"dhole.v1.WatchRunResponse"> & {
  */
 export const WatchRunResponseSchema: GenMessage<WatchRunResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 27);
+  messageDesc(file_dhole_v1_api, 30);
+
+/**
+ * GetPluginRequest asks the catalog what one published plugin declares.
+ *
+ * @generated from message dhole.v1.GetPluginRequest
+ */
+export type GetPluginRequest = Message<"dhole.v1.GetPluginRequest"> & {
+  /**
+   * "namespace/name@version". A version is mandatory: dispatch resolves to an
+   * exact version and digest, so a floating reference has no meaning here.
+   *
+   * @generated from field: string plugin_ref = 1;
+   */
+  pluginRef: string;
+};
+
+/**
+ * Describes the message dhole.v1.GetPluginRequest.
+ * Use `create(GetPluginRequestSchema)` to create a new message.
+ */
+export const GetPluginRequestSchema: GenMessage<GetPluginRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 31);
+
+/**
+ * Plugin is a published type's declaration, as internal/catalog holds it.
+ *
+ * It reaches clients because a properties panel, an agent's tool discovery and
+ * an editor's autocomplete are all the same question — what does this plugin
+ * take? — and the answer has one source (ADR 0012). Before this RPC the
+ * browser could not ask it at all, and rendered whatever schema the DEFINITION
+ * happened to carry inline, which is a copy of the declaration free to be
+ * stale.
+ *
+ * @generated from message dhole.v1.Plugin
+ */
+export type Plugin = Message<"dhole.v1.Plugin"> & {
+  /**
+   * The canonical reference, "namespace/name@version".
+   *
+   * @generated from field: string ref = 1;
+   */
+  ref: string;
+
+  /**
+   * @generated from field: string namespace = 2;
+   */
+  namespace: string;
+
+  /**
+   * @generated from field: string name = 3;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string version = 4;
+   */
+  version: string;
+
+  /**
+   * @generated from field: dhole.v1.Digest digest = 5;
+   */
+  digest?: Digest | undefined;
+
+  /**
+   * step, trigger or engine.
+   *
+   * @generated from field: string kind = 6;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: dhole.v1.EffectClass effect_class = 7;
+   */
+  effectClass: EffectClass;
+
+  /**
+   * @generated from field: repeated dhole.v1.Capability capabilities = 8;
+   */
+  capabilities: Capability[];
+
+  /**
+   * JSON Schema source, as the plugin author published it. Empty when the
+   * plugin declares none.
+   *
+   * @generated from field: string input_schema = 9;
+   */
+  inputSchema: string;
+
+  /**
+   * @generated from field: string output_schema = 10;
+   */
+  outputSchema: string;
+
+  /**
+   * Executor kinds that can run it, e.g. "process", "container".
+   *
+   * @generated from field: repeated string engine_types = 11;
+   */
+  engineTypes: string[];
+};
+
+/**
+ * Describes the message dhole.v1.Plugin.
+ * Use `create(PluginSchema)` to create a new message.
+ */
+export const PluginSchema: GenMessage<Plugin> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 32);
+
+/**
+ * GetPluginResponse is that declaration.
+ *
+ * @generated from message dhole.v1.GetPluginResponse
+ */
+export type GetPluginResponse = Message<"dhole.v1.GetPluginResponse"> & {
+  /**
+   * @generated from field: dhole.v1.Plugin plugin = 1;
+   */
+  plugin?: Plugin | undefined;
+};
+
+/**
+ * Describes the message dhole.v1.GetPluginResponse.
+ * Use `create(GetPluginResponseSchema)` to create a new message.
+ */
+export const GetPluginResponseSchema: GenMessage<GetPluginResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 33);
+
+/**
+ * CancelRunRequest stops a run.
+ *
+ * Cancellation is a control-plane act with an engine-side half: the run is
+ * closed in its own log, and every engine holding one of its steps is told to
+ * stop, because a sandbox nobody asked to stop keeps burning the capacity the
+ * cancellation was meant to free.
+ *
+ * @generated from message dhole.v1.CancelRunRequest
+ */
+export type CancelRunRequest = Message<"dhole.v1.CancelRunRequest"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * Recorded on the run's log. Free text, and it is what an operator reads
+   * months later when asking why a run stopped.
+   *
+   * @generated from field: string reason = 2;
+   */
+  reason: string;
+};
+
+/**
+ * Describes the message dhole.v1.CancelRunRequest.
+ * Use `create(CancelRunRequestSchema)` to create a new message.
+ */
+export const CancelRunRequestSchema: GenMessage<CancelRunRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 34);
+
+/**
+ * CancelledStep is one in-flight attempt cancellation reached.
+ *
+ * @generated from message dhole.v1.CancelledStep
+ */
+export type CancelledStep = Message<"dhole.v1.CancelledStep"> & {
+  /**
+   * @generated from field: string step_id = 1;
+   */
+  stepId: string;
+
+  /**
+   * @generated from field: uint32 attempt = 2;
+   */
+  attempt: number;
+
+  /**
+   * The engine that was holding it and was told to stop.
+   *
+   * @generated from field: string engine_id = 3;
+   */
+  engineId: string;
+};
+
+/**
+ * Describes the message dhole.v1.CancelledStep.
+ * Use `create(CancelledStepSchema)` to create a new message.
+ */
+export const CancelledStepSchema: GenMessage<CancelledStep> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 35);
+
+/**
+ * CancelRunResponse is what the cancellation reached. An empty steps list
+ * means the run held nothing in flight, which is the normal case for a run
+ * that was waiting rather than running.
+ *
+ * @generated from message dhole.v1.CancelRunResponse
+ */
+export type CancelRunResponse = Message<"dhole.v1.CancelRunResponse"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * @generated from field: repeated dhole.v1.CancelledStep steps = 2;
+   */
+  steps: CancelledStep[];
+};
+
+/**
+ * Describes the message dhole.v1.CancelRunResponse.
+ * Use `create(CancelRunResponseSchema)` to create a new message.
+ */
+export const CancelRunResponseSchema: GenMessage<CancelRunResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 36);
+
+/**
+ * Engine is one live engine instance as the control plane currently sees it.
+ * It is the registry's view (internal/registry.Instance) on the wire.
+ *
+ * @generated from message dhole.v1.Engine
+ */
+export type Engine = Message<"dhole.v1.Engine"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * registering, ready, draining. A gone instance is not in the fleet.
+   *
+   * @generated from field: string state = 2;
+   */
+  state: string;
+
+  /**
+   * @generated from field: repeated dhole.v1.Capability capabilities = 3;
+   */
+  capabilities: Capability[];
+
+  /**
+   * @generated from field: string os = 4;
+   */
+  os: string;
+
+  /**
+   * @generated from field: string arch = 5;
+   */
+  arch: string;
+
+  /**
+   * @generated from field: uint32 slots = 6;
+   */
+  slots: number;
+
+  /**
+   * @generated from field: repeated uint32 protocol_versions = 7;
+   */
+  protocolVersions: number[];
+
+  /**
+   * What the engine's last heartbeat said it was holding.
+   *
+   * @generated from field: repeated dhole.v1.InFlight in_flight = 8;
+   */
+  inFlight: InFlight[];
+};
+
+/**
+ * Describes the message dhole.v1.Engine.
+ * Use `create(EngineSchema)` to create a new message.
+ */
+export const EngineSchema: GenMessage<Engine> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 37);
+
+/**
+ * ListEnginesRequest asks for the caller's tenant's fleet. It carries no
+ * tenant: the tenant comes from the credential, as it does everywhere here.
+ *
+ * @generated from message dhole.v1.ListEnginesRequest
+ */
+export type ListEnginesRequest = Message<"dhole.v1.ListEnginesRequest"> & {};
+
+/**
+ * Describes the message dhole.v1.ListEnginesRequest.
+ * Use `create(ListEnginesRequestSchema)` to create a new message.
+ */
+export const ListEnginesRequestSchema: GenMessage<ListEnginesRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 38);
+
+/**
+ * ListEnginesResponse is the live fleet, by engine id.
+ *
+ * @generated from message dhole.v1.ListEnginesResponse
+ */
+export type ListEnginesResponse = Message<"dhole.v1.ListEnginesResponse"> & {
+  /**
+   * @generated from field: repeated dhole.v1.Engine engines = 1;
+   */
+  engines: Engine[];
+};
+
+/**
+ * Describes the message dhole.v1.ListEnginesResponse.
+ * Use `create(ListEnginesResponseSchema)` to create a new message.
+ */
+export const ListEnginesResponseSchema: GenMessage<ListEnginesResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 39);
+
+/**
+ * DrainEngineRequest stops new work reaching one engine.
+ *
+ * @generated from message dhole.v1.DrainEngineRequest
+ */
+export type DrainEngineRequest = Message<"dhole.v1.DrainEngineRequest"> & {
+  /**
+   * @generated from field: string engine_id = 1;
+   */
+  engineId: string;
+};
+
+/**
+ * Describes the message dhole.v1.DrainEngineRequest.
+ * Use `create(DrainEngineRequestSchema)` to create a new message.
+ */
+export const DrainEngineRequestSchema: GenMessage<DrainEngineRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 40);
+
+/**
+ * DrainEngineResponse is the instance as it now stands, or unset when the
+ * registry no longer holds it — an operator draining from a list a few seconds
+ * old is the normal case, and the engine being gone already is the outcome
+ * they wanted.
+ *
+ * @generated from message dhole.v1.DrainEngineResponse
+ */
+export type DrainEngineResponse = Message<"dhole.v1.DrainEngineResponse"> & {
+  /**
+   * @generated from field: dhole.v1.Engine engine = 1;
+   */
+  engine?: Engine | undefined;
+};
+
+/**
+ * Describes the message dhole.v1.DrainEngineResponse.
+ * Use `create(DrainEngineResponseSchema)` to create a new message.
+ */
+export const DrainEngineResponseSchema: GenMessage<DrainEngineResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 41);
 
 /**
  * ChangeKind is what happened to one element of the pipeline.
@@ -903,6 +1388,44 @@ export const ChangeKindSchema: GenEnum<ChangeKind> =
   enumDesc(file_dhole_v1_api, 0);
 
 /**
+ * EngineService is the fleet, on the same contract as everything else.
+ *
+ * It exists because the CLI shipped `engine list` and `engine drain` as
+ * commands that refused: they could each have read internal/registry directly,
+ * and that is exactly what must not happen. A CLI able to list engines while
+ * the GUI and an agent cannot is the same failure as a GUI-only endpoint seen
+ * from the other side (ADR 0013).
+ *
+ * Every RPC is authenticated and tenant-scoped, like PipelineService's.
+ *
+ * @generated from service dhole.v1.EngineService
+ */
+export const EngineService: GenService<{
+  /**
+   * ListEngines is the live fleet for the caller's tenant.
+   *
+   * @generated from rpc dhole.v1.EngineService.ListEngines
+   */
+  listEngines: {
+    methodKind: "unary";
+    input: typeof ListEnginesRequestSchema;
+    output: typeof ListEnginesResponseSchema;
+  };
+  /**
+   * DrainEngine stops new work reaching an engine while it finishes what it
+   * holds. It kills nothing: a drain that interrupted running work would make
+   * every rolling upgrade an outage.
+   *
+   * @generated from rpc dhole.v1.EngineService.DrainEngine
+   */
+  drainEngine: {
+    methodKind: "unary";
+    input: typeof DrainEngineRequestSchema;
+    output: typeof DrainEngineResponseSchema;
+  };
+}> = /*@__PURE__*/ serviceDesc(file_dhole_v1_api, 0);
+
+/**
  * PipelineService is the one API contract. The GUI has no privileged
  * endpoints: it is one client of this service among the CLI and agents
  * (ADR 0013). Every RPC is authenticated and tenant-scoped — the tenant comes
@@ -911,6 +1434,19 @@ export const ChangeKindSchema: GenEnum<ChangeKind> =
  * @generated from service dhole.v1.PipelineService
  */
 export const PipelineService: GenService<{
+  /**
+   * CreatePipeline creates a pipeline and its first revision. Nothing else
+   * in this service can write a first revision, so without it the GUI could
+   * not create a pipeline at all and every client had to reach around the
+   * API to seed one.
+   *
+   * @generated from rpc dhole.v1.PipelineService.CreatePipeline
+   */
+  createPipeline: {
+    methodKind: "unary";
+    input: typeof CreatePipelineRequestSchema;
+    output: typeof CreatePipelineResponseSchema;
+  };
   /**
    * GetPipeline reads one revision of one pipeline.
    *
@@ -953,6 +1489,18 @@ export const PipelineService: GenService<{
     output: typeof PlanResponseSchema;
   };
   /**
+   * GetPlugin returns what one published plugin declares, which is what a
+   * properties panel renders, an agent discovers tools from and an editor
+   * completes against.
+   *
+   * @generated from rpc dhole.v1.PipelineService.GetPlugin
+   */
+  getPlugin: {
+    methodKind: "unary";
+    input: typeof GetPluginRequestSchema;
+    output: typeof GetPluginResponseSchema;
+  };
+  /**
    * ListRevisions returns a pipeline's revision history.
    *
    * @generated from rpc dhole.v1.PipelineService.ListRevisions
@@ -992,4 +1540,15 @@ export const PipelineService: GenService<{
     input: typeof WatchRunRequestSchema;
     output: typeof WatchRunResponseSchema;
   };
-}> = /*@__PURE__*/ serviceDesc(file_dhole_v1_api, 0);
+  /**
+   * CancelRun stops a run and tells every engine holding one of its steps to
+   * stop too.
+   *
+   * @generated from rpc dhole.v1.PipelineService.CancelRun
+   */
+  cancelRun: {
+    methodKind: "unary";
+    input: typeof CancelRunRequestSchema;
+    output: typeof CancelRunResponseSchema;
+  };
+}> = /*@__PURE__*/ serviceDesc(file_dhole_v1_api, 1);

@@ -101,6 +101,25 @@ type Instance struct {
 	// ProtocolVersions is every wire version it speaks, so the control plane
 	// can pick the highest both sides support.
 	ProtocolVersions []uint32
+	// InFlight is what its last heartbeat said it was holding.
+	//
+	// It is kept, and not merely counted, because it is the ONLY answer to
+	// "which engine has this step?". A dispatch goes to a subject and which
+	// member of the fleet picked it up is never decided by the plane, so a
+	// cancellation with nothing but a count could not find the engine to
+	// send it to.
+	InFlight []Job
+}
+
+// Job is one attempt an engine says it is running, as its heartbeat reported
+// it. The fence travels with it: a control message carrying a stale fence is
+// one the engine must ignore, so cancelling means quoting back the fence of
+// the attempt actually in flight.
+type Job struct {
+	RunID      string
+	StepID     string
+	Attempt    uint32
+	FenceToken string
 }
 
 // Registry is the live fleet, as the control plane sees it.

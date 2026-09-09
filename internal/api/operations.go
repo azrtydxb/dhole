@@ -61,6 +61,8 @@ func Apply(
 		change, inverse, err = applyRemoveEdge(next, kind.RemoveEdge)
 	case *dholev1.Operation_SetProperty:
 		change, inverse, err = applySetProperty(next, kind.SetProperty)
+	case *dholev1.Operation_SetStepConfig:
+		change, inverse, err = applySetStepConfig(next, kind.SetStepConfig)
 	case *dholev1.Operation_Rename:
 		change, inverse, err = applyRename(next, kind.Rename)
 	default:
@@ -236,6 +238,69 @@ func applySetProperty(p *dholev1.Pipeline, op *dholev1.SetProperty) (*dholev1.Ch
 				StepId: op.GetStepId(), Property: op.GetProperty(), Value: old,
 			},
 		}}, nil
+}
+
+// applySetStepConfig sets or removes one value a step passes to its plugin.
+//
+// The inverse is exact in all three directions: setting a key that was absent
+// inverts to removing it, overwriting one inverts to restoring the value it
+// held, and removing one inverts to setting that value back. Removing a key
+// that is not there is refused, exactly as removing an edge that does not
+// exist is — the "inverse" of a removal that removed nothing would SET a value
+// the step never had, so undoing it would add something.
+func applySetStepConfig(p *dholev1.Pipeline, op *dholev1.SetStepConfig) (*dholev1.Change, *dholev1.Operation, error) {
+	step := findStep(p, op.GetStepId())
+	if step == nil {
+		return nil, nil, fmt.Errorf("set_step_config: no step %q in this pipeline", op.GetStepId())
+	}
+	key := op.GetKey()
+	if key == "" {
+		return nil, nil, errors.New("set_step_config: a key is required")
+	}
+	old, had := step.GetConfig()[key]
+
+	inverse := &dholev1.SetStepConfig{StepId: op.GetStepId(), Key: key}
+	if had {
+		inverse.Value = old
+	} else {
+		inverse.Remove = true
+	}
+
+	var (
+		kind    dholev1.ChangeKind
+		summary string
+	)
+	switch {
+	case op.GetRemove():
+		if !had {
+			return nil, nil, fmt.Errorf(
+				"set_step_config: step %q has no config value %q to remove", op.GetStepId(), key)
+		}
+		delete(step.Config, key)
+		// An empty map and no map at all are the same definition to a reader
+		// and DIFFERENT bytes to the content hash, so the last key removed
+		// leaves the field unset — which is what the step that never had one
+		// encodes as, and therefore what the inverse must land back on.
+		if len(step.GetConfig()) == 0 {
+			step.Config = nil
+		}
+		kind = dholev1.ChangeKind_CHANGE_KIND_REMOVED
+		summary = fmt.Sprintf("removed config %q of step %q, which was %q", key, op.GetStepId(), old)
+	default:
+		if step.GetConfig() == nil {
+			step.Config = map[string]string{}
+		}
+		step.Config[key] = op.GetValue()
+		kind = dholev1.ChangeKind_CHANGE_KIND_CHANGED
+		if !had {
+			kind = dholev1.ChangeKind_CHANGE_KIND_ADDED
+		}
+		summary = fmt.Sprintf("set config %q of step %q from %q to %q",
+			key, op.GetStepId(), old, op.GetValue())
+	}
+
+	return &dholev1.Change{Kind: kind, StepId: op.GetStepId(), Summary: summary},
+		&dholev1.Operation{Kind: &dholev1.Operation_SetStepConfig{SetStepConfig: inverse}}, nil
 }
 
 // applyRename changes a step's display name. Its inverse restores the old one,
