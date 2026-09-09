@@ -317,12 +317,12 @@ Interfaces: produces `tenant.FromContext(ctx) (string, error)`, `tenant.WithTena
 Files: `internal/identity/identity.go`, `internal/identity/local.go`, `internal/identity/token.go`, `internal/identity/local_test.go`, `internal/runstore/migrations/0004_identity.sql`
 Interfaces: produces `identity.Provider` with `Authenticate(ctx, credential string) (identity.Principal, error)`; `Principal{Subject, TenantID string; Scopes []string; Kind PrincipalUser|PrincipalService}`; `identity.NewLocal(store)`, `identity.IssueToken(ctx, p Principal, ttl time.Duration) (string, error)`.
 
-- [ ] Write `internal/identity/local_test.go` asserting `TestServiceTokenAuthenticatesWithScopes`: issue a token with scope `pipelines:write`, authenticate it, and require the returned `Principal` carries that scope and tenant. Run — expect FAIL with "undefined: identity.NewLocal".
-- [ ] Add `TestExpiredTokenIsRejected` asserting a token issued with a -1s TTL returns an error satisfying `errors.Is(err, identity.ErrExpired)`.
-- [ ] Add `TestPasswordsAreStoredAsArgon2idNotPlaintext` asserting the stored credential does not contain the password and begins with `$argon2id$`.
-- [ ] Write `0004_identity.sql` creating `principals(tenant_id, subject, kind, credential_hash)` and `tokens(tenant_id, subject, token_hash, scopes, expires_at)`; store only token hashes.
-- [ ] Implement `internal/identity/local.go` with `golang.org/x/crypto/argon2` and `internal/identity/token.go` issuing 32-byte random tokens.
-- [ ] Run `go test ./internal/identity` — expect PASS. Commit.
+- [x] Write `internal/identity/local_test.go` asserting `TestServiceTokenAuthenticatesWithScopes`: issue a token with scope `pipelines:write`, authenticate it, and require the returned `Principal` carries that scope and tenant. Run — expect FAIL with "undefined: identity.NewLocal".
+- [x] Add `TestExpiredTokenIsRejected` asserting a token issued with a -1s TTL returns an error satisfying `errors.Is(err, identity.ErrExpired)`.
+- [x] Add `TestPasswordsAreStoredAsArgon2idNotPlaintext` asserting the stored credential does not contain the password and begins with `$argon2id$`.
+- [x] Write `0004_identity.sql` creating `principals(tenant_id, subject, kind, credential_hash)` and `tokens(tenant_id, subject, token_hash, scopes, expires_at)`; store only token hashes.
+- [x] Implement `internal/identity/local.go` with `golang.org/x/crypto/argon2` and `internal/identity/token.go` issuing 32-byte random tokens.
+- [x] Run `go test ./internal/identity` — expect PASS. Commit.
 
 ## Task 24: OIDC federation
 
