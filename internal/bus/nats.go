@@ -203,6 +203,28 @@ func (n *NATS) SubscribeEphemeral(ctx context.Context, subject string, fn func([
 	return func() { once.Do(func() { _ = sub.Unsubscribe() }) }, nil
 }
 
+// SubscribeEphemeralOnSubjects is SubscribeEphemeral over a subject pattern
+// covering more than one message type, handing the handler the subject each
+// payload arrived on.
+//
+// It exists because ORDER between related subjects is sometimes load-bearing
+// and a separate subscription per subject does not preserve it: the client
+// delivers each subscription on its own goroutine, so an engine's registration
+// and the heartbeat it sends immediately afterwards can be handled the wrong
+// way round. One subscription is one delivery goroutine, and the sender's
+// order survives.
+func (n *NATS) SubscribeEphemeralOnSubjects(ctx context.Context, pattern string, fn func(subject string, data []byte)) (func(), error) {
+	sub, err := n.conn.Subscribe(pattern, func(m *nats.Msg) { fn(m.Subject, m.Data) })
+	if err != nil {
+		return nil, fmt.Errorf("bus: subscribe %q: %w", pattern, err)
+	}
+	if err := n.confirmSubscribed(ctx, sub, pattern); err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() { once.Do(func() { _ = sub.Unsubscribe() }) }, nil
+}
+
 // SubscribePull binds the durable pull consumer named consumer on stream,
 // filtered to subject. Nothing is removed from the stream until a delivery is
 // acknowledged, so a subscriber that dies mid-message gives the work back.
