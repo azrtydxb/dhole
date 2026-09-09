@@ -324,12 +324,12 @@ ADR 0009 makes the content-addressed cache a v1 core primitive. Found while
 building Task 44, whose `cache_hit` metric label is always false for this
 reason.
 
-- [ ] Write the failing test first: run the two-step pipeline twice against one store and require the second run to skip the first step and reuse its outputs. It must fail on the tree as it stands.
-- [ ] Consult `cache.Lookup` in the scheduler before dispatching a step that `cache.Eligible` accepts, and emit a STEP_SUCCEEDED-equivalent carrying the recorded outputs instead of a dispatch.
-- [ ] Record a successful eligible step's outputs with `cache.Record`, keyed by `cache.Key` over its resolved inputs, the environment identity and the lockfile.
-- [ ] A cached step must still produce the same run events a real one does, so the run view and the DAG cannot tell the difference — apart from the recorded cache hit.
-- [ ] Feed the real `cache_hit` into Task 44's `dhole_step_duration_seconds` label, replacing the constant false.
-- [ ] Never serve a hit for a step whose effect class is not PURE or whose lease scope is not step-scoped — `cache.Eligible` already decides this; call it, do not restate it.
+- [x] Write the failing test first: run the two-step pipeline twice against one store and require the second run to skip the first step and reuse its outputs. It must fail on the tree as it stands.
+- [x] Consult `cache.Lookup` in the scheduler before dispatching a step that `cache.Eligible` accepts, and emit a STEP_SUCCEEDED-equivalent carrying the recorded outputs instead of a dispatch.
+- [x] Record a successful eligible step's outputs with `cache.Record`, keyed by `cache.Key` over its resolved inputs, the environment identity and the lockfile.
+- [x] A cached step must still produce the same run events a real one does, so the run view and the DAG cannot tell the difference — apart from the recorded cache hit.
+- [x] Feed the real `cache_hit` into Task 44's `dhole_step_duration_seconds` label, replacing the constant false.
+- [x] Never serve a hit for a step whose effect class is not PURE or whose lease scope is not step-scoped — `cache.Eligible` already decides this; call it, do not restate it.
 
 ## Task 18c: Sequence allocation, left over from 18b
 
