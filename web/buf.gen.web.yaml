@@ -1,0 +1,29 @@
+# Code generation for the web client. Run it with `npm run gen`.
+#
+# ADR 0013: the typed TypeScript client the React app uses is GENERATED from
+# the same protobuf definition that generates the Go server and the CLI. There
+# is no hand-written client — src/api/client.test.ts fails the build if one
+# appears.
+#
+# The plugin is the one installed by `npm ci` from package.json, not a remote
+# one, so generation is reproducible offline and pinned by package-lock.json:
+# @bufbuild/protoc-gen-es is pinned to an exact version there.
+#
+# Only bufbuild/es is emitted. connect-es v2 dropped its own protoc plugin:
+# the service descriptors bufbuild/es emits are exactly what
+# `createClient(PipelineService, transport)` consumes, so a separate
+# connectrpc/es output would be dead weight (its last release, 1.7.0, is
+# deprecated and requires protobuf-es v1).
+#
+# `npm run gen` pipes the output through prettier: the repository gate (procoder,
+# which runs prettier over every .ts) formats what is committed, so generation
+# must produce that same text or every regeneration would show a diff.
+version: v2
+managed:
+  enabled: true
+plugins:
+  - local: ./node_modules/.bin/protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts
+      - import_extension=js
