@@ -42,7 +42,7 @@ func TestCapsHashMatchesTheDocumentedAlgorithm(t *testing.T) {
 		// 3. decimal number + "\n" each, 4. SHA-256, 5. first 16 hex chars
 		sum := sha256.New()
 		for _, n := range nums {
-			fmt.Fprintf(sum, "%d\n", n)
+			_, _ = fmt.Fprintf(sum, "%d\n", n)
 		}
 		return hex.EncodeToString(sum.Sum(nil))[:16]
 	}
