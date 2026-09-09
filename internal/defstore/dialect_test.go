@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -224,4 +225,63 @@ func definitionStoreContract(t *testing.T, store defstore.Store) {
 		_, err = store.Get(ctx, "", "p1", "rev_1")
 		require.ErrorIs(t, err, defstore.ErrTenantRequired)
 	})
+}
+
+// TestSQLiteStoresTheEditingHead and its Postgres twin hold the head table to
+// one contract on both dialects. The head is what makes base_revision a real
+// optimistic-concurrency check across control planes, and a compare-and-set
+// that compared on one dialect and overwrote on the other would lose edits on
+// exactly the deployment that runs more than one plane.
+func TestSQLiteStoresTheEditingHead(t *testing.T) {
+	// The migrated database rather than the single-file schema the other
+	// tests here open: the head lives in a later migration, and a test that
+	// applied only 0005 would be testing a schema no deployment runs.
+	db, err := runstore.OpenSQLite(filepath.Join(t.TempDir(), "heads.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	headsContract(t, defstore.NewHeads(db, runstore.DialectSQLite))
+}
+
+func TestPostgresStoresTheEditingHead(t *testing.T) {
+	headsContract(t, defstore.NewHeads(postgresDB(t), runstore.DialectPostgres))
+}
+
+func headsContract(t *testing.T, heads *defstore.SQLHeads) {
+	t.Helper()
+	ctx := context.Background()
+	scope := uniqueTenant(t)
+
+	_, known, err := heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.False(t, known, "a pipeline nobody has edited has no head, and that is not an error")
+
+	require.NoError(t, heads.CompareAndSetHead(ctx, scope, "p1", "", "rev_a"))
+	require.ErrorIs(t, heads.CompareAndSetHead(ctx, scope, "p1", "", "rev_b"),
+		defstore.ErrHeadMoved, "seeding a head twice is the race two planes run")
+
+	got, known, err := heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.True(t, known)
+	require.Equal(t, "rev_a", got)
+
+	require.ErrorIs(t, heads.CompareAndSetHead(ctx, scope, "p1", "rev_stale", "rev_b"),
+		defstore.ErrHeadMoved)
+	got, _, err = heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.Equal(t, "rev_a", got, "a refused move must not have written anything")
+
+	require.NoError(t, heads.CompareAndSetHead(ctx, scope, "p1", "rev_a", "rev_b"))
+	got, _, err = heads.Head(ctx, scope, "p1")
+	require.NoError(t, err)
+	require.Equal(t, "rev_b", got)
+
+	// Another tenant's pipeline of the same id is a different head.
+	other := uniqueTenant(t)
+	_, known, err = heads.Head(ctx, other, "p1")
+	require.NoError(t, err)
+	require.False(t, known)
+
+	_, _, err = heads.Head(ctx, "", "p1")
+	require.ErrorIs(t, err, defstore.ErrTenantRequired)
+	require.ErrorIs(t, heads.CompareAndSetHead(ctx, "", "p1", "", "rev_a"), defstore.ErrTenantRequired)
 }

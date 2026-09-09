@@ -46,22 +46,31 @@ type Advancer interface {
 // Heads records each pipeline's current editing head, which is what an edit's
 // base_revision is compared against.
 //
-// It is an interface, and its only implementation here keeps the heads in
-// memory, because the definition store has no notion of a head: revisions are
-// content-addressed and carry no parent, so "is this base the latest?" cannot
-// be answered from the rows as they stand. In one control-plane process this
-// is a real optimistic-concurrency check; across several it is not, and it
-// must be replaced by a stored head column before the control plane is run
-// horizontally. A head this store has not seen is accepted once, seeding it.
+// The move is a COMPARE-and-set rather than a write. Reading the head and
+// then writing the new one is two statements with a window between them, and
+// two control planes in that window both find the base current and both
+// accept — which is exactly the check base_revision exists to be. Naming the
+// head the writer read closes it: the plane that lost writes nothing and is
+// told so.
+//
+// A pipeline with no recorded head is seeded by a move from the empty string,
+// and that move loses to whoever seeded it first for the same reason.
 type Heads interface {
 	// Head returns the pipeline's head revision, and whether one is known.
 	Head(ctx context.Context, tenantID, pipelineID string) (string, bool, error)
-	// SetHead records a new head.
-	SetHead(ctx context.Context, tenantID, pipelineID, revisionID string) error
+	// CompareAndSetHead moves the head from `from` to `to`, and does nothing
+	// if the head is not `from`. An empty `from` means "no head yet".
+	// Returns defstore.ErrHeadMoved when the head was not `from`.
+	CompareAndSetHead(ctx context.Context, tenantID, pipelineID, from, to string) error
 }
 
-// MemoryHeads is the in-process Heads. Keys carry the tenant, so two tenants
-// editing pipelines of the same id never see each other's head.
+// MemoryHeads is the in-process Heads, and it is a TEST DOUBLE rather than a
+// deployment option: it is a real optimistic-concurrency check for one process
+// and no check whatever between two, which is the gap defstore.SQLHeads
+// closes. A control plane serving real traffic passes the stored one.
+//
+// Keys carry the tenant, so two tenants editing pipelines of the same id never
+// see each other's head.
 type MemoryHeads struct {
 	mu    sync.Mutex
 	heads map[string]string
@@ -80,11 +89,20 @@ func (m *MemoryHeads) Head(_ context.Context, tenantID, pipelineID string) (stri
 	return id, ok, nil
 }
 
-// SetHead records the head.
-func (m *MemoryHeads) SetHead(_ context.Context, tenantID, pipelineID, revisionID string) error {
+// CompareAndSetHead moves the head only when it is where the caller left it.
+func (m *MemoryHeads) CompareAndSetHead(_ context.Context, tenantID, pipelineID, from, to string) error {
+	if to == "" {
+		return errors.New("api: set head: a revision id is required")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.heads[tenantID+"/"+pipelineID] = revisionID
+	key := tenantID + "/" + pipelineID
+	current, known := m.heads[key]
+	if (known && current != from) || (!known && from != "") {
+		return fmt.Errorf("%w: pipeline %q is no longer at %s",
+			defstore.ErrHeadMoved, pipelineID, from)
+	}
+	m.heads[key] = to
 	return nil
 }
 
@@ -99,7 +117,9 @@ type Config struct {
 	// Advancer is handed each new run. Optional: without one, a run is
 	// recorded and waits for whatever else advances it.
 	Advancer Advancer
-	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads.
+	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads,
+	// which is a check within this process only: a deployment running more
+	// than one control plane MUST pass defstore.NewHeads.
 	Heads Heads
 	// Cache answers whether a step's work has been done before. Plan reads
 	// it and never writes it.
@@ -289,7 +309,21 @@ func (s *Server) ApplyOperation(
 	if err != nil {
 		return nil, storeError("save revision", err)
 	}
-	if err := s.heads.SetHead(ctx, p.TenantID, pipelineID, rev.ID); err != nil {
+	// The head moves from exactly the revision this edit was read against.
+	// Another plane that moved it in the meantime wins, and this caller is
+	// told to rebase rather than having its edit silently overwrite one it
+	// never saw — the check within a process the read above makes, held
+	// between processes too.
+	from := ""
+	if known {
+		from = base
+	}
+	if err := s.heads.CompareAndSetHead(ctx, p.TenantID, pipelineID, from, rev.ID); err != nil {
+		if errors.Is(err, defstore.ErrHeadMoved) {
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf(
+				"api: revision conflict: pipeline %q moved away from %s while this edit was being applied",
+				pipelineID, base))
+		}
 		return nil, storeError("record head", err)
 	}
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/azrtydxb/dhole/internal/api"
 	"github.com/azrtydxb/dhole/internal/catalog"
+	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/identity"
 )
 
@@ -103,13 +104,19 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 	cfg := api.Config{
 		Definitions: s.defs,
 		Auth:        local,
-		Runs:        s.infra.store,
-		Advancer:    s.sched,
-		Cache:       s.infra.cache,
-		Fleet:       s.fleet,
-		Catalog:     catalog.New(s.infra.db, s.infra.dialect),
-		OS:          runtime.GOOS,
-		Arch:        runtime.GOARCH,
+		// The STORED head, not the in-memory one: run partitioning makes
+		// several planes over one database the normal deployment, and a head
+		// each plane remembers privately is no concurrency check between them
+		// — both accept an edit against the same base and one of the two
+		// disappears.
+		Heads:    defstore.NewHeads(s.infra.db, s.infra.dialect),
+		Runs:     s.infra.store,
+		Advancer: s.sched,
+		Cache:    s.infra.cache,
+		Fleet:    s.fleet,
+		Catalog:  catalog.New(s.infra.db, s.infra.dialect),
+		OS:       runtime.GOOS,
+		Arch:     runtime.GOARCH,
 	}
 	// Assigned only when there is one. A nil executor.Executor stored in the
 	// interface field would be a non-nil interface holding nil, and Plan's
