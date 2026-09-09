@@ -468,6 +468,14 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
   talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
   the server, and delete `web/e2e/fixture/main.go`, which says in its own header that it exists only until
   this is fixed. Found building Task 46.
+- [ ] **No RPC creates a pipeline from scratch.** `ApplyOperation` requires an existing
+  `base_revision`, so a brand-new pipeline cannot be created through the contract at all — both Task 46 and
+  Task 48 had to seed one through a fixture-only HTTP route. That is a hole in ADR 0013 exactly where it
+  matters: the GUI cannot create a pipeline without a back door. Add `CreatePipeline`, or let
+  `ApplyOperation` accept an empty base for a new id. Found independently by Tasks 46 and 48.
+- [ ] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
+  there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
+  tenant, not only whatever a plane prints at startup. Found building Task 48.
 - [ ] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and
   `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
   ready steps are still dispatched inline, and no per-pipeline cap is enforced. Wire them — enqueue ready
@@ -754,11 +762,11 @@ Interfaces: produces `<PropertyPanel stepId />` rendering a form from the plugin
 Files: `web/src/run/RunView.tsx`, `web/src/run/LogStream.tsx`, `internal/api/stream.go`, `web/e2e/run-view.spec.ts`
 Interfaces: produces `GET /v1/runs/{id}/events` as SSE emitting run and step transitions; `GET /v1/runs/{id}/steps/{step}/logs` as SSE for live tail, falling back to the stored object once complete.
 
-- [ ] Write `web/e2e/run-view.spec.ts` asserting `TestRunViewShowsRealisedGraphCacheHitsAndLogs`: run the two-step pipeline, and require each node shows a duration, the second run shows both nodes marked cached, and log lines appear without a page reload. Run — expect FAIL with "locator not found: [data-testid=run-graph]".
-- [ ] Add a case asserting the view switches from the live log subject to the stored object when the run completes, and the full log is present after reload.
-- [ ] Add a case asserting a non-cacheable step displays the exact reason string from Task 16.
-- [ ] Add a case asserting a bounded loop renders as a container node that expands to its unrolled iterations in the run view.
-- [ ] Implement `internal/api/stream.go` with SSE (not WebSocket) plus `Last-Event-ID` resume, and the two React components.
+- [x] Write `web/e2e/run-view.spec.ts` asserting `TestRunViewShowsRealisedGraphCacheHitsAndLogs`: run the two-step pipeline, and require each node shows a duration, the second run shows both nodes marked cached, and log lines appear without a page reload. Run — expect FAIL with "locator not found: [data-testid=run-graph]".
+- [x] Add a case asserting the view switches from the live log subject to the stored object when the run completes, and the full log is present after reload.
+- [x] Add a case asserting a non-cacheable step displays the exact reason string from Task 16.
+- [x] Add a case asserting a bounded loop renders as a container node that expands to its unrolled iterations in the run view.
+- [x] Implement `internal/api/stream.go` with SSE (not WebSocket) plus `Last-Event-ID` resume, and the two React components.
 - [ ] Run `npx playwright test` — expect PASS. Commit.
 
 ## Task 49: LLM step on go-ai-sdk
