@@ -155,6 +155,18 @@ queue and unsent outbox rows are still owed.
 Named rather than glossed. Each of these is a real gap, and the plan carries the
 task that closes it.
 
+- **`dhole serve` runs no step types, no triggers and no timer poll.** It
+  imports none of `internal/steps/{llm,loop,approval,agent}`, none of
+  `internal/trigger/*`, and never runs the durable timer's poll. The three
+  acceptance pipelines pass — CI with a real cache hit, automation across a
+  deliberate restart, the agent profile with a bounded loop and an approval —
+  but the acceptance harness is what drives those subsystems, not the server.
+  Until that wiring lands, "three profiles over one core" is demonstrated by
+  the tests and not yet by the product.
+- **Arming a durable gate is not atomic with the scheduler's readiness
+  decision**, so a wait can be skipped: the gate event is written in its own
+  transaction and can land in the log after the dispatch it should have
+  blocked.
 - **The containerd/OCI executor is not built** (Task 36). There is no container
   runtime on the machine this was developed on, and a backend nobody can run is
   a backend nobody has tested. `internal/executor/containerd` holds only the

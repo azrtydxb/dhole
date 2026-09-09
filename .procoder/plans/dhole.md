@@ -347,6 +347,53 @@ for idempotence, so the loser is simply never written.
 - [x] `internal/wait`, `internal/steps/approval` and `internal/api` append with `Sequence: 0`.
 - [x] Add the test that two of them appending concurrently cannot lose an event — it must fail on the tree as it stands.
 
+## Task 52b: What the acceptance pipelines found
+
+All three acceptance pipelines run and pass — CI with a real cache hit
+(11.3s cold, 2.6ms warm, with no step of the second run reaching an engine at
+all), automation surviving a deliberate control-plane restart with one step on
+the host and one in a pod, and the agent profile with a schema-validated model
+answer, a loop capped at three and an approval gate. They pass, and the way
+they pass is the finding: the acceptance harness supplies wiring the server
+does not have.
+
+Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/wait/`, `internal/trigger/`, `proto/dhole/v1/api.proto`, `.github/workflows/`
+
+- [ ] **`dhole serve` runs no step types, no triggers and no timer poll.** It
+      imports none of `internal/steps/{llm,loop,approval,agent}`, none of
+      `internal/trigger/*`, and never runs `internal/wait`'s poll. The
+      acceptance harness IS the missing dispatcher — it drives all of them
+      against the same store and tenant. Until the server does this, the three
+      profiles are a claim the tests make and the product does not.
+- [ ] **Arming a durable gate is not atomic with the readiness decision.**
+      `STEP_AWAITING_TIMER` is written in its own transaction, so it can appear
+      earlier in the log than the `STEP_DISPATCHED` of the step it should have
+      gated — the sequence is allocated inside the transaction, the visibility
+      is not. The gate was ignored and the wait skipped entirely. Both gated
+      pipelines work around it by arming behind a five-second predecessor. A
+      step type that arms the timer inside the dispatch transaction closes it.
+- [ ] **There is no approval RPC**, so "an approval gate decided through the
+      API" cannot be met as written. The run is created, approved and started
+      through the real contract, and the gate is then decided by the principal
+      that contract authenticated — through the Go API, not the wire.
+- [ ] **A credential's identity and an approver's identity live in different
+      tables.** A token issued to a subject authenticates every API call and is
+      then refused by `approval.Decide` as "not a principal of tenant":
+      `IssueToken` writes `tokens`, `PrincipalCredential` reads `principals`.
+- [ ] **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
+      filter on engine type, so a capability is the only lever — the pipeline
+      asks for NETWORK to reach a pod. A step's placement on the process engine
+      is not expressible at all.
+- [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
+      template does), **cannot reference a file from the repository** (the
+      Dockerfile's text is embedded in the step, kept equal to the checked-in
+      file by a test), and **has no syntax for a loop's body**. A trigger's
+      bound inputs reach the sink and no run carries them.
+- [ ] **The LLM step halts the run it is given** when it gives up, so an
+      off-schema answer cannot be asserted within a run that must continue.
+- [ ] **No nightly CI job runs the acceptance pipelines** — `.github/` was
+      outside the task's scope.
+
 ## Task 19: Effect classes, retry and idempotency keys
 
 Files: `internal/effects/effects.go`, `internal/effects/retry.go`, `internal/effects/effects_test.go`
@@ -833,12 +880,12 @@ Interfaces: produces `taint.Mark(v *structpb.Value, source string) *structpb.Val
 Files: `acceptance/ci/pipeline.yaml`, `acceptance/automation/pipeline.yaml`, `acceptance/agent/pipeline.yaml`, `acceptance/acceptance_test.go`, `Makefile`
 Interfaces: produces `make acceptance-ci`, `make acceptance-automation`, `make acceptance-agent`.
 
-- [ ] Write `acceptance/acceptance_test.go` asserting `TestAcceptanceCICacheHit`: run `acceptance/ci/pipeline.yaml` twice against a real containerd engine and require the second run reports `cache_hit` for the build step and a wall time under 20% of the first. Run — expect FAIL with "no such file: acceptance/ci/pipeline.yaml".
-- [ ] Write `acceptance/ci/pipeline.yaml` building a small container image from a checked-in Dockerfile with declared inputs and outputs.
-- [ ] Add `TestAcceptanceAutomationTriggersAndWait` running `acceptance/automation/pipeline.yaml` from both a cron schedule and an HTTP call, holding a 5s durable wait across a deliberate control-plane restart, with one step on the process engine and one on Kubernetes.
-- [ ] Add `TestAcceptanceAgentLoopAndApproval` running `acceptance/agent/pipeline.yaml`: an LLM step producing schema-validated output, a bounded loop capped at 3, an approval gate decided through the API, and a token cost assertion greater than zero.
+- [x] Write `acceptance/acceptance_test.go` asserting `TestAcceptanceCICacheHit`: run `acceptance/ci/pipeline.yaml` twice against a real containerd engine and require the second run reports `cache_hit` for the build step and a wall time under 20% of the first. Run — expect FAIL with "no such file: acceptance/ci/pipeline.yaml".
+- [x] Write `acceptance/ci/pipeline.yaml` building a small container image from a checked-in Dockerfile with declared inputs and outputs.
+- [x] Add `TestAcceptanceAutomationTriggersAndWait` running `acceptance/automation/pipeline.yaml` from both a cron schedule and an HTTP call, holding a 5s durable wait across a deliberate control-plane restart, with one step on the process engine and one on Kubernetes.
+- [x] Add `TestAcceptanceAgentLoopAndApproval` running `acceptance/agent/pipeline.yaml`: an LLM step producing schema-validated output, a bounded loop capped at 3, an approval gate decided through the API, and a token cost assertion greater than zero.
 - [ ] Add the three `make acceptance-*` targets and run them in CI nightly.
-- [ ] Run `make acceptance-ci acceptance-automation acceptance-agent` — expect PASS. Commit.
+- [x] Run `make acceptance-ci acceptance-automation acceptance-agent` — expect PASS. Commit.
 
 ## Task 53: VM executor with snapshot restore
 
