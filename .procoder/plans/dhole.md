@@ -405,12 +405,20 @@ Interfaces: produces `mirror.Git` with `Push(ctx, tenantID string, rev defstore.
 Files: `proto/dhole/v1/api.proto`, `internal/api/server.go`, `internal/api/operations.go`, `internal/api/operations_test.go`, `internal/api/auth.go`
 Interfaces: produces service `PipelineService` with RPCs `GetPipeline`, `ApplyOperation`, `Validate`, `Plan`, `ListRevisions`, `ApproveRevision`, `StartRun`, `WatchRun`; `api.Operation` oneof `AddStep`, `Connect`, `SetProperty`, `RemoveEdge`, `Rename`; `ApplyOperationResponse{Revision revision; Diff diff; Operation inverse}`.
 
-- [ ] Write `internal/api/operations_test.go` asserting `TestOperationInverseRestoresRevision`: apply `AddStep`, capture the returned `inverse`, apply it, and require the resulting pipeline equals the original by `proto.Equal`. Run — expect FAIL with "undefined: api.NewServer".
-- [ ] Add `TestApplyOperationRejectsStaleVersion` asserting applying against a superseded `base_revision` returns `CodeAborted` with a message containing "revision conflict".
-- [ ] Add `TestEveryOperationReturnsANonEmptyDiff` iterating all five operation kinds and requiring each response carries a diff naming the changed step or edge.
-- [ ] Write `proto/dhole/v1/api.proto` with the service and messages; run `buf generate`.
-- [ ] Implement `internal/api/operations.go` applying each operation to a copy of the pipeline and computing the inverse, and `internal/api/server.go` serving it over ConnectRPC with `internal/api/auth.go` resolving a `Principal` from the `Authorization` header and rejecting unscoped calls.
-- [ ] Run `go test ./internal/api` — expect PASS. Commit.
+- [x] Write `internal/api/operations_test.go` asserting `TestOperationInverseRestoresRevision`: apply `AddStep`, capture the returned `inverse`, apply it, and require the resulting pipeline equals the original by `proto.Equal`. Run — expect FAIL with "undefined: api.NewServer".
+- [x] Add `TestApplyOperationRejectsStaleVersion` asserting applying against a superseded `base_revision` returns `CodeAborted` with a message containing "revision conflict".
+- [x] Add `TestEveryOperationReturnsANonEmptyDiff` iterating all five operation kinds and requiring each response carries a diff naming the changed step or edge.
+- [x] Write `proto/dhole/v1/api.proto` with the service and messages; run `buf generate`.
+- [x] Implement `internal/api/operations.go` applying each operation to a copy of the pipeline and computing the inverse, and `internal/api/server.go` serving it over ConnectRPC with `internal/api/auth.go` resolving a `Principal` from the `Authorization` header and rejecting unscoped calls.
+- [x] Run `go test ./internal/api` — expect PASS. Commit.
+
+## Task 27b: What the API surfaced
+
+Files: `internal/defstore/`, `internal/api/`
+Interfaces: adds a revision-history query to `defstore.Store`; gives the editing head a home in the schema.
+
+- [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
+- [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
 
 ## Task 28: Validate and plan endpoints
 
