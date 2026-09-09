@@ -22,7 +22,7 @@ GO_DIRS     := $(shell find . -name '*.go' -not -path './web/*' -exec dirname {}
 DHOLE_TEST_KUBECONFIG     ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
-.PHONY: check web-check web-e2e test test-race test-integration build clean
+.PHONY: check web-check web-e2e test test-race test-integration conformance build clean
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
 check:
@@ -86,6 +86,24 @@ test-integration:
 	go test $(GO_PKGS) -tags=integration
 	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
 	go test ./... -tags=integration
+
+## conformance: run the engine conformance suite against ANY engine command.
+## This is the executable half of docs/wire-contract.md: it starts its own NATS
+## and object store, plays the control plane, and runs one case per obligation.
+## An engine author in any language runs exactly this to find out whether their
+## engine complies:
+##
+##   make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
+##
+## ENGINE is the command to launch, split on spaces. Add -v to CONFORMANCE_FLAGS
+## to see the engine's own stdout and stderr.
+CONFORMANCE_FLAGS ?=
+conformance:
+	@if [ -z "$(ENGINE)" ]; then \
+		echo 'make conformance: set ENGINE, e.g. ENGINE="python3 testdata/engines/minimal-python/engine.py"'; \
+		exit 2; \
+	fi
+	go run ./conformance/cmd/dhole-conformance $(CONFORMANCE_FLAGS) $(ENGINE)
 
 ## build: the single binary, stamped with its version and commit.
 build:

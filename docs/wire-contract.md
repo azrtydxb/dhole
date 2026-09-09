@@ -107,6 +107,43 @@ Engines being written now must frame. An engine that publishes bare payloads is
 relying on the compatibility path and will stop working when this major version
 does.
 
+### Computing `<caps>`
+
+This is the one value an engine cannot guess, and guessing it fails **silently**:
+the engine subscribes to a subject nothing is published on, so it sees no work,
+no error, and no indication that anything is wrong. The control plane meanwhile
+believes the capability set has no engine.
+
+Given the capability set a step requires:
+
+1. Drop `CAPABILITY_UNSPECIFIED`.
+2. De-duplicate, and sort ascending by **enum number**.
+3. For each remaining capability, write its enum number in decimal followed by a
+   single `\n` — the NUMBER, not the name, because that is what the wire
+   carries and it is the same in every language.
+4. SHA-256 those bytes.
+5. Lowercase-hex the digest and take the **first 16 characters**.
+
+An empty set hashes the empty input: `e3b0c44298fc1c14`.
+
+An engine subscribes to one dispatch subject per capability set it can satisfy —
+that is, per SUBSET of what it advertises, including the empty one — because a
+step requiring nothing must reach an engine that offers everything.
+
+### JetStream mechanics
+
+`job.dispatch.*` is carried by a work-queue stream named `DISPATCH`. An engine
+binds a durable pull consumer filtered to its own dispatch subject, and
+acknowledges by publishing to the message's reply subject.
+
+A pull delivers under the **original subject**, not the reply inbox. An engine
+that routes by the subject it subscribed with will drop every dispatch while the
+server believes it is working on them.
+
+`max_ack_pending` on that consumer must be at least the engine's slot count. Set
+lower, one stuck job stalls the whole queue for that capability set — including
+work other engines could have taken.
+
 `job.dispatch.*` is a **work queue**: exactly one engine receives each dispatch,
 and an unacknowledged message is redelivered. `job.status.*` is durable —
 the control plane must not miss one. `job.logs.*` is **ephemeral and
@@ -242,3 +279,41 @@ restarted — with nothing anywhere reporting a fault.
   upgrade proceeds without killing running steps.
 - `Attach` asks the engine to serve an interactive session against a running
   job on the given ephemeral reply subject.
+
+## What this document does not yet specify
+
+A conformance suite (`make conformance`) runs an engine written in Python
+against every obligation here. Writing it found these gaps: each is something
+the reference Go engine does that this document does not say, so a stranger
+cannot implement it. They are listed rather than hidden, and the conformance
+suite's own choices are named so a second implementer makes the same ones.
+
+- **The object store protocol.** `JobDispatch.output_prefix` and
+  `JobStatus.log_key` name objects in a store this document never describes:
+  no protocol, no addressing, no credentials. The conformance suite uses a
+  directory named by `DHOLE_BLOB_DIR`.
+- **Secret redemption.** An engine "redeems a handle for the value" with no
+  subject, no message shape, and no statement of who serves it or how a refusal
+  looks. The conformance suite uses request/reply on `DHOLE_SECRET_SUBJECT`.
+- **Step timeouts.** Neither `JobDispatch` nor `Step` carries one, so the
+  obligation to enforce a timeout cannot be met from the schema. The conformance
+  suite passes `DHOLE_STEP_TIMEOUT_SECONDS` in `JobDispatch.env`.
+- **Engine configuration.** Bus URL, engine id, tier and slot count are not
+  described, so an engine cannot be started from this document alone.
+- **Port layout on disk.** For a step executed as a process, nothing says where
+  an input port's bytes appear or where an output port's are read from. The
+  conformance suite uses `inputs/<port>` and `outputs/<port>`.
+- **Fence ordering.** Fence tokens are described as opaque, and the control
+  plane compares them by age. Ordering an opaque string is undefined; an engine
+  only ever needs equality, and this document should say so explicitly.
+- **The engine's half of the fence rule.** Nothing states what an engine does
+  with a `Cancel` whose fence is not the one it holds. It must refuse it.
+- **Non-zero exits.** That a non-zero exit means `PHASE_FAILED`, and that
+  `exit_code` carries the code, is nowhere stated.
+- **`PHASE_RUNNING`.** Defined in the schema; the message flow never says when
+  to send it.
+
+One implementation detail worth writing down here because it bit the Python
+engine: a step killed by a signal reports a NEGATIVE exit code, and protobuf
+sign-extends a negative int to ten bytes. A varint decoder that stops early
+never terminates on one.

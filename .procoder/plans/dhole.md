@@ -664,12 +664,12 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
 Files: `conformance/suite.go`, `conformance/cases.go`, `conformance/main.go`, `testdata/engines/minimal-python/engine.py`, `Makefile`
 Interfaces: produces `conformance.Run(ctx, cfg conformance.Config) (conformance.Report, error)`; `make conformance ENGINE=<cmd>` runs the suite against any engine binary.
 
-- [ ] Write `conformance/cases.go` with one case per contract obligation: registration and version negotiation, dispatch and success, non-zero exit, cancellation within 2s, timeout enforcement, 10MB log throughput, binary artifact round-trip, secret reference redemption without the value appearing in logs, lease renewal during a long step, and refusal of a fenced-out attempt.
-- [ ] Write `testdata/engines/minimal-python/engine.py`: a NATS client that registers, pulls dispatches, runs the command with `subprocess`, streams logs, and publishes status — deliberately not Go.
-- [ ] Write `conformance/suite_test.go` asserting `TestConformanceMinimalPythonEngine` runs every case against the Python engine and requires `Report.Failed == 0`. Run — expect FAIL with "undefined: conformance.Run".
-- [ ] Add `TestConformanceDetectsAnEngineThatIgnoresCancellation` asserting a deliberately broken engine variant fails exactly the cancellation case, proving the suite can fail.
-- [ ] Implement `conformance/suite.go` and `main.go`, and add `make conformance` to the Makefile.
-- [ ] Run `make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"` — expect PASS. Commit.
+- [x] Write `conformance/cases.go` with one case per contract obligation: registration and version negotiation, dispatch and success, non-zero exit, cancellation within 2s, timeout enforcement, 10MB log throughput, binary artifact round-trip, secret reference redemption without the value appearing in logs, lease renewal during a long step, and refusal of a fenced-out attempt.
+- [x] Write `testdata/engines/minimal-python/engine.py`: a NATS client that registers, pulls dispatches, runs the command with `subprocess`, streams logs, and publishes status — deliberately not Go.
+- [x] Write `conformance/suite_test.go` asserting `TestConformanceMinimalPythonEngine` runs every case against the Python engine and requires `Report.Failed == 0`. Run — expect FAIL with "undefined: conformance.Run".
+- [x] Add `TestConformanceDetectsAnEngineThatIgnoresCancellation` asserting a deliberately broken engine variant fails exactly the cancellation case, proving the suite can fail.
+- [x] Implement `conformance/suite.go` and `main.go`, and add `make conformance` to the Makefile.
+- [x] Run `make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"` — expect PASS. Commit.
 
 ## Task 40: Trigger interface and schedule trigger
 
