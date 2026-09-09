@@ -47,7 +47,8 @@ decide what may be cached and what may be retried.
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
-  0011 policy_audit (21), 0012 upstreams (34), 0013 timers (20), 0014 trigger_schedules (40). A task
+  0011 policy_audit (21), 0012 upstreams (34), 0013 timers (20), 0014 trigger_schedules (40),
+  0015 outbox_deployment (18b), 0016 open_runs (18b), 0017 run_sequence (18b). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -297,13 +298,13 @@ here as work, not as notes, because the plan had no task for any of them.
 Files: `internal/runstore/`, `internal/outbox/`, `internal/scheduler/`, `internal/server/`, `proto/dhole/v1/engine.proto`
 Interfaces: adds an open-run index to `runstore.Store`; scopes `outbox` claims; adds a message discriminator to the engine subjects or their payloads.
 
-- [ ] **The outbox claim is scoped to nothing.** `SELECT ... WHERE sent_at IS NULL` carries no tenant and no deployment id, so two control planes sharing a database steal each other's messages — observed for real: the server's drainer claimed and published `internal/outbox`'s own test fixtures onto its own bus. Scope the claim, and write the test that fails when two planes share a store.
-- [ ] **Nothing can enumerate unfinished runs.** `Replay` needs a run id you already have, so the set of runs still to advance lives only in the server's memory and a restart cannot rediscover a run that is merely waiting. This contradicts ADR 0003, whose whole claim is that a restart is a replay. Add an open-run index to the store and drive the advance loop from it.
-- [ ] **Nothing re-advances a run on its own.** `Advance` runs only when a status arrives, so a run submitted before any engine registered records `STEP_UNSCHEDULABLE` and stalls forever. Task 18 added a 250ms poll to get the run through; replace it with something driven by the index above, and keep the test that submits a run before any engine exists.
-- [ ] **A lost `EngineRegistration` is permanent.** It is fire-and-forget on a core subject, and `Heartbeat` refuses to rebuild an instance (Task 31, deliberately). An engine that starts before the plane is invisible until it restarts. Decide between a durable registration subject and a periodic re-announce, and implement it.
-- [ ] **An engine message's type cannot be recovered from its bytes.** An `EngineHeartbeat` decodes cleanly as an `EngineRegistration` — both start with `engine_id`, and packed `repeated uint32` shares a wire type with `repeated message`. Task 18 hit this by guessing from content and registering engines with an empty platform, which made every step unschedulable. It now subscribes to `engine.>` and dispatches on the subject. Put the discriminator somewhere it cannot be lost, and say so in the wire contract.
-- [ ] **Orphan re-dispatch is not expressible.** `lease.Expire` returns orphans, but `scheduler.plan` counts any step with `attempts > 0` as in flight forever and no event says an attempt died. Add the event and the sweeper that writes it.
-- [ ] **Two runs can share a sequence.** `run_events`'s primary key is `(tenant, run, step, attempt, sequence)`, so the per-tenant log has no single total order. Decide whether it needs one — the outbox and the run view both assume order somewhere — and either make the sequence per-tenant or document what it does order.
+- [x] **The outbox claim is scoped to nothing.** `SELECT ... WHERE sent_at IS NULL` carries no tenant and no deployment id, so two control planes sharing a database steal each other's messages — observed for real: the server's drainer claimed and published `internal/outbox`'s own test fixtures onto its own bus. Scope the claim, and write the test that fails when two planes share a store.
+- [x] **Nothing can enumerate unfinished runs.** `Replay` needs a run id you already have, so the set of runs still to advance lives only in the server's memory and a restart cannot rediscover a run that is merely waiting. This contradicts ADR 0003, whose whole claim is that a restart is a replay. Add an open-run index to the store and drive the advance loop from it.
+- [x] **Nothing re-advances a run on its own.** `Advance` runs only when a status arrives, so a run submitted before any engine registered records `STEP_UNSCHEDULABLE` and stalls forever. Task 18 added a 250ms poll to get the run through; replace it with something driven by the index above, and keep the test that submits a run before any engine exists.
+- [x] **A lost `EngineRegistration` is permanent.** It is fire-and-forget on a core subject, and `Heartbeat` refuses to rebuild an instance (Task 31, deliberately). An engine that starts before the plane is invisible until it restarts. Decide between a durable registration subject and a periodic re-announce, and implement it.
+- [x] **An engine message's type cannot be recovered from its bytes.** An `EngineHeartbeat` decodes cleanly as an `EngineRegistration` — both start with `engine_id`, and packed `repeated uint32` shares a wire type with `repeated message`. Task 18 hit this by guessing from content and registering engines with an empty platform, which made every step unschedulable. It now subscribes to `engine.>` and dispatches on the subject. Put the discriminator somewhere it cannot be lost, and say so in the wire contract.
+- [x] **Orphan re-dispatch is not expressible.** `lease.Expire` returns orphans, but `scheduler.plan` counts any step with `attempts > 0` as in flight forever and no event says an attempt died. Add the event and the sweeper that writes it.
+- [x] **Two runs can share a sequence.** `run_events`'s primary key is `(tenant, run, step, attempt, sequence)`, so the per-tenant log has no single total order. Decide whether it needs one — the outbox and the run view both assume order somewhere — and either make the sequence per-tenant or document what it does order.
 
 ## Task 15b: The cache is never consulted on a real run
 
@@ -329,6 +330,22 @@ reason.
 - [ ] A cached step must still produce the same run events a real one does, so the run view and the DAG cannot tell the difference — apart from the recorded cache hit.
 - [ ] Feed the real `cache_hit` into Task 44's `dhole_step_duration_seconds` label, replacing the constant false.
 - [ ] Never serve a hit for a step whose effect class is not PURE or whose lease scope is not step-scoped — `cache.Eligible` already decides this; call it, do not restate it.
+
+## Task 18c: Sequence allocation, left over from 18b
+
+Files: `internal/wait/`, `internal/steps/approval/`, `internal/api/`
+Interfaces: every caller appends with `Sequence: 0` and lets the store allocate.
+
+Task 18b made the run event log's sequence genuinely per-tenant, allocated by
+the store inside the caller's transaction. It could not change three packages
+that were being edited concurrently, and they still compute an explicit
+sequence themselves. The allocator's high-water-mark clause stops it from
+overtaking them, so nothing is broken today — but they can still collide with
+each other, and a collision is silent: the append is `ON CONFLICT DO NOTHING`
+for idempotence, so the loser is simply never written.
+
+- [ ] `internal/wait`, `internal/steps/approval` and `internal/api` append with `Sequence: 0`.
+- [ ] Add the test that two of them appending concurrently cannot lose an event — it must fail on the tree as it stands.
 
 ## Task 19: Effect classes, retry and idempotency keys
 
@@ -443,6 +460,7 @@ Files: `internal/defstore/`, `internal/api/`
 Interfaces: adds a revision-history query to `defstore.Store`; gives the editing head a home in the schema.
 
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
+- [ ] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
 - [ ] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
 - [ ] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
 - [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
