@@ -130,6 +130,13 @@ type Config struct {
 	// the deployment does not care.
 	OS   string
 	Arch string
+	// LiveLogs is the ephemeral log subject the run view tails while a step
+	// is running. Optional: without one the log stream serves only the
+	// authoritative copy, and says so rather than showing an empty tail.
+	LiveLogs LiveLogs
+	// LogArchive is the authoritative log the run view falls back to once a
+	// step has finished. Optional, with the same rule.
+	LogArchive LogArchive
 	// PollInterval overrides DefaultPollInterval.
 	PollInterval time.Duration
 	// Now is the clock, injectable for tests.
@@ -147,10 +154,14 @@ type Server struct {
 	fleet Fleet
 	env   Environment
 	cat   StepResolver
-	os    string
-	arch  string
-	poll  time.Duration
-	now   func() time.Time
+	// live and archive are the two copies of a step's log: the ephemeral
+	// subject and the durable object. See stream.go for why both exist.
+	live    LiveLogs
+	archive LogArchive
+	os      string
+	arch    string
+	poll    time.Duration
+	now     func() time.Time
 }
 
 // Compile-time proof that the server serves the whole generated contract: a
@@ -169,19 +180,21 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		defs:  cfg.Definitions,
-		auth:  cfg.Auth,
-		runs:  cfg.Runs,
-		adv:   cfg.Advancer,
-		heads: cfg.Heads,
-		cache: cfg.Cache,
-		fleet: cfg.Fleet,
-		env:   cfg.Environment,
-		cat:   cfg.Catalog,
-		os:    cfg.OS,
-		arch:  cfg.Arch,
-		poll:  cfg.PollInterval,
-		now:   cfg.Now,
+		defs:    cfg.Definitions,
+		auth:    cfg.Auth,
+		runs:    cfg.Runs,
+		adv:     cfg.Advancer,
+		heads:   cfg.Heads,
+		cache:   cfg.Cache,
+		fleet:   cfg.Fleet,
+		env:     cfg.Environment,
+		cat:     cfg.Catalog,
+		live:    cfg.LiveLogs,
+		archive: cfg.LogArchive,
+		os:      cfg.OS,
+		arch:    cfg.Arch,
+		poll:    cfg.PollInterval,
+		now:     cfg.Now,
 	}
 	if s.heads == nil {
 		s.heads = NewMemoryHeads()
@@ -199,6 +212,10 @@ func NewServer(cfg Config) (*Server, error) {
 func (s *Server) Handler(opts ...connect.HandlerOption) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(dholev1connect.NewPipelineServiceHandler(s, opts...))
+	// The two SSE streams a browser holds open. They are plain HTTP because
+	// EventSource speaks neither Connect nor gRPC, and they authenticate
+	// through the same Server.principal every RPC above uses (stream.go).
+	s.registerStreams(mux)
 	return mux
 }
 
