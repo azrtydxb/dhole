@@ -2,6 +2,8 @@ package trigger
 
 import (
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/azrtydxb/dhole/internal/taint"
 )
 
 // The taint marker: the boundary half of ADR 0015.
@@ -25,22 +27,19 @@ import (
 // Everything that reads a value must therefore read it through
 // UntaintedValue; ValidateInputs does.
 //
-// # What Task 51 has to reconcile
+// # Task 51 reconciled this
 //
-// Task 51 owns `internal/taint` and the rest of ADR 0015 — propagation on step
-// completion, the policy check, the sanitisation gate. It should move these
-// four functions there under its own names (`taint.Mark`, `taint.IsTainted`)
-// and leave this file delegating, or delete this file and update the three
-// triggers. What it must NOT do is invent a second representation: the
-// wrapper above is what a fired run's inputs already carry, so a taint package
-// that looks for a different shape will read every webhook payload as clean.
+// The implementation moved to `internal/taint`, which owns the rest of ADR
+// 0015 — propagation on step completion, the policy check, the sanitisation
+// gate. These four names stay because Task 41's triggers and their tests read
+// naturally through them, and they now DELEGATE: one implementation of the
+// wrapper, so the shape a fired run already carries and the shape the taint
+// package looks for cannot drift apart. Nothing here clears a taint; that is
+// taint.Gate's alone.
 const (
 	// TaintField is the reserved struct field a mark lives under. The `$`
 	// keeps it out of the way of any JSON Schema a port declares.
-	TaintField = "$dhole.taint"
-
-	taintSourceField = "source"
-	taintValueField  = "value"
+	TaintField = taint.Field
 )
 
 // MarkTainted wraps v as untrusted data admitted by source, which names the
@@ -50,63 +49,18 @@ const (
 // Marking an already-marked value is a no-op: the mark records the boundary it
 // crossed, and it crossed one.
 func MarkTainted(v *structpb.Value, source string) *structpb.Value {
-	if v == nil {
-		v = structpb.NewNullValue()
-	}
-	if IsTainted(v) {
-		return v
-	}
-	return structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-		TaintField: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			taintSourceField: structpb.NewStringValue(source),
-			taintValueField:  v,
-		}}),
-	}})
+	return taint.Mark(v, source)
 }
 
-// IsTainted reports whether v carries a taint mark.
-func IsTainted(v *structpb.Value) bool { return taintMark(v) != nil }
+// IsTainted reports whether v carries a taint mark — at its top level or
+// anywhere inside it, since a webhook body is a document and the untrusted
+// part is rarely the outermost value.
+func IsTainted(v *structpb.Value) bool { return taint.IsTainted(v) }
 
 // TaintSource returns the trigger that admitted v, or "" if v is not tainted.
-func TaintSource(v *structpb.Value) string {
-	mark := taintMark(v)
-	if mark == nil {
-		return ""
-	}
-	return mark.GetFields()[taintSourceField].GetStringValue()
-}
+func TaintSource(v *structpb.Value) string { return taint.Source(v) }
 
 // UntaintedValue returns the value a mark carries, or v unchanged if it is not
 // marked. It reads THROUGH the mark rather than removing it: nothing here
 // clears a taint, which is the sanitisation gate's job (ADR 0015).
-func UntaintedValue(v *structpb.Value) *structpb.Value {
-	mark := taintMark(v)
-	if mark == nil {
-		return v
-	}
-	return mark.GetFields()[taintValueField]
-}
-
-// taintMark returns the mark's inner struct, or nil.
-//
-// The shape is checked exactly — one field, named, carrying a source and a
-// value — so that a payload which happens to contain a similarly named key
-// cannot claim to be tainted, and, more importantly, so that an attacker
-// cannot forge the marker's ABSENCE by sending a struct that looks like one.
-func taintMark(v *structpb.Value) *structpb.Struct {
-	fields := v.GetStructValue().GetFields()
-	if len(fields) != 1 {
-		return nil
-	}
-	mark := fields[TaintField].GetStructValue()
-	if mark == nil {
-		return nil
-	}
-	if _, ok := mark.GetFields()[taintValueField]; !ok {
-		return nil
-	}
-	if _, ok := mark.GetFields()[taintSourceField]; !ok {
-		return nil
-	}
-	return mark
-}
+func UntaintedValue(v *structpb.Value) *structpb.Value { return taint.Value(v) }
