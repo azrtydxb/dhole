@@ -22,7 +22,7 @@ GO_DIRS     := $(shell find . -name '*.go' -not -path './web/*' -exec dirname {}
 DHOLE_TEST_KUBECONFIG     ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
-.PHONY: check web-check web-e2e test test-integration build clean
+.PHONY: check web-check web-e2e test test-race test-integration build clean
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
 check:
@@ -59,6 +59,15 @@ web-check:
 ## `dhole serve` and a browser, so it belongs beside test-integration.
 web-e2e:
 	npm --prefix web run test:e2e
+
+## test-race: the whole suite under the race detector.
+##
+## Separate from `test` because it is several times slower, and wired into CI
+## so a race is caught by the pipeline. A data race in the SSE log stream
+## survived review and the gate for two tasks, and was found only because an
+## unrelated agent happened to run the suite this way.
+test-race:
+	go test -race $(GO_PKGS)
 
 ## test: the whole suite.
 test:

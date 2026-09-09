@@ -652,12 +652,12 @@ the interface to hide it.
 Files: `internal/executor/pool/pool.go`, `internal/executor/pool/pool_test.go`, `internal/executor/containerd/lazypull.go`
 Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (executor.Sandbox, error)) (executor.Sandbox, error)`, `Reap(ctx, idle time.Duration) (int, error)`.
 
-- [ ] Write `internal/executor/pool/pool_test.go` asserting `TestPoolReusesSandboxAcrossRuns`: two runs with the same pool key receive the same sandbox id, and a file written by the first is visible to the second. Run — expect FAIL with "undefined: pool.New".
-- [ ] Add `TestReapReleasesIdleSandboxes` asserting a sandbox idle beyond the threshold is released and the next acquire creates a new one.
-- [ ] Add `TestPooledSandboxIsReportedNonCacheable` asserting Task 16's `cache.Eligible` is consulted and returns false for every step run from the pool.
-- [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` asserting that with stargz enabled, bytes read from the registry for a 500MB image running `true` are under 50MB, using the test registry's request log.
-- [ ] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
-- [ ] Run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/executor/pool/pool_test.go` asserting `TestPoolReusesSandboxAcrossRuns`: two runs with the same pool key receive the same sandbox id, and a file written by the first is visible to the second. Run — expect FAIL with "undefined: pool.New".
+- [x] Add `TestReapReleasesIdleSandboxes` asserting a sandbox idle beyond the threshold is released and the next acquire creates a new one.
+- [x] Add `TestPooledSandboxIsReportedNonCacheable` asserting Task 16's `cache.Eligible` is consulted and returns false for every step run from the pool.
+- [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — SKIPPED, and honestly. It needs a reachable containerd with the stargz snapshotter AND Task 36's `containerd.New` to drive the pull; this machine has neither, and the zot registry alone is not enough. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
+- [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
+- [x] Run `make test-integration` — expect PASS. Commit.
 
 ## Task 39: Engine conformance suite
 
@@ -890,12 +890,12 @@ Interfaces: produces `WatchPresence` streaming RPC emitting `PresenceEvent{princ
 Files: `internal/importers/gitlab.go`, `internal/importers/actions.go`, `internal/importers/woodpecker.go`, `internal/importers/n8n.go`, `internal/importers/importers_test.go`, `testdata/import/`
 Interfaces: produces `importers.Importer` with `Import(ctx, src []byte) (*dholev1.Pipeline, importers.Report, error)`; `Report{Unsupported []string; Warnings []string}`.
 
-- [ ] Write `internal/importers/importers_test.go` asserting `TestGitLabCIImportProducesRunnablePipeline`: importing `testdata/import/gitlab-ci.yml` yields a pipeline that passes `dag.Build` and `dag.TypeCheck` with no diagnostics. Run — expect FAIL with "undefined: importers.NewGitLab".
-- [ ] Add `TestImportReportsUnsupportedConstructsRatherThanDroppingThem` asserting a GitLab file using `rules:changes` produces a `Report.Unsupported` entry naming it, and that `Import` never silently discards a job.
-- [ ] Add `TestSharedWorkspaceIsTranslatedToExplicitArtifacts` asserting a Woodpecker pipeline relying on the implicit workspace produces explicit input and output ports between its steps.
-- [ ] Add `TestN8NNodesMapToStepsAndConnectionsToTypedEdges` asserting an n8n export round-trips to a pipeline whose edges carry structured types.
-- [ ] Implement the four importers, each emitting `at-most-once` for any step it cannot prove pure, so an import is never more permissive than the original.
-- [ ] Run `go test ./internal/importers` — expect PASS. Commit.
+- [x] Write `internal/importers/importers_test.go` asserting `TestGitLabCIImportProducesRunnablePipeline`: importing `testdata/import/gitlab-ci.yml` yields a pipeline that passes `dag.Build` and `dag.TypeCheck` with no diagnostics. Run — expect FAIL with "undefined: importers.NewGitLab".
+- [x] Add `TestImportReportsUnsupportedConstructsRatherThanDroppingThem` asserting a GitLab file using `rules:changes` produces a `Report.Unsupported` entry naming it, and that `Import` never silently discards a job.
+- [x] Add `TestSharedWorkspaceIsTranslatedToExplicitArtifacts` asserting a Woodpecker pipeline relying on the implicit workspace produces explicit input and output ports between its steps.
+- [x] Add `TestN8NNodesMapToStepsAndConnectionsToTypedEdges` asserting an n8n export round-trips to a pipeline whose edges carry structured types.
+- [x] Implement the four importers, each emitting `at-most-once` for any step it cannot prove pure, so an import is never more permissive than the original.
+- [x] Run `go test ./internal/importers` — expect PASS. Commit.
 
 ## Task 58: Tenant provisioning, quotas and billing metering
 

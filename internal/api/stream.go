@@ -38,6 +38,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -265,7 +266,11 @@ func (s *Server) tailLive(
 	// permits for this copy — and the viewer is told with a gap event rather
 	// than being left to infer it from a jump in seq.
 	chunks := make(chan *dholev1.LogChunk, LiveLogBuffer)
-	dropped := 0
+	// dropped is incremented by the bus's delivery goroutine and read by this
+	// handler's own loop, so it is atomic. It was a plain int, which the race
+	// detector caught only when the whole package ran — the two goroutines
+	// rarely touch it close enough together for a single test to notice.
+	var dropped atomic.Int64
 	unsubscribe, err := s.live.SubscribeEphemeral(ctx, bus.SubjectLogs(runID, stepID), func(data []byte) {
 		chunk := &dholev1.LogChunk{}
 		if err := proto.Unmarshal(data, chunk); err != nil {
@@ -274,7 +279,7 @@ func (s *Server) tailLive(
 		select {
 		case chunks <- chunk:
 		default:
-			dropped++
+			dropped.Add(1)
 		}
 	})
 	if err != nil {
@@ -297,11 +302,12 @@ func (s *Server) tailLive(
 				continue
 			}
 			after = chunk.GetSeq()
-			if dropped > 0 {
-				if err := sse.send("", "gap", map[string]int{"dropped": dropped}); err != nil {
+			// Swap to zero so a chunk dropped between the read and the reset
+			// is carried into the next gap frame rather than forgotten.
+			if lost := dropped.Swap(0); lost > 0 {
+				if err := sse.send("", "gap", map[string]int{"dropped": int(lost)}); err != nil {
 					return
 				}
-				dropped = 0
 			}
 			if err := sse.send(strconv.FormatUint(chunk.GetSeq(), 10), "chunk", logFrame{
 				Seq:    chunk.GetSeq(),
