@@ -658,6 +658,12 @@ func (s *Scheduler) buildDispatch(
 	token lease.Token,
 	state *runState,
 ) (*dholev1.JobDispatch, error) {
+	// What the step runs travels IN the dispatch: an engine never calls back
+	// to ask. See command.go for what resolves it today and what replaces it.
+	command, env, err := commandFor(step)
+	if err != nil {
+		return nil, err
+	}
 	return &dholev1.JobDispatch{
 		RunId:           runID,
 		StepId:          step.GetId(),
@@ -668,6 +674,8 @@ func (s *Scheduler) buildDispatch(
 		OutputPrefix:    fmt.Sprintf("runs/%s/%s/%s/%d", tenantID, runID, step.GetId(), attempt),
 		ProtocolVersion: wire.ProtocolVersion,
 		Tenant:          &dholev1.Tenant{Id: tenantID},
+		Command:         command,
+		Env:             env,
 	}, nil
 }
 

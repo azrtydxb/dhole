@@ -44,27 +44,27 @@ Every significant decision is recorded in [`.procoder/adr/`](.procoder/adr/), wi
 constraint that forced it and the price it pays. Records are immutable — a change of mind
 writes a superseding record.
 
-| # | Decision |
-|---|---|
-| [0001](.procoder/adr/0001-typed-content-addressed-dag-replaces-the-shared-mutable.md) | Typed content-addressed DAG replaces the shared mutable workspace |
-| [0002](.procoder/adr/0002-effect-classes-govern-caching-and-retry.md) | Effect classes govern caching and retry |
-| [0003](.procoder/adr/0003-runs-are-durable-and-event-sourced.md) | Runs are durable and event-sourced |
-| [0004](.procoder/adr/0004-control-plane-and-data-plane-split-with-polyglot-engines.md) | Control plane and data plane split with polyglot engines |
-| [0005](.procoder/adr/0005-nats-jetstream-is-the-bus-and-the-availability-floor.md) | NATS JetStream is the bus and the availability floor |
-| [0006](.procoder/adr/0006-executors-are-pluggable-and-sandbox-lifetime-is-an-explicit.md) | Executors are pluggable and sandbox lifetime is an explicit lease |
-| [0007](.procoder/adr/0007-triggers-are-pluggable-and-bind-to-typed-pipeline-inputs.md) | Triggers are pluggable and bind to typed pipeline inputs |
-| [0008](.procoder/adr/0008-definitions-live-in-the-server-database-with-a-one-way-git.md) | Definitions live in the server database with a one-way git mirror |
-| [0009](.procoder/adr/0009-content-addressed-cache-is-a-v1-core-primitive.md) | Content-addressed cache is a v1 core primitive |
-| [0010](.procoder/adr/0010-runtime-engine-registry-is-separate-from-the-durable-catalog.md) | Runtime engine registry is separate from the durable catalog |
-| [0011](.procoder/adr/0011-plugin-artifacts-resolve-through-one-scheme-addressed.md) | Plugin artifacts resolve through one scheme-addressed resolver |
-| [0012](.procoder/adr/0012-policy-is-a-first-class-subsystem-keyed-on-trust-tier.md) | Policy is a first-class subsystem keyed on trust tier |
-| [0013](.procoder/adr/0013-one-api-contract-serves-gui-cli-and-agents-equally.md) | One API contract serves GUI, CLI and agents equally |
-| [0014](.procoder/adr/0014-tenancy-exists-in-the-data-model-from-the-first-commit.md) | Tenancy exists in the data model from the first commit |
-| [0015](.procoder/adr/0015-agent-loops-are-bounded-nodes-and-untrusted-data-is-tainted.md) | Agent loops are bounded nodes and untrusted data is tainted |
-| [0016](.procoder/adr/0016-v1-is-three-acceptance-pipelines-built-in-parallel.md) | v1 is three acceptance pipelines built in parallel |
-| [0017](.procoder/adr/0017-the-project-is-named-dhole.md) | The project is named Dhole |
-| [0018](.procoder/adr/0018-dhole-is-licensed-apache-2-0.md) | Dhole is licensed Apache-2.0 |
-| [0019](.procoder/adr/0019-policy-is-expressed-in-cel.md) | Policy is expressed in CEL |
+| #                                                                                          | Decision                                                          |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| [0001](.procoder/adr/0001-typed-content-addressed-dag-replaces-the-shared-mutable.md)      | Typed content-addressed DAG replaces the shared mutable workspace |
+| [0002](.procoder/adr/0002-effect-classes-govern-caching-and-retry.md)                      | Effect classes govern caching and retry                           |
+| [0003](.procoder/adr/0003-runs-are-durable-and-event-sourced.md)                           | Runs are durable and event-sourced                                |
+| [0004](.procoder/adr/0004-control-plane-and-data-plane-split-with-polyglot-engines.md)     | Control plane and data plane split with polyglot engines          |
+| [0005](.procoder/adr/0005-nats-jetstream-is-the-bus-and-the-availability-floor.md)         | NATS JetStream is the bus and the availability floor              |
+| [0006](.procoder/adr/0006-executors-are-pluggable-and-sandbox-lifetime-is-an-explicit.md)  | Executors are pluggable and sandbox lifetime is an explicit lease |
+| [0007](.procoder/adr/0007-triggers-are-pluggable-and-bind-to-typed-pipeline-inputs.md)     | Triggers are pluggable and bind to typed pipeline inputs          |
+| [0008](.procoder/adr/0008-definitions-live-in-the-server-database-with-a-one-way-git.md)   | Definitions live in the server database with a one-way git mirror |
+| [0009](.procoder/adr/0009-content-addressed-cache-is-a-v1-core-primitive.md)               | Content-addressed cache is a v1 core primitive                    |
+| [0010](.procoder/adr/0010-runtime-engine-registry-is-separate-from-the-durable-catalog.md) | Runtime engine registry is separate from the durable catalog      |
+| [0011](.procoder/adr/0011-plugin-artifacts-resolve-through-one-scheme-addressed.md)        | Plugin artifacts resolve through one scheme-addressed resolver    |
+| [0012](.procoder/adr/0012-policy-is-a-first-class-subsystem-keyed-on-trust-tier.md)        | Policy is a first-class subsystem keyed on trust tier             |
+| [0013](.procoder/adr/0013-one-api-contract-serves-gui-cli-and-agents-equally.md)           | One API contract serves GUI, CLI and agents equally               |
+| [0014](.procoder/adr/0014-tenancy-exists-in-the-data-model-from-the-first-commit.md)       | Tenancy exists in the data model from the first commit            |
+| [0015](.procoder/adr/0015-agent-loops-are-bounded-nodes-and-untrusted-data-is-tainted.md)  | Agent loops are bounded nodes and untrusted data is tainted       |
+| [0016](.procoder/adr/0016-v1-is-three-acceptance-pipelines-built-in-parallel.md)           | v1 is three acceptance pipelines built in parallel                |
+| [0017](.procoder/adr/0017-the-project-is-named-dhole.md)                                   | The project is named Dhole                                        |
+| [0018](.procoder/adr/0018-dhole-is-licensed-apache-2-0.md)                                 | Dhole is licensed Apache-2.0                                      |
+| [0019](.procoder/adr/0019-policy-is-expressed-in-cel.md)                                   | Policy is expressed in CEL                                        |
 
 ## Definition of done for v1
 
@@ -76,6 +76,30 @@ Three acceptance pipelines, one per profile, all running end to end:
    engine type.
 3. **Agent** — a schema-validated structured output, a bounded loop, a human approval
    gate, and recorded token cost.
+
+## Running it
+
+```
+make build
+./dhole serve
+```
+
+With no flags that is the single binary: an embedded NATS server with JetStream, a SQLite
+run store, filesystem object stores, and one engine hosted beside the control plane. The
+engine is not called in-process — it dials the embedded bus and takes its work off the
+same `job.dispatch.*` work queue an engine in another datacentre would, which is what
+makes a laptop and a cluster the same system rather than two that resemble each other.
+
+| Flag          | Default                            | What it selects                                         |
+| ------------- | ---------------------------------- | ------------------------------------------------------- |
+| `--mode`      | `embedded`                         | `embedded` or `distributed` (control plane only)        |
+| `--store-dsn` | `<user config dir>/dhole/dhole.db` | a Postgres DSN, or any other value as a SQLite path     |
+| `--bus-url`   | —                                  | the NATS server to dial; ignored in embedded mode       |
+| `--blob-root` | `<user config dir>/dhole`          | where the CAS, the blob store and the embedded bus live |
+
+`dhole version` prints the version and commit the binary was built from. SIGINT and
+SIGTERM stop the plane rather than killing it: unacknowledged dispatches go back to the
+queue and unsent outbox rows are still owed.
 
 ## Still open
 

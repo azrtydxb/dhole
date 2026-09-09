@@ -1,0 +1,42 @@
+# The two-step pipeline the end-to-end test runs: `a` writes a file, `b` reads
+# it. The edge a.out -> b.in is the ONLY thing that makes b depend on a — there
+# is no shared workspace and no authored dependency list (ADR 0001).
+#
+# plugin_ref carries a `command:` scheme whose opaque part is the argument
+# vector and environment the step runs with. It is a placeholder: the plugin
+# resolver (Task 32) and lockfile resolution at save (Task 35) will turn an
+# `oci://` or `cas://` reference into the same two fields, at which point this
+# scheme goes away. Until then a dispatch would carry no command at all and the
+# engine would refuse it, so the definition says what to run.
+id: two-step
+tenant:
+  id: default
+steps:
+  - id: a
+    name: write
+    plugin_ref: 'command:{"args":["/bin/sh","-c","printf %s \"$GREETING\" > out"],"env":{"GREETING":"hello from a"}}'
+    effect_class: EFFECT_CLASS_PURE
+    outputs:
+      - name: out
+        type:
+          blob:
+            media_type: text/plain
+  - id: b
+    name: read
+    plugin_ref: 'command:{"args":["/bin/sh","-c","cat in > out; printf %s \"; b read it\" >> out"]}'
+    effect_class: EFFECT_CLASS_PURE
+    inputs:
+      - name: in
+        type:
+          blob:
+            media_type: text/plain
+    outputs:
+      - name: out
+        type:
+          blob:
+            media_type: text/plain
+edges:
+  - from_step: a
+    from_port: out
+    to_step: b
+    to_port: in
