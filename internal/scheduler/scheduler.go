@@ -67,6 +67,21 @@ const StepUnschedulable runstore.EventType = "STEP_UNSCHEDULABLE"
 // will move until they act.
 const StepAwaitingReplay runstore.EventType = "STEP_AWAITING_REPLAY"
 
+// StepAwaitingTimer and StepAwaitingApproval are the two gates a step can sit
+// behind: a durable wait until a time, and a wait for a person. They are what
+// makes a three-day wait cost a row rather than a goroutine (ADR 0003), and
+// they are declared here because this is where they are HONOURED — a gated
+// step is neither dispatched nor counted as finished, so a run holding one
+// neither runs ahead of its wait nor completes without it.
+//
+// The packages that emit them (internal/wait, internal/steps/approval) read
+// these constants rather than repeating the strings, because a gate written
+// one way and read another is a run that waits forever.
+const (
+	StepAwaitingTimer    runstore.EventType = "STEP_AWAITING_TIMER"
+	StepAwaitingApproval runstore.EventType = "STEP_AWAITING_APPROVAL"
+)
+
 // RunFailed closes a run whose step used up its attempts. A run that failed is
 // not a run that completed: reporting one as the other is how a broken
 // pipeline looks green.
@@ -351,6 +366,10 @@ type runState struct {
 	failedAt map[string]time.Time
 	// awaiting is the set of steps already recorded as waiting for a human.
 	awaiting map[string]bool
+	// gated is the set of steps stopped at a durable gate — a timer that has
+	// not come due, an approval nobody has decided. The gate is lifted by the
+	// step's own terminal event, written by whoever owns the gate.
+	gated map[string]bool
 }
 
 // load replays the run and folds its events into the state a decision needs.
@@ -367,6 +386,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		unschedulable: map[string]string{},
 		failedAt:      map[string]time.Time{},
 		awaiting:      map[string]bool{},
+		gated:         map[string]bool{},
 	}
 	for _, e := range events {
 		switch e.Type {
@@ -399,6 +419,8 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			state.failedAt[e.StepID] = e.At
 		case StepAwaitingReplay:
 			state.awaiting[e.StepID] = true
+		case StepAwaitingTimer, StepAwaitingApproval:
+			state.gated[e.StepID] = true
 		case RunFailed:
 			state.completed = true
 		case runstore.RunCompleted:
@@ -455,6 +477,14 @@ func plan(p *dholev1.Pipeline, g *dag.Graph, state *runState, now time.Time) pla
 			continue
 		case runstore.StepFailed:
 			out.classify(step, state, now)
+			continue
+		}
+		// A gate is checked before anything else a step could be: it has not
+		// been dispatched, it has not failed, and it is not finished. It is
+		// waiting, which is neither idle nor in flight — completing the run
+		// here would throw the wait away.
+		if state.gated[id] {
+			out.waiting++
 			continue
 		}
 		if state.attempts[id] > 0 {
