@@ -51,6 +51,11 @@ type planEnv struct {
 func (e planEnv) Kind() string                         { return e.kind }
 func (e planEnv) EnvironmentIdentity() (string, error) { return e.identity, nil }
 
+// planEngineKindOther is a second backend kind, so a fleet in this file can be
+// heterogeneous: a plan asserted against a fleet whose engines are all the
+// same kind as the plane cannot show where the answer came from.
+const planEngineKindOther = "container"
+
 // staticFleet is a fleet that is simply a list. Matching itself is the real
 // scheduler.Match, so nothing about the decision is faked here — only the
 // registry lookup that would otherwise need a bus.
@@ -67,6 +72,7 @@ func readyEngine(caps ...dholev1.Capability) registry.Instance {
 		ID: "engine-1", State: registry.StateReady,
 		OS: "linux", Arch: "amd64", Slots: 4,
 		Capabilities:     caps,
+		EngineTypes:      []string{planEngineKind},
 		ProtocolVersions: []uint32{1},
 	}
 }
@@ -785,4 +791,50 @@ func TestValidateAndPlanReachEveryCollaboratorWithThePrincipalsTenant(t *testing
 	for _, got := range probe.seen() {
 		require.Equal(t, tenantB, got, "the server asked a collaborator under the wrong tenant")
 	}
+}
+
+// TestPlanReportsTheMatchedEnginesKindNotTheLocalOne is the heterogeneous
+// fleet: one process engine and one container engine, on a plane whose own
+// configured environment is a process executor.
+//
+// A plan that reports the LOCAL kind answers "process" for every step,
+// including the one only the container engine can take. That is right by
+// accident on a uniform fleet and wrong on any other — which is exactly the
+// fleet somebody asks the question about.
+func TestPlanReportsTheMatchedEnginesKindNotTheLocalOne(t *testing.T) {
+	// engine-a is the same kind as the plane's local environment; engine-b is
+	// not, and is the only one advertising PRIVILEGED.
+	fleet := staticFleet{
+		{
+			ID: "engine-a", State: registry.StateReady,
+			OS: "linux", Arch: "amd64", Slots: 4,
+			EngineTypes:      []string{planEngineKind},
+			ProtocolVersions: []uint32{1},
+		},
+		{
+			ID: "engine-b", State: registry.StateReady,
+			OS: "linux", Arch: "amd64", Slots: 4,
+			Capabilities:     []dholev1.Capability{dholev1.Capability_CAPABILITY_PRIVILEGED},
+			EngineTypes:      []string{planEngineKindOther},
+			ProtocolVersions: []uint32{1},
+		},
+	}
+	h := newPlanHarness(t, fleet)
+	ctx := context.Background()
+
+	p := cacheablePipeline(tenantA)
+	stepByID(t, p, "a").Capabilities = []dholev1.Capability{dholev1.Capability_CAPABILITY_PRIVILEGED}
+	rev := savePlanned(t, h, tenantA, p)
+
+	got, err := h.client.Plan(ctx, authed(&dholev1.PlanRequest{
+		PipelineId: p.GetId(), RevisionId: rev.ID,
+	}, tokenAlice))
+	require.NoError(t, err)
+
+	require.Equal(t, planEngineKindOther, plannedByID(t, got.Msg.GetSteps(), "a").GetEngineKind(),
+		"only the container engine advertises what step a needs, so the plan must name "+
+			"the kind of the engine that matched — not the kind this plane happens to run")
+	require.Equal(t, planEngineKind, plannedByID(t, got.Msg.GetSteps(), "b").GetEngineKind(),
+		"step b needs nothing special and would land on the first engine that matches, "+
+			"which is the process one")
 }

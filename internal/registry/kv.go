@@ -298,6 +298,7 @@ func (r record) instance() Instance {
 		Capabilities:     caps,
 		OS:               r.OS,
 		Arch:             r.Arch,
+		EngineTypes:      slices.Clone(r.EngineTypes),
 		Slots:            r.Slots,
 		ProtocolVersions: slices.Clone(r.ProtocolVersions),
 	}

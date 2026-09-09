@@ -85,6 +85,17 @@ type Instance struct {
 	// OS and Arch are the platform it runs on, in Go's GOOS/GOARCH vocabulary.
 	OS   string
 	Arch string
+	// EngineTypes are the executor backends this engine offers — "process",
+	// "container" — as it advertised them. It is the only place that fact
+	// exists: a consumer that cannot read it here answers "which kind of
+	// engine takes this step" from its own local configuration, which is a
+	// different answer on any fleet whose engines are not all alike.
+	//
+	// It is deliberately NOT part of what scheduler.Match filters on. See the
+	// note there: the engine type a step needs is declared by its plugin's
+	// manifest, which the dispatch path does not resolve, so a filter here
+	// would be applied by the planner and not by the dispatcher.
+	EngineTypes []string
 	// Slots is how many jobs it will run concurrently.
 	Slots int
 	// ProtocolVersions is every wire version it speaks, so the control plane
