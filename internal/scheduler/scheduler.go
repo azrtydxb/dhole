@@ -37,6 +37,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cache"
 	"github.com/azrtydxb/dhole/internal/dag"
+	"github.com/azrtydxb/dhole/internal/effects"
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
@@ -54,6 +55,28 @@ import (
 // system. Stored values are a persistence contract — add types, never rename
 // one — and this one belongs to the same log as runstore's own.
 const StepUnschedulable runstore.EventType = "STEP_UNSCHEDULABLE"
+
+// StepAwaitingReplay records that a step failed and will NOT be retried
+// automatically, because its effect class forbids it (ADR 0002). The run is
+// not finished and not failed: it is waiting for a person to decide whether
+// the step ran, and whether to replay it.
+//
+// It is an event rather than silence for the same reason StepUnschedulable is.
+// A step that stops without a word is indistinguishable from a slow one, and
+// this is the case where the operator most needs to be told, because nothing
+// will move until they act.
+const StepAwaitingReplay runstore.EventType = "STEP_AWAITING_REPLAY"
+
+// RunFailed closes a run whose step used up its attempts. A run that failed is
+// not a run that completed: reporting one as the other is how a broken
+// pipeline looks green.
+const RunFailed runstore.EventType = "RUN_FAILED"
+
+// IdempotencyKeyEnv is the environment variable a step's idempotency key
+// arrives in. A key computed in the control plane and never handed to the
+// process protects nothing: the far end is the only place a duplicate can be
+// recognised, and the step is what talks to it.
+const IdempotencyKeyEnv = "DHOLE_IDEMPOTENCY_KEY"
 
 // DefaultLeaseTTL is how long a step's lease lives before the control plane
 // treats its holder as dead. An engine heartbeats every five seconds
@@ -195,12 +218,32 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		return fmt.Errorf("scheduler: run %q: %w", runID, err)
 	}
 
-	ready, inFlight := plan(pipeline, graph, state)
-	if len(ready) == 0 && inFlight == 0 {
-		return s.complete(ctx, tenantID, runID)
+	pl := plan(pipeline, graph, state, s.now())
+
+	// Before anything is dispatched: a step whose effect class forbids an
+	// automatic retry has to be visible as such, whatever else the run is
+	// still doing.
+	for _, step := range pl.blocked {
+		if err := s.recordAwaitingReplay(ctx, tenantID, runID, step, state); err != nil {
+			return err
+		}
 	}
 
-	for _, step := range ready {
+	if len(pl.ready) == 0 && pl.inFlight == 0 && pl.waiting == 0 {
+		switch {
+		case len(pl.exhausted) > 0:
+			return s.fail(ctx, tenantID, runID, pl.exhausted)
+		case len(pl.blocked) > 0:
+			// Nothing is running and nothing is going to until a person
+			// decides. The run stays open on purpose: it has neither
+			// succeeded nor been given up on.
+			return nil
+		default:
+			return s.complete(ctx, tenantID, runID)
+		}
+	}
+
+	for _, step := range pl.ready {
 		if err := s.dispatch(ctx, tenantID, runID, pipeline, step, state); err != nil {
 			return err
 		}
@@ -301,6 +344,13 @@ type runState struct {
 	terminal      map[string]runstore.EventType
 	outputs       map[string][]*dholev1.OutputRef
 	unschedulable map[string]string
+	// failedAt is when a step's latest attempt failed, which is what a
+	// backoff is measured from. It comes off the event, not the clock,
+	// because a control plane that restarts mid-backoff must resume the wait
+	// rather than start it again.
+	failedAt map[string]time.Time
+	// awaiting is the set of steps already recorded as waiting for a human.
+	awaiting map[string]bool
 }
 
 // load replays the run and folds its events into the state a decision needs.
@@ -315,6 +365,8 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		terminal:      map[string]runstore.EventType{},
 		outputs:       map[string][]*dholev1.OutputRef{},
 		unschedulable: map[string]string{},
+		failedAt:      map[string]time.Time{},
+		awaiting:      map[string]bool{},
 	}
 	for _, e := range events {
 		switch e.Type {
@@ -330,6 +382,10 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			if e.Attempt > state.attempts[e.StepID] {
 				state.attempts[e.StepID] = e.Attempt
 			}
+			// A retry supersedes the failure that justified it: the step is
+			// in flight again, and its earlier verdict no longer describes
+			// where it stands.
+			delete(state.terminal, e.StepID)
 		case runstore.StepSucceeded:
 			state.terminal[e.StepID] = e.Type
 			status := &dholev1.JobStatus{}
@@ -340,6 +396,11 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			state.outputs[e.StepID] = status.GetOutputs()
 		case runstore.StepFailed:
 			state.terminal[e.StepID] = e.Type
+			state.failedAt[e.StepID] = e.At
+		case StepAwaitingReplay:
+			state.awaiting[e.StepID] = true
+		case RunFailed:
+			state.completed = true
 		case runstore.RunCompleted:
 			state.completed = true
 		case StepUnschedulable:
@@ -357,21 +418,47 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 	return state, nil
 }
 
+// planned is what one pass over the log concluded about a run: what may be
+// dispatched now, what is already out, what is waiting, and what has stopped.
+type planned struct {
+	ready    []*dholev1.Step
+	inFlight int
+	// waiting counts steps that failed and will be retried, but not yet: a
+	// run with one of these is neither finished nor idle, and completing it
+	// would throw away a retry that was about to happen.
+	waiting int
+	// blocked are failed steps whose effect class forbids an automatic retry.
+	blocked []*dholev1.Step
+	// exhausted are steps that used up every attempt they were allowed.
+	exhausted []string
+}
+
 // plan is the readiness rule, and it is the whole of it: a step may run when
 // every step feeding it has SUCCEEDED and it has not been dispatched or
 // finished itself. A step whose predecessor failed is therefore never ready
 // and never in flight, which is how a failed run reaches completion instead of
 // waiting for work that can no longer happen.
-func plan(p *dholev1.Pipeline, g *dag.Graph, state *runState) (ready []*dholev1.Step, inFlight int) {
+//
+// A step that failed is decided by its effect class and nothing else (ADR
+// 0002). PURE and IDEMPOTENT are retried, after a backoff that grows.
+// AT_MOST_ONCE — and anything undeclared — is not retried at all, because
+// nothing here can tell whether the attempt that failed had already had its
+// effect.
+func plan(p *dholev1.Pipeline, g *dag.Graph, state *runState, now time.Time) planned {
 	predecessors := predecessorsOf(p, g)
 
+	var out planned
 	for _, step := range p.GetSteps() {
 		id := step.GetId()
-		if _, done := state.terminal[id]; done {
+		switch state.terminal[id] {
+		case runstore.StepSucceeded:
+			continue
+		case runstore.StepFailed:
+			out.classify(step, state, now)
 			continue
 		}
 		if state.attempts[id] > 0 {
-			inFlight++
+			out.inFlight++
 			continue
 		}
 		satisfied := true
@@ -382,11 +469,36 @@ func plan(p *dholev1.Pipeline, g *dag.Graph, state *runState) (ready []*dholev1.
 			}
 		}
 		if satisfied {
-			ready = append(ready, step)
+			out.ready = append(out.ready, step)
 		}
 	}
-	sort.Slice(ready, func(i, j int) bool { return ready[i].GetId() < ready[j].GetId() })
-	return ready, inFlight
+	sort.Slice(out.ready, func(i, j int) bool { return out.ready[i].GetId() < out.ready[j].GetId() })
+	return out
+}
+
+// classify decides what happens to a step that has failed. The whole decision
+// is the policy its effect class implies: whether it may be repeated at all,
+// how many times, and how long the wait is.
+func (pl *planned) classify(step *dholev1.Step, state *runState, now time.Time) {
+	id := step.GetId()
+	policy := effects.RetryPolicy(step)
+	attempts := state.attempts[id]
+
+	if !policy.AllowsRetry(attempts) {
+		if policy.MaxAttempts <= 1 {
+			// Never automatically repeated: a person decides. This is the
+			// case the effect class exists for.
+			pl.blocked = append(pl.blocked, step)
+			return
+		}
+		pl.exhausted = append(pl.exhausted, id)
+		return
+	}
+	if now.Before(state.failedAt[id].Add(effects.Backoff(policy, attempts))) {
+		pl.waiting++
+		return
+	}
+	pl.ready = append(pl.ready, step)
 }
 
 // predecessorsOf inverts the graph's dependent edges. The dependencies come
@@ -439,9 +551,38 @@ func (s *Scheduler) dispatch(
 		return nil
 	}
 
+	policy := effects.RetryPolicy(step)
+	if policy.RequiresExclusiveLease {
+		// A step that must run at most once may only be sent by the plane
+		// that demonstrably holds its lease, and it is checked HERE rather
+		// than being left to the transaction below to undo: a fence that has
+		// already moved means another plane owns this step, and a dispatch
+		// built on it must never exist, not even briefly and rolled back
+		// (ADR 0002).
+		if err := s.leas.Validate(ctx, token); err != nil {
+			if errors.Is(err, lease.ErrFenced) {
+				return nil
+			}
+			return fmt.Errorf("scheduler: proving the exclusive lease on %s/%s: %w",
+				runID, step.GetId(), err)
+		}
+	}
+
 	dispatchMsg, err := s.buildDispatch(tenantID, runID, pipeline, step, attempt, token, fresh)
 	if err != nil {
 		return err
+	}
+
+	// The key is the same on every attempt of a step, which is exactly what
+	// makes a retry safe: the far end sees the repeat and declines to act
+	// twice (ADR 0002).
+	var idempotencyKey string
+	if policy.RequiresIdempotencyKey {
+		idempotencyKey = effects.IdempotencyKey(runID, step.GetId(), attempt)
+		if dispatchMsg.GetEnv() == nil {
+			dispatchMsg.Env = map[string]string{}
+		}
+		dispatchMsg.Env[IdempotencyKeyEnv] = idempotencyKey
 	}
 	cacheable, reason := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), s.envIdentity)
 	payload, err := MarshalDispatched(Dispatched{
@@ -449,6 +590,7 @@ func (s *Scheduler) dispatch(
 		Fence:                 token.Fence,
 		Cacheable:             cacheable,
 		CacheIneligibleReason: reason,
+		IdempotencyKey:        idempotencyKey,
 	})
 	if err != nil {
 		return err
@@ -576,6 +718,53 @@ func (s *Scheduler) recordUnschedulable(
 	})
 }
 
+// recordAwaitingReplay writes, once, that a failed step will not be retried
+// automatically. Once is enough: Advance runs after every status and every
+// restart, and repeating the same standstill on each pass would bury the
+// event that explains it.
+func (s *Scheduler) recordAwaitingReplay(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, state *runState,
+) error {
+	if state.awaiting[step.GetId()] {
+		return nil
+	}
+	payload, err := MarshalAwaitingReplay(AwaitingReplay{
+		EffectClass: step.GetEffectClass().String(),
+		Reason: fmt.Sprintf(
+			"effect class %s may not be retried automatically; a replay has to be authorised",
+			strings.TrimPrefix(step.GetEffectClass().String(), "EFFECT_CLASS_")),
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.append(ctx, tenantID, runstore.Event{
+		RunID:   runID,
+		StepID:  step.GetId(),
+		Attempt: state.attempts[step.GetId()],
+		Type:    StepAwaitingReplay,
+		Payload: payload,
+	}); err != nil {
+		return err
+	}
+	state.awaiting[step.GetId()] = true
+	return nil
+}
+
+// fail closes a run whose steps ran out of attempts. It is deliberately not
+// complete(): a run that failed and a run that finished are different answers
+// to the only question anybody asks about a run.
+func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []string) error {
+	payload, err := MarshalRunFailure(RunFailure{Steps: steps})
+	if err != nil {
+		return err
+	}
+	return s.append(ctx, tenantID, runstore.Event{
+		RunID:   runID,
+		Type:    RunFailed,
+		Payload: payload,
+	})
+}
+
 // complete closes a run that has nothing ready and nothing in flight. Advance
 // returns before reaching here once the run is completed, so this is written
 // exactly once per run.
@@ -660,12 +849,46 @@ type Dispatched struct {
 	Fence                 uint64 `json:"fence"`
 	Cacheable             bool   `json:"cacheable"`
 	CacheIneligibleReason string `json:"cache_ineligible_reason,omitempty"`
+	// IdempotencyKey is the key this attempt presented to the far end, when
+	// the step's effect class required one. It is recorded because the
+	// question after an incident is "did we send that twice", and the answer
+	// is only in the log if the key that went out is in the log.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // Unschedulable is the payload of a STEP_UNSCHEDULABLE event: why a step that
 // was ready could not be placed on any engine.
 type Unschedulable struct {
 	Reason string `json:"reason"`
+}
+
+// AwaitingReplay is the payload of a STEP_AWAITING_REPLAY event: why a failed
+// step stopped instead of being retried.
+type AwaitingReplay struct {
+	EffectClass string `json:"effect_class"`
+	Reason      string `json:"reason"`
+}
+
+// RunFailure is the payload of a RUN_FAILED event: which steps ran out of
+// attempts.
+type RunFailure struct {
+	Steps []string `json:"steps"`
+}
+
+// MarshalAwaitingReplay encodes the STEP_AWAITING_REPLAY payload.
+func MarshalAwaitingReplay(a AwaitingReplay) ([]byte, error) { return marshalPayload(a) }
+
+// UnmarshalAwaitingReplay decodes the STEP_AWAITING_REPLAY payload.
+func UnmarshalAwaitingReplay(b []byte) (AwaitingReplay, error) {
+	return unmarshalPayload[AwaitingReplay](b, string(StepAwaitingReplay))
+}
+
+// MarshalRunFailure encodes the RUN_FAILED payload.
+func MarshalRunFailure(r RunFailure) ([]byte, error) { return marshalPayload(r) }
+
+// UnmarshalRunFailure decodes the RUN_FAILED payload.
+func UnmarshalRunFailure(b []byte) (RunFailure, error) {
+	return unmarshalPayload[RunFailure](b, string(RunFailed))
 }
 
 // MarshalRunCreated encodes the RUN_CREATED payload.
