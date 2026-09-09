@@ -37,18 +37,6 @@ import (
 // nothing new to send.
 const DefaultPollInterval = 250 * time.Millisecond
 
-// RevisionLister is the listing query ListRevisions needs.
-//
-// It is a separate, optional interface because defstore.Store does not offer
-// one yet: it can fetch a revision, the active revision and the definition
-// behind either, but it cannot enumerate a pipeline's history. A store that
-// cannot list makes ListRevisions answer CodeUnimplemented rather than an
-// empty list, because "no revisions" is a lie about a pipeline that has many.
-type RevisionLister interface {
-	// Revisions returns the pipeline's revisions, oldest first.
-	Revisions(ctx context.Context, tenantID, pipelineID string) ([]defstore.Revision, error)
-}
-
 // Advancer is the scheduler, narrowed to what StartRun needs. A run that is
 // recorded and never advanced never starts.
 type Advancer interface {
@@ -324,13 +312,7 @@ func (s *Server) ListRevisions(
 	if req.Msg.GetPipelineId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("api: a pipeline_id is required"))
 	}
-	lister, ok := s.defs.(RevisionLister)
-	if !ok {
-		return nil, connect.NewError(connect.CodeUnimplemented, errors.New(
-			"api: the configured definition store cannot list revisions; "+
-				"defstore.Store has no history query yet, and an empty list here would be a lie"))
-	}
-	revs, err := lister.Revisions(ctx, p.TenantID, req.Msg.GetPipelineId())
+	revs, err := s.defs.Revisions(ctx, p.TenantID, req.Msg.GetPipelineId())
 	if err != nil {
 		return nil, storeError("list revisions", err)
 	}

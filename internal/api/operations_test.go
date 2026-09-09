@@ -792,18 +792,38 @@ func TestListRevisionsReturnsTheTenantsRevisions(t *testing.T) {
 	require.Equal(t, []string{rev.ID, applied.Msg.GetRevision().GetId()}, ids)
 }
 
-// TestListRevisionsSaysSoWhenTheStoreCannotList records the gap honestly: the
-// definition store has no listing query yet, and an endpoint that answered
-// with an empty list would report "no revisions" for a pipeline that has many.
-func TestListRevisionsSaysSoWhenTheStoreCannotList(t *testing.T) {
+// TestListRevisionsReadsTheRealStoresHistory is what replaced the gap this
+// endpoint used to report: the definition store answers the history itself, so
+// ListRevisions is served rather than refused as unimplemented.
+//
+// It runs against the REAL SQL store rather than the recording double, because
+// the double's listing proved only that the server calls something.
+func TestListRevisionsReadsTheRealStoresHistory(t *testing.T) {
 	h := newRealHarness(t)
-	_, _ = seed(t, h, tenantA)
+	p, base := seed(t, h, tenantA)
+	ctx := context.Background()
 
-	_, err := h.client.ListRevisions(context.Background(),
-		authed(&dholev1.ListRevisionsRequest{PipelineId: "pipe-1"}, tokenAlice))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-	require.Contains(t, err.Error(), "list revisions")
+	applied, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+		PipelineId: p.GetId(), BaseRevision: base.ID, Operation: fixtureFor(t, "rename"),
+	}, tokenAlice))
+	require.NoError(t, err)
+
+	list, err := h.client.ListRevisions(ctx,
+		authed(&dholev1.ListRevisionsRequest{PipelineId: p.GetId()}, tokenAlice))
+	require.NoError(t, err, "the definition store can list, so this must not be unimplemented")
+
+	ids := make([]string, 0, len(list.Msg.GetRevisions()))
+	for _, r := range list.Msg.GetRevisions() {
+		ids = append(ids, r.GetId())
+	}
+	require.Equal(t, []string{base.ID, applied.Msg.GetRevision().GetId()}, ids,
+		"the history is the pipeline's revisions, oldest first")
+
+	// Another tenant sees none of it.
+	other, err := h.client.ListRevisions(ctx,
+		authed(&dholev1.ListRevisionsRequest{PipelineId: p.GetId()}, tokenBob))
+	require.NoError(t, err)
+	require.Empty(t, other.Msg.GetRevisions())
 }
 
 // TestApproveRevisionRecordsThePrincipalAsApprover.

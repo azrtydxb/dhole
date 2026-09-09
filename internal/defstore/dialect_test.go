@@ -150,6 +150,57 @@ func definitionStoreContract(t *testing.T, store defstore.Store) {
 		require.Equal(t, defstore.StateDraft, still.State)
 	})
 
+	t.Run("RevisionsListsThePipelinesHistoryOldestFirst", func(t *testing.T) {
+		ctx := context.Background()
+		scope := uniqueTenant(t)
+
+		first, err := store.Save(ctx, scope, pipeline("p1", "oci://dhole/build:1"), "ada")
+		require.NoError(t, err)
+		second, err := store.Save(ctx, scope, pipeline("p1", "oci://dhole/build:2"), "ada")
+		require.NoError(t, err)
+		third, err := store.Save(ctx, scope, pipeline("p1", "oci://dhole/build:3"), "ada")
+		require.NoError(t, err)
+		// Another pipeline of the same tenant, which must not appear below.
+		other, err := store.Save(ctx, scope, pipeline("p2", "oci://dhole/build:1"), "ada")
+		require.NoError(t, err)
+
+		require.NoError(t, store.Approve(ctx, scope, second.ID, "grace"))
+
+		history, err := store.Revisions(ctx, scope, "p1")
+		require.NoError(t, err)
+
+		ids := make([]string, 0, len(history))
+		for _, rev := range history {
+			ids = append(ids, rev.ID)
+		}
+		require.Equal(t, []string{first.ID, second.ID, third.ID}, ids,
+			"the history is the pipeline's revisions, oldest first, and nobody else's")
+		require.NotContains(t, ids, other.ID)
+
+		// The metadata is the same metadata Revision() answers with: a
+		// listing that lost the approval state would make the history a
+		// different fact from the record.
+		require.Equal(t, defstore.StateActive, history[1].State)
+		require.Equal(t, "grace", history[1].Approver)
+		require.Equal(t, "ada", history[0].Author)
+	})
+
+	t.Run("RevisionsOfAnotherTenantIsEmptyRatherThanTheirs", func(t *testing.T) {
+		ctx := context.Background()
+		mine := uniqueTenant(t)
+		theirs := uniqueTenant(t)
+
+		_, err := store.Save(ctx, mine, pipeline("p1", "oci://dhole/build:1"), "ada")
+		require.NoError(t, err)
+
+		history, err := store.Revisions(ctx, theirs, "p1")
+		require.NoError(t, err)
+		require.Empty(t, history, "a pipeline of another tenant has no history here")
+
+		_, err = store.Revisions(ctx, "", "p1")
+		require.ErrorIs(t, err, defstore.ErrTenantRequired)
+	})
+
 	t.Run("ReadsAreScopedToTheirTenant", func(t *testing.T) {
 		ctx := context.Background()
 		mine := uniqueTenant(t)
