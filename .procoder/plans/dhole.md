@@ -434,12 +434,12 @@ Interfaces: produces `catalog.Store` with `Publish(ctx, tenantID string, m catal
 Files: `internal/registry/registry.go`, `internal/registry/kv.go`, `internal/registry/registry_test.go`
 Interfaces: produces `registry.Registry` with `Register(ctx, r *dholev1.EngineRegistration) error`, `Heartbeat(ctx, h *dholev1.EngineHeartbeat) error`, `Instances(ctx, tenantID string) ([]registry.Instance, error)`, `Drain(ctx, engineID string) error`; `Instance{ID string; State registering|ready|draining|gone; Capabilities []dholev1.Capability; OS, Arch string; Slots int; ProtocolVersions []uint32}`.
 
-- [ ] Write `internal/registry/registry_test.go` asserting `TestInstanceAgesOutWithoutHeartbeat`: register with a 200ms TTL, stop heartbeating, and require `Instances` omits it after the TTL. Run — expect FAIL with "undefined: registry.New".
-- [ ] Add `TestDrainStopsNewWorkButFinishesInFlight` asserting a drained instance receives no new dispatch while its in-flight step still completes.
-- [ ] Add `TestRegistrationWithUnsupportedProtocolIsRefused` asserting a registration advertising only version 0 is rejected with an error containing "unsupported protocol".
-- [ ] Add `TestSchedulerRoutesOnlyToInstancesSatisfyingResolvedRequirements` asserting a fleet on mixed protocol versions receives work only where the version and capabilities match.
-- [ ] Implement `internal/registry/kv.go` over NATS KV bucket `dhole-engines` with TTL, and `registry.go` mapping lifecycle transitions.
-- [ ] Run `go test ./internal/registry ./internal/scheduler` — expect PASS. Commit.
+- [x] Write `internal/registry/registry_test.go` asserting `TestInstanceAgesOutWithoutHeartbeat`: register with a 200ms TTL, stop heartbeating, and require `Instances` omits it after the TTL. Run — expect FAIL with "undefined: registry.New".
+- [x] Add `TestDrainStopsNewWorkButFinishesInFlight` asserting a drained instance receives no new dispatch while its in-flight step still completes.
+- [x] Add `TestRegistrationWithUnsupportedProtocolIsRefused` asserting a registration advertising only version 0 is rejected with an error containing "unsupported protocol".
+- [x] Add `TestSchedulerRoutesOnlyToInstancesSatisfyingResolvedRequirements` asserting a fleet on mixed protocol versions receives work only where the version and capabilities match.
+- [x] Implement `internal/registry/kv.go` over NATS KV bucket `dhole-engines` with TTL, and `registry.go` mapping lifecycle transitions.
+- [x] Run `go test ./internal/registry ./internal/scheduler` — expect PASS. Commit.
 
 ## Task 32: Plugin resolver for oci:// and cas://
 
