@@ -51,6 +51,24 @@ type Input struct {
 	Signed bool
 	// Upstream is the registry or source the artifact came from.
 	Upstream string
+
+	// The taint keys (ADR 0015). They are here because a taint refusal IS a
+	// trust-tier decision: "may this untrusted data reach this step, on this
+	// engine" is the same question as every other one asked here, and keeping
+	// it in Go would make it the one decision an operator cannot read, audit
+	// or change.
+
+	// Tainted reports whether any input reaching the subject carries a taint
+	// mark. It is the key a rule guards on, so that a rule about untrusted
+	// data says nothing about clean data.
+	Tainted bool
+	// TaintSources are the distinct triggers that admitted the tainted data,
+	// sorted, so a rule may name one and a reason may list them.
+	TaintSources []string
+	// EngineCapabilities are the capabilities the engine the work would run
+	// on advertises. They are NOT the step's own: a privileged ENGINE is a
+	// host-level foothold whatever the step asked for.
+	EngineCapabilities []dholev1.Capability
 }
 
 // Decision is the answer, plus enough of the reasoning to answer for it later.
