@@ -327,11 +327,11 @@ Interfaces: produces `policy.Engine` with `Evaluate(ctx, in policy.Input) (polic
 Files: `internal/tenant/tenant.go`, `internal/tenant/nats_accounts.go`, `internal/tenant/tenant_test.go`
 Interfaces: produces `tenant.FromContext(ctx) (string, error)`, `tenant.WithTenant(ctx, id string) context.Context`, `tenant.AccountName(tenantID string) string`, `tenant.ProvisionAccount(ctx, srv *bus.Embedded, tenantID string) (creds string, err error)`.
 
-- [ ] Write `internal/tenant/tenant_test.go` asserting `TestTenantIsolationAcrossStoreAndBus`: tenant `b` cannot replay tenant `a`'s run, cannot read `a`'s CAS blob, and cannot subscribe to `a`'s dispatch subject. Run — expect FAIL with "undefined: tenant.ProvisionAccount".
-- [ ] Add `TestNoStoreMethodAcceptsEmptyTenant` iterating every exported `runstore.Store`, `cas.Store` and `blobstore.Store` method by reflection and requiring each returns an error containing "tenant scope required" when passed `""`.
-- [ ] Add `TestSubjectBuildersIncludeTenant` asserting every builder in `internal/bus/subjects.go` produces a subject containing the tenant segment.
-- [ ] Implement `internal/tenant/nats_accounts.go` provisioning one NATS account per tenant with subject permissions limited to that tenant's prefixes, and `internal/tenant/tenant.go` for context propagation.
-- [ ] Run `go test ./internal/tenant ./internal/bus ./internal/runstore` — expect PASS. Commit.
+- [x] Write `internal/tenant/tenant_test.go` asserting `TestTenantIsolationAcrossStoreAndBus`: tenant `b` cannot replay tenant `a`'s run, cannot read `a`'s CAS blob, and cannot subscribe to `a`'s dispatch subject. Run — expect FAIL with "undefined: tenant.ProvisionAccount".
+- [x] Add `TestNoStoreMethodAcceptsEmptyTenant` iterating every exported `runstore.Store`, `cas.Store` and `blobstore.Store` method by reflection and requiring each returns an error containing "tenant scope required" when passed `""`.
+- [x] Add `TestSubjectBuildersIncludeTenant` asserting every builder in `internal/bus/subjects.go` produces a subject containing the tenant segment.
+- [x] Implement `internal/tenant/nats_accounts.go` provisioning one NATS account per tenant with subject permissions limited to that tenant's prefixes, and `internal/tenant/tenant.go` for context propagation.
+- [x] Run `go test ./internal/tenant ./internal/bus ./internal/runstore` — expect PASS. Commit.
 
 ## Task 23: Built-in identity and service tokens
 

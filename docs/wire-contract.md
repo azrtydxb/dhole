@@ -29,8 +29,16 @@ treat the absence of a message as evidence that something did not happen.
 
 ## Subjects
 
-Every subject is tenant-scoped. There is no unscoped subject, even while only
-one tenant exists.
+Every subject is tenant-scoped — but the scope is not a segment in the name.
+Each tenant is a separate NATS account, and an account is its own subject
+namespace, so the same subject string in two accounts is two different
+subjects. Isolation is enforced by the server against the connection's
+credentials, not by a prefix an engine could get wrong or forge.
+
+That is why no `<tenant>` appears in the table below. An engine never spells
+its tenant and could not reach another one by spelling it differently: its
+credentials place it in exactly one account, and its permissions within that
+account are further limited to its own tier.
 
 | Subject                        | Direction        | Message              |
 | ------------------------------ | ---------------- | -------------------- |

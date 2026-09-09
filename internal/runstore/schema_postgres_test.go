@@ -37,7 +37,7 @@ func TestPostgresSchemaHasEveryTable(t *testing.T) {
 		"run_events", "blob_refs", "principals", "tokens",
 		"pipelines", "revisions", "catalog_entries", "cache_entries",
 		"policy_audit", "artifact_signatures",
-		"plugin_upstreams", "plugin_mirrors",
+		"plugin_upstreams", "plugin_mirrors", "tenants",
 	} {
 		var exists bool
 		require.NoError(t, conn.QueryRow(ctx,
