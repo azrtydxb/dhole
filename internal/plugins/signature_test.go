@@ -33,7 +33,7 @@ import (
 // same migration runner, so the schema has one definition.
 func newSignatures(t *testing.T) plugins.Signatures {
 	t.Helper()
-	s, err := plugins.NewSignatures(filepath.Join(t.TempDir(), "dhole.db"))
+	s, err := plugins.NewSQLiteSignatures(filepath.Join(t.TempDir(), "dhole.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
@@ -340,7 +340,7 @@ func TestSignaturesRejectAnEmptyTenant(t *testing.T) {
 func TestStorageFailureDeniesRatherThanAdmits(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dhole.db")
-	sigs, err := plugins.NewSignatures(path)
+	sigs, err := plugins.NewSQLiteSignatures(path)
 	require.NoError(t, err)
 
 	d := digestOf("stored, then unreachable")
@@ -553,7 +553,7 @@ func insertRawSignature(t *testing.T, path, tenantID string, d *dholev1.Digest, 
 func TestStoredRecordWithAnUnknownSourceDenies(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dhole.db")
-	sigs, err := plugins.NewSignatures(path)
+	sigs, err := plugins.NewSQLiteSignatures(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sigs.Close() })
 
@@ -572,7 +572,7 @@ func TestStoredRecordWithAnUnknownSourceDenies(t *testing.T) {
 func TestStoredCosignRecordWithAMalformedPayloadDenies(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dhole.db")
-	sigs, err := plugins.NewSignatures(path)
+	sigs, err := plugins.NewSQLiteSignatures(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sigs.Close() })
 
@@ -589,7 +589,7 @@ func TestStoredCosignRecordWithAMalformedPayloadDenies(t *testing.T) {
 func TestStoredCosignRecordMustMatchItsOwnCertificate(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dhole.db")
-	sigs, err := plugins.NewSignatures(path)
+	sigs, err := plugins.NewSQLiteSignatures(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sigs.Close() })
 
