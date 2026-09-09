@@ -112,6 +112,11 @@ func runLocally(
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(stateDir, "dhole.db"),
 		BlobRoot: stateDir,
+		// No contract on this one. `dhole local run` runs one pipeline and
+		// exits; a listener on the well-known port would collide with the
+		// `dhole serve` the developer already has up, and nobody could reach
+		// this plane in the seconds it exists anyway.
+		NoAPI: true,
 	})
 	if err != nil {
 		return localResult{}, err

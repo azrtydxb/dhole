@@ -25,8 +25,9 @@ import (
 // same control plane and puts it in front of somebody else's Postgres, NATS
 // and engines.
 func serveCmd(o *options) *cobra.Command {
-	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint string
-	var otlpInsecure bool
+	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr string
+	var otlpInsecure, noAPI bool
+	var apiOrigins []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "run the control plane",
@@ -61,6 +62,10 @@ func serveCmd(o *options) *cobra.Command {
 				BlobRoot: blobRoot,
 
 				DeploymentID: deploymentID,
+
+				APIAddr:           apiAddr,
+				NoAPI:             noAPI,
+				APIAllowedOrigins: apiOrigins,
 			})
 			if err != nil {
 				return err
@@ -76,8 +81,23 @@ func serveCmd(o *options) *cobra.Command {
 			if err := srv.Start(ctx); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(o.env.Stdout, "dhole %s (%s): %s control plane, bus %s\n",
-				version.Version(), version.Commit(), mode, srv.BusURL())
+			_, _ = fmt.Fprintf(o.env.Stdout, "dhole %s (%s): %s control plane, bus %s, API %s\n",
+				version.Version(), version.Commit(), mode, srv.BusURL(), apiEndpoint(srv))
+
+			// The bootstrap credential, once, at the moment it is minted.
+			//
+			// This API has no unauthenticated call, so a plane that printed
+			// nothing here would be a plane its own operator cannot reach —
+			// and the pressure that creates is how a control plane ends up
+			// with an anonymous mode "just until it is configured". It goes
+			// to stdout because that is where the person who just started it
+			// by hand is looking, and to a 0600 file beside the database
+			// because that is what a supervised process leaves for a script.
+			if token := srv.BootstrapToken(); token != "" {
+				_, _ = fmt.Fprintf(o.env.Stdout,
+					"bootstrap credential (valid %s, also written to %s):\n  export DHOLE_TOKEN=%s\n",
+					server.BootstrapTTL(), filepath.Join(blobRoot, server.BootstrapTokenFile), token)
+			}
 
 			<-ctx.Done()
 
@@ -104,7 +124,25 @@ func serveCmd(o *options) *cobra.Command {
 		"OTLP collector address for traces and metrics; unset means telemetry goes nowhere")
 	flags.BoolVar(&otlpInsecure, "otlp-insecure", false,
 		"send to the OTLP collector without TLS")
+	flags.StringVar(&apiAddr, "api-addr", envOr("DHOLE_API_ADDR", server.DefaultAPIAddr),
+		"address to serve the API on; the one contract the GUI, the CLI and agents share")
+	flags.BoolVar(&noAPI, "no-api", false,
+		"serve no API at all; the CLI and the web client then have nothing to talk to")
+	flags.StringArrayVar(&apiOrigins, "api-allowed-origin", nil,
+		"browser origin allowed to make cross-origin API calls; repeatable, and none by default")
 	return cmd
+}
+
+// apiEndpoint is the API address as a URL a person can paste into --server,
+// or a plain statement that there is none. A plane whose contract is switched
+// off has to SAY so: "API " followed by nothing reads as a formatting bug and
+// sends the reader looking in the wrong place.
+func apiEndpoint(srv *server.Server) string {
+	addr := srv.APIAddr()
+	if addr == "" {
+		return "not served (--no-api)"
+	}
+	return "http://" + addr
 }
 
 // versionCmd names this build. A binary must always be able to identify itself

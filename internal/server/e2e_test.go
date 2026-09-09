@@ -89,6 +89,9 @@ func startEmbedded(ctx context.Context, t *testing.T) *server.Server {
 	t.Helper()
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
@@ -303,6 +306,9 @@ func TestSingleBinaryAndDistributedParity(t *testing.T) {
 	busURL := startExternalNATS(t)
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeDistributed,
 		StoreDSN: dsn,
 		BusURL:   busURL,
@@ -502,6 +508,9 @@ func TestStopEndsEverythingItStarted(t *testing.T) {
 
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
@@ -587,6 +596,9 @@ func dholeGoroutines() stacks {
 func TestStartBoundsItsOwnStartupWithoutADeadline(t *testing.T) {
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
@@ -621,6 +633,9 @@ func TestRunSubmittedBeforeAnyEngineExistsStillRuns(t *testing.T) {
 
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeDistributed,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BusURL:   busServer.URL(),
@@ -716,6 +731,9 @@ func TestRestartedPlaneRediscoversAWaitingRun(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeDistributed,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BusURL:   busServer.URL(),
@@ -793,6 +811,9 @@ func TestEngineThatStartedBeforeThePlaneBecomesVisible(t *testing.T) {
 	time.Sleep(2 * engine.HeartbeatInterval)
 
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeDistributed,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BusURL:   busServer.URL(),

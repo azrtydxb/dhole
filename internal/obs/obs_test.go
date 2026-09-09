@@ -355,6 +355,9 @@ func startEmbedded(ctx context.Context, t *testing.T) *server.Server {
 	dir, err := os.MkdirTemp("", "dhole-obs-")
 	require.NoError(t, err)
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
