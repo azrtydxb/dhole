@@ -10,7 +10,7 @@ stringData:
   # Test-only credentials for a database reachable only inside the cluster
   # and through an explicit port-forward. Nothing real is stored here.
   POSTGRES_USER: dhole
-  POSTGRES_PASSWORD: dhole-test-only
+  POSTGRES_PASSWORD: dholetestsecret
   POSTGRES_DB: dhole
 ---
 apiVersion: apps/v1

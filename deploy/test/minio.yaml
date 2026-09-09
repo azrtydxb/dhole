@@ -10,7 +10,7 @@ type: Opaque
 stringData:
   # Test-only credentials; see the note in postgres.yaml.
   MINIO_ROOT_USER: dholetest
-  MINIO_ROOT_PASSWORD: dhole-test-only
+  MINIO_ROOT_PASSWORD: dholetestsecret
 ---
 apiVersion: apps/v1
 kind: Deployment

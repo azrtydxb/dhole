@@ -33,10 +33,10 @@ kubectl -n dhole-test port-forward svc/minio    59000:9000 &
 Then:
 
 ```sh
-export DHOLE_TEST_POSTGRES_DSN='postgres://dhole:dhole-test-only@localhost:55432/dhole?sslmode=disable'
+export DHOLE_TEST_POSTGRES_DSN='postgres://dhole:dholetestsecret@localhost:55432/dhole?sslmode=disable'
 export DHOLE_TEST_S3_ENDPOINT='http://localhost:59000'
 export DHOLE_TEST_S3_ACCESS_KEY=dholetest
-export DHOLE_TEST_S3_SECRET_KEY=dhole-test-only
+export DHOLE_TEST_S3_SECRET_KEY=dholetestsecret
 make test-integration
 ```
 
@@ -52,7 +52,9 @@ kubectl delete namespace dhole-test
 
 ## On the credentials in these files
 
-They are literal, committed, and test-only. The services hold nothing but
+They are literal, committed, test-only, and deliberately identical to the
+defaults in `docker-compose.test.yml`, so `make test-integration` needs no
+extra environment either way. The services hold nothing but
 what a test run just created, they are reachable only from inside the cluster
 or through an explicit port-forward, and every deployment here uses `emptyDir`
 — restarting a pod discards its data. Do not copy this pattern to anything
