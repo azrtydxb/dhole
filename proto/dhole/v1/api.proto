@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package dhole.v1;
 
+import "dhole/v1/common.proto";
+import "dhole/v1/engine.proto";
 import "dhole/v1/pipeline.proto";
 
 option go_package = "github.com/azrtydxb/dhole/gen/dhole/v1;dholev1";
@@ -49,6 +51,25 @@ message SetProperty {
   string value = 3;
 }
 
+// SetStepConfig sets or removes one value a step passes to its plugin.
+//
+// One key at a time, and not a whole map, so that every edit has an exact
+// inverse expressible as another SetStepConfig (ADR 0020): setting a key that
+// was absent inverts to removing it, setting one that had a value inverts to
+// restoring that value, and removing one inverts to setting it back.
+//
+// Removing a key that is not there is REFUSED, for the same reason removing an
+// edge that does not exist is: the "inverse" of a removal that removed nothing
+// would set a value the step never had, so undoing it would add something.
+message SetStepConfig {
+  string step_id = 1;
+  // The field name, as the plugin's input schema declares it.
+  string key = 2;
+  string value = 3;
+  // Remove the key instead of setting it. value is ignored.
+  bool remove = 4;
+}
+
 // Rename changes a step's display name.
 //
 // Any name is accepted, the empty one included: a name is a label and the id
@@ -71,6 +92,7 @@ message Operation {
     RemoveEdge remove_edge = 4;
     Rename rename = 5;
     RemoveStep remove_step = 6;
+    SetStepConfig set_step_config = 7;
   }
 }
 
@@ -267,6 +289,129 @@ message WatchRunResponse {
   int64 at_unix_nano = 7;
 }
 
+// GetPluginRequest asks the catalog what one published plugin declares.
+message GetPluginRequest {
+  // "namespace/name@version". A version is mandatory: dispatch resolves to an
+  // exact version and digest, so a floating reference has no meaning here.
+  string plugin_ref = 1;
+}
+
+// Plugin is a published type's declaration, as internal/catalog holds it.
+//
+// It reaches clients because a properties panel, an agent's tool discovery and
+// an editor's autocomplete are all the same question — what does this plugin
+// take? — and the answer has one source (ADR 0012). Before this RPC the
+// browser could not ask it at all, and rendered whatever schema the DEFINITION
+// happened to carry inline, which is a copy of the declaration free to be
+// stale.
+message Plugin {
+  // The canonical reference, "namespace/name@version".
+  string ref = 1;
+  string namespace = 2;
+  string name = 3;
+  string version = 4;
+  Digest digest = 5;
+  // step, trigger or engine.
+  string kind = 6;
+  EffectClass effect_class = 7;
+  repeated Capability capabilities = 8;
+  // JSON Schema source, as the plugin author published it. Empty when the
+  // plugin declares none.
+  string input_schema = 9;
+  string output_schema = 10;
+  // Executor kinds that can run it, e.g. "process", "container".
+  repeated string engine_types = 11;
+}
+
+// GetPluginResponse is that declaration.
+message GetPluginResponse {
+  Plugin plugin = 1;
+}
+
+// CancelRunRequest stops a run.
+//
+// Cancellation is a control-plane act with an engine-side half: the run is
+// closed in its own log, and every engine holding one of its steps is told to
+// stop, because a sandbox nobody asked to stop keeps burning the capacity the
+// cancellation was meant to free.
+message CancelRunRequest {
+  string run_id = 1;
+  // Recorded on the run's log. Free text, and it is what an operator reads
+  // months later when asking why a run stopped.
+  string reason = 2;
+}
+
+// CancelledStep is one in-flight attempt cancellation reached.
+message CancelledStep {
+  string step_id = 1;
+  uint32 attempt = 2;
+  // The engine that was holding it and was told to stop.
+  string engine_id = 3;
+}
+
+// CancelRunResponse is what the cancellation reached. An empty steps list
+// means the run held nothing in flight, which is the normal case for a run
+// that was waiting rather than running.
+message CancelRunResponse {
+  string run_id = 1;
+  repeated CancelledStep steps = 2;
+}
+
+// Engine is one live engine instance as the control plane currently sees it.
+// It is the registry's view (internal/registry.Instance) on the wire.
+message Engine {
+  string id = 1;
+  // registering, ready, draining. A gone instance is not in the fleet.
+  string state = 2;
+  repeated Capability capabilities = 3;
+  string os = 4;
+  string arch = 5;
+  uint32 slots = 6;
+  repeated uint32 protocol_versions = 7;
+  // What the engine's last heartbeat said it was holding.
+  repeated InFlight in_flight = 8;
+}
+
+// ListEnginesRequest asks for the caller's tenant's fleet. It carries no
+// tenant: the tenant comes from the credential, as it does everywhere here.
+message ListEnginesRequest {}
+
+// ListEnginesResponse is the live fleet, by engine id.
+message ListEnginesResponse {
+  repeated Engine engines = 1;
+}
+
+// DrainEngineRequest stops new work reaching one engine.
+message DrainEngineRequest {
+  string engine_id = 1;
+}
+
+// DrainEngineResponse is the instance as it now stands, or unset when the
+// registry no longer holds it — an operator draining from a list a few seconds
+// old is the normal case, and the engine being gone already is the outcome
+// they wanted.
+message DrainEngineResponse {
+  Engine engine = 1;
+}
+
+// EngineService is the fleet, on the same contract as everything else.
+//
+// It exists because the CLI shipped `engine list` and `engine drain` as
+// commands that refused: they could each have read internal/registry directly,
+// and that is exactly what must not happen. A CLI able to list engines while
+// the GUI and an agent cannot is the same failure as a GUI-only endpoint seen
+// from the other side (ADR 0013).
+//
+// Every RPC is authenticated and tenant-scoped, like PipelineService's.
+service EngineService {
+  // ListEngines is the live fleet for the caller's tenant.
+  rpc ListEngines(ListEnginesRequest) returns (ListEnginesResponse);
+  // DrainEngine stops new work reaching an engine while it finishes what it
+  // holds. It kills nothing: a drain that interrupted running work would make
+  // every rolling upgrade an outage.
+  rpc DrainEngine(DrainEngineRequest) returns (DrainEngineResponse);
+}
+
 // PipelineService is the one API contract. The GUI has no privileged
 // endpoints: it is one client of this service among the CLI and agents
 // (ADR 0013). Every RPC is authenticated and tenant-scoped — the tenant comes
@@ -286,6 +431,10 @@ service PipelineService {
   // Plan is a dry run: what would execute, what is a cache hit, and which
   // engine each step lands on.
   rpc Plan(PlanRequest) returns (PlanResponse);
+  // GetPlugin returns what one published plugin declares, which is what a
+  // properties panel renders, an agent discovers tools from and an editor
+  // completes against.
+  rpc GetPlugin(GetPluginRequest) returns (GetPluginResponse);
   // ListRevisions returns a pipeline's revision history.
   rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
   // ApproveRevision promotes a revision to active.
@@ -294,4 +443,7 @@ service PipelineService {
   rpc StartRun(StartRunRequest) returns (StartRunResponse);
   // WatchRun streams a run's event log.
   rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse);
+  // CancelRun stops a run and tells every engine holding one of its steps to
+  // stop too.
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
 }

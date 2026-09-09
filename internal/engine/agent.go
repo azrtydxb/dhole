@@ -88,6 +88,9 @@ type Agent struct {
 	// slots is the concurrency bound, taken before a dispatch is fetched so
 	// the engine never holds an unacknowledged message it has no room to run.
 	slots chan struct{}
+	// jobs is what is running right now, so a Cancel on this engine's control
+	// subject can reach the sandbox rather than only the bookkeeping.
+	jobs *running
 }
 
 // New validates cfg and returns an agent that has not started.
@@ -113,6 +116,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg:      cfg,
 		registry: newRegistryClient(cfg),
 		slots:    make(chan struct{}, cfg.Slots),
+		jobs:     newRunning(),
 	}, nil
 }
 
@@ -128,6 +132,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// The inbound path, before any dispatch is pulled: an engine that took
+	// work before it could be told to stop has a window in which a cancel is
+	// published to nobody.
+	stopControl, err := a.watchControl(ctx)
+	if err != nil {
+		return err
+	}
+	defer stopControl()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -293,11 +306,29 @@ func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobSta
 	// declares it on every heartbeat until the terminal status.
 	key := a.registry.hold(d)
 	defer a.registry.release(key)
+
+	// A context of this job's own, so a Cancel naming this attempt stops this
+	// attempt and nothing else. It is derived from the pump's context, so a
+	// shutdown still stops everything.
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.jobs.add(key, d.GetFenceToken(), cancel)
+	defer a.jobs.remove(key)
+
 	if err := a.publish(ctx, d, a.phase(d, dholev1.Phase_PHASE_ACCEPTED)); err != nil {
 		return a.failure(d, "publishing the accepted status: "+err.Error())
 	}
 
-	return a.execute(ctx, d)
+	status := a.execute(jobCtx, d)
+	// A job whose own context ended while the engine is still running is one
+	// somebody cancelled, and it is reported as cancelled rather than as a
+	// failure: a failure would be retried by its effect class, which is the
+	// opposite of what was asked for. The publish below uses the OUTER
+	// context, which is still live.
+	if jobCtx.Err() != nil && ctx.Err() == nil {
+		return a.phase(d, dholev1.Phase_PHASE_CANCELLED)
+	}
+	return status
 }
 
 // checkSecrets refuses a secret this engine could not redeem. The refusal names

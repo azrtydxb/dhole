@@ -21,6 +21,8 @@ import (
 const _ = connect.IsAtLeastVersion1_13_0
 
 const (
+	// EngineServiceName is the fully-qualified name of the EngineService service.
+	EngineServiceName = "dhole.v1.EngineService"
 	// PipelineServiceName is the fully-qualified name of the PipelineService service.
 	PipelineServiceName = "dhole.v1.PipelineService"
 )
@@ -33,6 +35,12 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// EngineServiceListEnginesProcedure is the fully-qualified name of the EngineService's ListEngines
+	// RPC.
+	EngineServiceListEnginesProcedure = "/dhole.v1.EngineService/ListEngines"
+	// EngineServiceDrainEngineProcedure is the fully-qualified name of the EngineService's DrainEngine
+	// RPC.
+	EngineServiceDrainEngineProcedure = "/dhole.v1.EngineService/DrainEngine"
 	// PipelineServiceCreatePipelineProcedure is the fully-qualified name of the PipelineService's
 	// CreatePipeline RPC.
 	PipelineServiceCreatePipelineProcedure = "/dhole.v1.PipelineService/CreatePipeline"
@@ -47,6 +55,9 @@ const (
 	PipelineServiceValidateProcedure = "/dhole.v1.PipelineService/Validate"
 	// PipelineServicePlanProcedure is the fully-qualified name of the PipelineService's Plan RPC.
 	PipelineServicePlanProcedure = "/dhole.v1.PipelineService/Plan"
+	// PipelineServiceGetPluginProcedure is the fully-qualified name of the PipelineService's GetPlugin
+	// RPC.
+	PipelineServiceGetPluginProcedure = "/dhole.v1.PipelineService/GetPlugin"
 	// PipelineServiceListRevisionsProcedure is the fully-qualified name of the PipelineService's
 	// ListRevisions RPC.
 	PipelineServiceListRevisionsProcedure = "/dhole.v1.PipelineService/ListRevisions"
@@ -59,7 +70,114 @@ const (
 	// PipelineServiceWatchRunProcedure is the fully-qualified name of the PipelineService's WatchRun
 	// RPC.
 	PipelineServiceWatchRunProcedure = "/dhole.v1.PipelineService/WatchRun"
+	// PipelineServiceCancelRunProcedure is the fully-qualified name of the PipelineService's CancelRun
+	// RPC.
+	PipelineServiceCancelRunProcedure = "/dhole.v1.PipelineService/CancelRun"
 )
+
+// EngineServiceClient is a client for the dhole.v1.EngineService service.
+type EngineServiceClient interface {
+	// ListEngines is the live fleet for the caller's tenant.
+	ListEngines(context.Context, *connect.Request[v1.ListEnginesRequest]) (*connect.Response[v1.ListEnginesResponse], error)
+	// DrainEngine stops new work reaching an engine while it finishes what it
+	// holds. It kills nothing: a drain that interrupted running work would make
+	// every rolling upgrade an outage.
+	DrainEngine(context.Context, *connect.Request[v1.DrainEngineRequest]) (*connect.Response[v1.DrainEngineResponse], error)
+}
+
+// NewEngineServiceClient constructs a client for the dhole.v1.EngineService service. By default, it
+// uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and sends
+// uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or
+// connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewEngineServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) EngineServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	engineServiceMethods := v1.File_dhole_v1_api_proto.Services().ByName("EngineService").Methods()
+	return &engineServiceClient{
+		listEngines: connect.NewClient[v1.ListEnginesRequest, v1.ListEnginesResponse](
+			httpClient,
+			baseURL+EngineServiceListEnginesProcedure,
+			connect.WithSchema(engineServiceMethods.ByName("ListEngines")),
+			connect.WithClientOptions(opts...),
+		),
+		drainEngine: connect.NewClient[v1.DrainEngineRequest, v1.DrainEngineResponse](
+			httpClient,
+			baseURL+EngineServiceDrainEngineProcedure,
+			connect.WithSchema(engineServiceMethods.ByName("DrainEngine")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// engineServiceClient implements EngineServiceClient.
+type engineServiceClient struct {
+	listEngines *connect.Client[v1.ListEnginesRequest, v1.ListEnginesResponse]
+	drainEngine *connect.Client[v1.DrainEngineRequest, v1.DrainEngineResponse]
+}
+
+// ListEngines calls dhole.v1.EngineService.ListEngines.
+func (c *engineServiceClient) ListEngines(ctx context.Context, req *connect.Request[v1.ListEnginesRequest]) (*connect.Response[v1.ListEnginesResponse], error) {
+	return c.listEngines.CallUnary(ctx, req)
+}
+
+// DrainEngine calls dhole.v1.EngineService.DrainEngine.
+func (c *engineServiceClient) DrainEngine(ctx context.Context, req *connect.Request[v1.DrainEngineRequest]) (*connect.Response[v1.DrainEngineResponse], error) {
+	return c.drainEngine.CallUnary(ctx, req)
+}
+
+// EngineServiceHandler is an implementation of the dhole.v1.EngineService service.
+type EngineServiceHandler interface {
+	// ListEngines is the live fleet for the caller's tenant.
+	ListEngines(context.Context, *connect.Request[v1.ListEnginesRequest]) (*connect.Response[v1.ListEnginesResponse], error)
+	// DrainEngine stops new work reaching an engine while it finishes what it
+	// holds. It kills nothing: a drain that interrupted running work would make
+	// every rolling upgrade an outage.
+	DrainEngine(context.Context, *connect.Request[v1.DrainEngineRequest]) (*connect.Response[v1.DrainEngineResponse], error)
+}
+
+// NewEngineServiceHandler builds an HTTP handler from the service implementation. It returns the
+// path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewEngineServiceHandler(svc EngineServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	engineServiceMethods := v1.File_dhole_v1_api_proto.Services().ByName("EngineService").Methods()
+	engineServiceListEnginesHandler := connect.NewUnaryHandler(
+		EngineServiceListEnginesProcedure,
+		svc.ListEngines,
+		connect.WithSchema(engineServiceMethods.ByName("ListEngines")),
+		connect.WithHandlerOptions(opts...),
+	)
+	engineServiceDrainEngineHandler := connect.NewUnaryHandler(
+		EngineServiceDrainEngineProcedure,
+		svc.DrainEngine,
+		connect.WithSchema(engineServiceMethods.ByName("DrainEngine")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/dhole.v1.EngineService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case EngineServiceListEnginesProcedure:
+			engineServiceListEnginesHandler.ServeHTTP(w, r)
+		case EngineServiceDrainEngineProcedure:
+			engineServiceDrainEngineHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedEngineServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedEngineServiceHandler struct{}
+
+func (UnimplementedEngineServiceHandler) ListEngines(context.Context, *connect.Request[v1.ListEnginesRequest]) (*connect.Response[v1.ListEnginesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.EngineService.ListEngines is not implemented"))
+}
+
+func (UnimplementedEngineServiceHandler) DrainEngine(context.Context, *connect.Request[v1.DrainEngineRequest]) (*connect.Response[v1.DrainEngineResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.EngineService.DrainEngine is not implemented"))
+}
 
 // PipelineServiceClient is a client for the dhole.v1.PipelineService service.
 type PipelineServiceClient interface {
@@ -77,6 +195,10 @@ type PipelineServiceClient interface {
 	// Plan is a dry run: what would execute, what is a cache hit, and which
 	// engine each step lands on.
 	Plan(context.Context, *connect.Request[v1.PlanRequest]) (*connect.Response[v1.PlanResponse], error)
+	// GetPlugin returns what one published plugin declares, which is what a
+	// properties panel renders, an agent discovers tools from and an editor
+	// completes against.
+	GetPlugin(context.Context, *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error)
 	// ListRevisions returns a pipeline's revision history.
 	ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error)
 	// ApproveRevision promotes a revision to active.
@@ -85,6 +207,9 @@ type PipelineServiceClient interface {
 	StartRun(context.Context, *connect.Request[v1.StartRunRequest]) (*connect.Response[v1.StartRunResponse], error)
 	// WatchRun streams a run's event log.
 	WatchRun(context.Context, *connect.Request[v1.WatchRunRequest]) (*connect.ServerStreamForClient[v1.WatchRunResponse], error)
+	// CancelRun stops a run and tells every engine holding one of its steps to
+	// stop too.
+	CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error)
 }
 
 // NewPipelineServiceClient constructs a client for the dhole.v1.PipelineService service. By
@@ -128,6 +253,12 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("Plan")),
 			connect.WithClientOptions(opts...),
 		),
+		getPlugin: connect.NewClient[v1.GetPluginRequest, v1.GetPluginResponse](
+			httpClient,
+			baseURL+PipelineServiceGetPluginProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("GetPlugin")),
+			connect.WithClientOptions(opts...),
+		),
 		listRevisions: connect.NewClient[v1.ListRevisionsRequest, v1.ListRevisionsResponse](
 			httpClient,
 			baseURL+PipelineServiceListRevisionsProcedure,
@@ -152,6 +283,12 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("WatchRun")),
 			connect.WithClientOptions(opts...),
 		),
+		cancelRun: connect.NewClient[v1.CancelRunRequest, v1.CancelRunResponse](
+			httpClient,
+			baseURL+PipelineServiceCancelRunProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("CancelRun")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -162,10 +299,12 @@ type pipelineServiceClient struct {
 	applyOperation  *connect.Client[v1.ApplyOperationRequest, v1.ApplyOperationResponse]
 	validate        *connect.Client[v1.ValidateRequest, v1.ValidateResponse]
 	plan            *connect.Client[v1.PlanRequest, v1.PlanResponse]
+	getPlugin       *connect.Client[v1.GetPluginRequest, v1.GetPluginResponse]
 	listRevisions   *connect.Client[v1.ListRevisionsRequest, v1.ListRevisionsResponse]
 	approveRevision *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
 	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
 	watchRun        *connect.Client[v1.WatchRunRequest, v1.WatchRunResponse]
+	cancelRun       *connect.Client[v1.CancelRunRequest, v1.CancelRunResponse]
 }
 
 // CreatePipeline calls dhole.v1.PipelineService.CreatePipeline.
@@ -193,6 +332,11 @@ func (c *pipelineServiceClient) Plan(ctx context.Context, req *connect.Request[v
 	return c.plan.CallUnary(ctx, req)
 }
 
+// GetPlugin calls dhole.v1.PipelineService.GetPlugin.
+func (c *pipelineServiceClient) GetPlugin(ctx context.Context, req *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error) {
+	return c.getPlugin.CallUnary(ctx, req)
+}
+
 // ListRevisions calls dhole.v1.PipelineService.ListRevisions.
 func (c *pipelineServiceClient) ListRevisions(ctx context.Context, req *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error) {
 	return c.listRevisions.CallUnary(ctx, req)
@@ -213,6 +357,11 @@ func (c *pipelineServiceClient) WatchRun(ctx context.Context, req *connect.Reque
 	return c.watchRun.CallServerStream(ctx, req)
 }
 
+// CancelRun calls dhole.v1.PipelineService.CancelRun.
+func (c *pipelineServiceClient) CancelRun(ctx context.Context, req *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error) {
+	return c.cancelRun.CallUnary(ctx, req)
+}
+
 // PipelineServiceHandler is an implementation of the dhole.v1.PipelineService service.
 type PipelineServiceHandler interface {
 	// CreatePipeline creates a pipeline and its first revision. Nothing else
@@ -229,6 +378,10 @@ type PipelineServiceHandler interface {
 	// Plan is a dry run: what would execute, what is a cache hit, and which
 	// engine each step lands on.
 	Plan(context.Context, *connect.Request[v1.PlanRequest]) (*connect.Response[v1.PlanResponse], error)
+	// GetPlugin returns what one published plugin declares, which is what a
+	// properties panel renders, an agent discovers tools from and an editor
+	// completes against.
+	GetPlugin(context.Context, *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error)
 	// ListRevisions returns a pipeline's revision history.
 	ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error)
 	// ApproveRevision promotes a revision to active.
@@ -237,6 +390,9 @@ type PipelineServiceHandler interface {
 	StartRun(context.Context, *connect.Request[v1.StartRunRequest]) (*connect.Response[v1.StartRunResponse], error)
 	// WatchRun streams a run's event log.
 	WatchRun(context.Context, *connect.Request[v1.WatchRunRequest], *connect.ServerStream[v1.WatchRunResponse]) error
+	// CancelRun stops a run and tells every engine holding one of its steps to
+	// stop too.
+	CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error)
 }
 
 // NewPipelineServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -276,6 +432,12 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("Plan")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServiceGetPluginHandler := connect.NewUnaryHandler(
+		PipelineServiceGetPluginProcedure,
+		svc.GetPlugin,
+		connect.WithSchema(pipelineServiceMethods.ByName("GetPlugin")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pipelineServiceListRevisionsHandler := connect.NewUnaryHandler(
 		PipelineServiceListRevisionsProcedure,
 		svc.ListRevisions,
@@ -300,6 +462,12 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("WatchRun")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServiceCancelRunHandler := connect.NewUnaryHandler(
+		PipelineServiceCancelRunProcedure,
+		svc.CancelRun,
+		connect.WithSchema(pipelineServiceMethods.ByName("CancelRun")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dhole.v1.PipelineService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case PipelineServiceCreatePipelineProcedure:
@@ -312,6 +480,8 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceValidateHandler.ServeHTTP(w, r)
 		case PipelineServicePlanProcedure:
 			pipelineServicePlanHandler.ServeHTTP(w, r)
+		case PipelineServiceGetPluginProcedure:
+			pipelineServiceGetPluginHandler.ServeHTTP(w, r)
 		case PipelineServiceListRevisionsProcedure:
 			pipelineServiceListRevisionsHandler.ServeHTTP(w, r)
 		case PipelineServiceApproveRevisionProcedure:
@@ -320,6 +490,8 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceStartRunHandler.ServeHTTP(w, r)
 		case PipelineServiceWatchRunProcedure:
 			pipelineServiceWatchRunHandler.ServeHTTP(w, r)
+		case PipelineServiceCancelRunProcedure:
+			pipelineServiceCancelRunHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -349,6 +521,10 @@ func (UnimplementedPipelineServiceHandler) Plan(context.Context, *connect.Reques
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.Plan is not implemented"))
 }
 
+func (UnimplementedPipelineServiceHandler) GetPlugin(context.Context, *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.GetPlugin is not implemented"))
+}
+
 func (UnimplementedPipelineServiceHandler) ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.ListRevisions is not implemented"))
 }
@@ -363,4 +539,8 @@ func (UnimplementedPipelineServiceHandler) StartRun(context.Context, *connect.Re
 
 func (UnimplementedPipelineServiceHandler) WatchRun(context.Context, *connect.Request[v1.WatchRunRequest], *connect.ServerStream[v1.WatchRunResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.WatchRun is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.CancelRun is not implemented"))
 }

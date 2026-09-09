@@ -114,9 +114,14 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		Advancer: s.sched,
 		Cache:    s.infra.cache,
 		Fleet:    s.fleet,
-		Catalog:  catalog.New(s.infra.db, s.infra.dialect),
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
+		Drain:    s.fleet,
+		// The plane's own bus connection, so a cancel travels the same way
+		// every dispatch does. An API reaching engines over a connection of
+		// its own would be a second control plane.
+		Control: api.NewBusControl(s.infra.plane),
+		Catalog: catalog.New(s.infra.db, s.infra.dialect),
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
 	}
 	// Assigned only when there is one. A nil executor.Executor stored in the
 	// interface field would be a non-nil interface holding nil, and Plan's

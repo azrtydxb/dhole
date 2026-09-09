@@ -220,6 +220,10 @@ func serverCommands() []struct {
 		succeeds bool
 	}{
 		{"pipeline create", []string{"pipeline", "create", "p2"}, true},
+		{"plugin get", []string{"plugin", "get", "acme/deploy@1.0.0"}, false},
+		{"engine list", []string{"engine", "list"}, false},
+		{"engine drain", []string{"engine", "drain", "e1"}, false},
+		{"run cancel", []string{"run", "cancel", "run_1"}, false},
 		{"pipeline get", []string{"pipeline", "get", "p1"}, true},
 		{"pipeline apply", []string{"pipeline", "apply", "p1", "--base", "rev_1", "--operation", operation}, false},
 		{"pipeline validate", []string{"pipeline", "validate", "p1"}, false},

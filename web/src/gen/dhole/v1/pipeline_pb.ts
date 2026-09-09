@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_pipeline: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUi+QEKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUiTgoERWRnZRIRCglmcm9tX3N0ZXAYASABKAkSEQoJZnJvbV9wb3J0GAIgASgJEg8KB3RvX3N0ZXAYAyABKAkSDwoHdG9fcG9ydBgEIAEoCSJ2CghQaXBlbGluZRIKCgJpZBgBIAEoCRIgCgZ0ZW5hbnQYAiABKAsyEC5kaG9sZS52MS5UZW5hbnQSHQoFc3RlcHMYAyADKAsyDi5kaG9sZS52MS5TdGVwEh0KBWVkZ2VzGAQgAygLMg4uZGhvbGUudjEuRWRnZUKOAQoMY29tLmRob2xlLnYxQg1QaXBlbGluZVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUi1AIKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUSKgoGY29uZmlnGAkgAygLMhouZGhvbGUudjEuU3RlcC5Db25maWdFbnRyeRotCgtDb25maWdFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIk4KBEVkZ2USEQoJZnJvbV9zdGVwGAEgASgJEhEKCWZyb21fcG9ydBgCIAEoCRIPCgd0b19zdGVwGAMgASgJEg8KB3RvX3BvcnQYBCABKAkidgoIUGlwZWxpbmUSCgoCaWQYASABKAkSIAoGdGVuYW50GAIgASgLMhAuZGhvbGUudjEuVGVuYW50Eh0KBXN0ZXBzGAMgAygLMg4uZGhvbGUudjEuU3RlcBIdCgVlZGdlcxgEIAMoCzIOLmRob2xlLnYxLkVkZ2VCjgEKDGNvbS5kaG9sZS52MUINUGlwZWxpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
     [file_dhole_v1_common],
   );
 
@@ -191,6 +191,26 @@ export type Step = Message<"dhole.v1.Step"> & {
    * @generated from field: dhole.v1.LeaseScope lease_scope = 8;
    */
   leaseScope: LeaseScope;
+
+  /**
+   * The values this step passes to its plugin, keyed by the field name the
+   * plugin's input schema declares.
+   *
+   * Strings, because that is what the schema-driven form produces and what a
+   * command line carries; a plugin whose field is a number declares it as one
+   * and the value is the text of that number. A typed value here would mean a
+   * second type system beside JSON Schema, disagreeing with it at the edges.
+   *
+   * It exists because a field a plugin declares could be rendered and
+   * validated and then had nowhere to go: set_property covers plugin_ref,
+   * effect_class and lease_scope, and nothing else on a Step could hold what
+   * the plugin actually takes. The map is part of the definition, so it is
+   * part of the content hash and therefore part of the cache key — two runs
+   * configured differently are two different pieces of work.
+   *
+   * @generated from field: map<string, string> config = 9;
+   */
+  config: { [key: string]: string };
 };
 
 /**

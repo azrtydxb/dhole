@@ -54,6 +54,21 @@ message Step {
   // LEASE_SCOPE_STEP: a fresh sandbox, which is the only safe default because
   // every other scope carries state a cache key cannot see.
   LeaseScope lease_scope = 8;
+  // The values this step passes to its plugin, keyed by the field name the
+  // plugin's input schema declares.
+  //
+  // Strings, because that is what the schema-driven form produces and what a
+  // command line carries; a plugin whose field is a number declares it as one
+  // and the value is the text of that number. A typed value here would mean a
+  // second type system beside JSON Schema, disagreeing with it at the edges.
+  //
+  // It exists because a field a plugin declares could be rendered and
+  // validated and then had nowhere to go: set_property covers plugin_ref,
+  // effect_class and lease_scope, and nothing else on a Step could hold what
+  // the plugin actually takes. The map is part of the definition, so it is
+  // part of the content hash and therefore part of the cache key — two runs
+  // configured differently are two different pieces of work.
+  map<string, string> config = 9;
 }
 
 // Edge connects one step's output port to another step's input port. The DAG

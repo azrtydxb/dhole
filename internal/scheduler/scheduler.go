@@ -896,7 +896,10 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			state.gated[e.StepID] = true
 		case RunFailed:
 			state.completed = true
-		case runstore.RunCompleted:
+		case runstore.RunCompleted, runstore.RunCancelled:
+			// A cancelled run is finished. It is folded in here rather than
+			// ignored because the alternative is a scheduler that keeps
+			// dispatching the steps a cancellation just told engines to stop.
 			state.completed = true
 		case StepUnschedulable:
 			reason, err := UnmarshalUnschedulable(e.Payload)

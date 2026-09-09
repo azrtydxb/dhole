@@ -23,6 +23,15 @@ import (
 // fight over a socket instead of testing anything.
 func startWithAPI(ctx context.Context, t *testing.T) *server.Server {
 	t.Helper()
+	srv, _ := startWithAPIIn(ctx, t)
+	return srv
+}
+
+// startWithAPIIn is startWithAPI, also returning the state directory — which
+// is where the plane's database is, and therefore the only way for a test to
+// publish into the catalog the plane serves. There is no PublishPlugin RPC.
+func startWithAPIIn(ctx context.Context, t *testing.T) (*server.Server, string) {
+	t.Helper()
 	dir := t.TempDir()
 	srv, err := server.New(server.Config{
 		Mode:     server.ModeEmbedded,
@@ -37,7 +46,7 @@ func startWithAPI(ctx context.Context, t *testing.T) *server.Server {
 		defer cancel()
 		require.NoError(t, srv.Stop(stopCtx))
 	})
-	return srv
+	return srv, dir
 }
 
 // apiClient is a REAL client of the served contract: the generated Connect
@@ -48,8 +57,13 @@ func apiClient(t *testing.T, srv *server.Server) dholev1connect.PipelineServiceC
 	t.Helper()
 	addr := srv.APIAddr()
 	require.NotEmpty(t, addr, "the plane is not listening for API calls")
-	return dholev1connect.NewPipelineServiceClient(&http.Client{Timeout: 30 * time.Second}, "http://"+addr)
+	return dholev1connect.NewPipelineServiceClient(httpClient(), "http://"+addr)
 }
+
+// httpClient is the transport every real client in this package uses. The
+// timeout is generous because WatchRun follows a run for as long as the run
+// lasts.
+func httpClient() *http.Client { return &http.Client{Timeout: 120 * time.Second} }
 
 // brokenPipeline has one edge pointing at a step that does not exist, so a
 // Validate that really reached internal/api and really ran the type checker

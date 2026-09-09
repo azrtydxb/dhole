@@ -203,6 +203,15 @@ func (o *options) client() dholev1connect.PipelineServiceClient {
 		newHTTPClient(), o.server, connect.WithInterceptors(bearer{token: o.token}))
 }
 
+// engineClient builds an EngineService client on the same server, with the
+// same credential. It is a second generated client rather than a second
+// notion of "the server": the contract declares two services and neither is
+// more the API than the other.
+func (o *options) engineClient() dholev1connect.EngineServiceClient {
+	return dholev1connect.NewEngineServiceClient(
+		newHTTPClient(), o.server, connect.WithInterceptors(bearer{token: o.token}))
+}
+
 // newHTTPClient is the transport every command shares. It is plain HTTP/1.1
 // with the default timeouts: the per-call deadline comes from --timeout, so a
 // second one here would only make the reason for a hang harder to find.

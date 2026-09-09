@@ -139,10 +139,10 @@ queue and unsent outbox rows are still owed.
 
 ## Still open
 
-An RPC that creates a pipeline from nothing — `ApplyOperation` needs a `base_revision`, so
-today the GUI cannot author a new pipeline without a back door — an identity service on the
-contract, the YAML surface for effect classes and taint, and wiring the scheduler's fair
-queue and per-pipeline budgets, which are built and tested but not yet called.
+An identity service on the contract; a way to PUBLISH a plugin, which today has no caller
+outside tests in the API, the CLI or the git mirror; the YAML surface for effect classes and
+taint; and wiring the scheduler's fair queue and per-pipeline budgets, which are built and
+tested but not yet called.
 
 ## Stack
 

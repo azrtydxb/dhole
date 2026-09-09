@@ -410,6 +410,10 @@ func fullPipeline() *dholev1.Pipeline {
 				Capabilities: []dholev1.Capability{dholev1.Capability_CAPABILITY_NETWORK},
 				Inputs:       []*dholev1.Port{{Name: "status", Type: blob("text/plain")}},
 				Outputs:      []*dholev1.Port{{Name: "done", Type: blob("text/plain")}},
+				// The values this step passes to its plugin. A map field is
+				// the one shape a YAML round trip is most likely to reorder
+				// or flatten, so the fixture carries more than one key.
+				Config: map[string]string{"target": "production", "region": "eu-west-1"},
 			},
 		},
 		Edges: []*dholev1.Edge{
@@ -557,7 +561,10 @@ func usedEnumValues(m protoreflect.Message, out map[string]bool) {
 				usedEnumValues(mv.Message(), out)
 				return true
 			})
-		case fd.Message() != nil:
+		// !fd.IsMap(), because fd.Message() of a map field is its synthetic
+		// entry type: a map of SCALARS would otherwise be read as a message
+		// and panic. The message-valued map is the case above.
+		case fd.Message() != nil && !fd.IsMap():
 			if m.Has(fd) {
 				usedEnumValues(m.Get(fd).Message(), out)
 			}

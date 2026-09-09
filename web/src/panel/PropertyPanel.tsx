@@ -7,21 +7,26 @@
  * field on this screen without a web release, or the schema has stopped being
  * the truth and the editor has become a second declaration of every plugin.
  *
- * WHERE THE SCHEMA COMES FROM, AND WHY IT IS NOT AN RPC. The contract has no
- * catalog RPC yet — PipelineService serves pipelines, runs and validation, and
- * internal/catalog is reachable only from inside the control plane. What does
- * reach the browser is the declaration the definition carries: a step's
- * structured input port carries its schema inline (`StructType.schema`,
- * pipeline.proto), which is the plugin's InputSchema as it arrived in the
- * document. That is what this panel renders. The day the contract grows a
- * catalog RPC, only `declarationOf` below changes.
+ * WHERE THE SCHEMA COMES FROM. The CATALOG, through GetPlugin: the panel asks
+ * the control plane what the plugin this step names declares, and renders
+ * that. It is the plugin's own InputSchema, read from the one place a plugin
+ * declares anything (ADR 0012), so republishing a plugin changes this screen
+ * without a web release and without the pipeline being re-authored.
  *
- * WHAT CAN BE SAVED IS NARROWER THAN WHAT IS SHOWN, AND SAYS SO. The editing
- * vocabulary is closed and small (ADR 0020): SetProperty covers plugin_ref,
- * effect_class and lease_scope, and `Step` has nowhere to store a plugin's
- * own input values. A declared field this panel cannot persist is therefore
- * rendered read-only with that reason attached. It is NOT hidden: a field
- * dropped because the editor cannot save it is a value the user can neither
+ * It falls back to the declaration the DEFINITION carries — a structured input
+ * port's inline `StructType.schema` — when the step names no published plugin:
+ * a step whose plugin_ref is a bare `command:` scheme resolves to nothing in
+ * the catalog, and dropping its declared fields would leave the person with an
+ * empty form for a step that plainly takes arguments. Which of the two was
+ * used is stated on screen rather than left to be inferred.
+ *
+ * WHAT IS SAVED, AND HOW. The editing vocabulary is closed and small (ADR
+ * 0020). Three of the fields on this form are step PROPERTIES — plugin_ref,
+ * effect_class and lease_scope — and travel as SetProperty; everything else
+ * the plugin declares is step CONFIG and travels as SetStepConfig, one key per
+ * operation, each with its own exact inverse. A field whose schema this editor
+ * cannot render is still shown, read-only, with that reason attached: a field
+ * dropped because the editor cannot draw it is a value the user can neither
  * set nor see is missing, and the run would use the plugin's default without
  * anyone having chosen it.
  */
@@ -38,6 +43,7 @@ import {
   type Diagnostic,
   type Diff,
   type Operation,
+  type Plugin,
 } from "../gen/dhole/v1/api_pb.js";
 import {
   EffectClassSchema,
@@ -78,11 +84,6 @@ const effectClassProperty = "effect_class";
 const leaseScopeProperty = "lease_scope";
 const settable = [pluginRefProperty, effectClassProperty, leaseScopeProperty];
 
-/** Why a declared field is on screen but not editable here. */
-const notStorable =
-  "no operation in the contract stores this value yet — SetProperty covers " +
-  `${settable.join(", ")} — so it is shown as the plugin declares it.`;
-
 /** enumNames reads an enum's declared value names off the GENERATED
  * descriptor. Typing the list here would be a second copy of the wire
  * contract, free to drift from it. */
@@ -98,17 +99,36 @@ function enumName(desc: DescEnum, number: number): string {
   return desc.values.find((value) => value.number === number)?.name ?? "";
 }
 
-/** declarationOf finds the plugin's input schema on the step.
- *
- * A step may declare several structured inputs; the first that carries a
- * schema is the one rendered, and any others are named in the note rather
- * than passed over in silence.
- */
-function declarationOf(step: Step | undefined): {
+/** Declaration is the schema being rendered and where it came from. */
+interface Declaration {
   readonly source: string;
+  /** "catalog" when the control plane answered, "definition" when the schema
+   * came off the step's own port, "" when there is none at all. */
+  readonly from: "" | "catalog" | "definition";
   readonly port: string;
   readonly others: readonly string[];
-} {
+}
+
+/** declarationOf is the plugin's input schema.
+ *
+ * The catalog is asked first and wins: it is what the plugin declares TODAY,
+ * while a schema inline on a port is a copy taken whenever the step was
+ * authored. A step may declare several structured inputs; when the fallback is
+ * used, the first that carries a schema is rendered and any others are named
+ * in the note rather than passed over in silence.
+ */
+function declarationOf(
+  step: Step | undefined,
+  published: Plugin | undefined,
+): Declaration {
+  if (published !== undefined && published.inputSchema !== "") {
+    return {
+      source: published.inputSchema,
+      from: "catalog",
+      port: "",
+      others: [],
+    };
+  }
   const carrying = (step?.inputs ?? []).filter((port) => {
     const kind = port.type?.kind;
     return kind?.case === "structured" && kind.value.schema !== "";
@@ -116,10 +136,11 @@ function declarationOf(step: Step | undefined): {
   const first = carrying[0];
   const kind = first?.type?.kind;
   if (first === undefined || kind?.case !== "structured") {
-    return { source: "", port: "", others: [] };
+    return { source: "", from: "", port: "", others: [] };
   }
   return {
     source: kind.value.schema,
+    from: "definition",
     port: first.name,
     others: carrying.slice(1).map((port) => port.name),
   };
@@ -159,8 +180,15 @@ function stepFields(declared: readonly Field[]): readonly Field[] {
   ];
 }
 
-/** pending is one proposed edit, in the contract's own vocabulary. */
+/** pending is one proposed edit, in the contract's own vocabulary.
+ *
+ * kind says WHICH operation carries it: a step property is SetProperty, and a
+ * value the plugin declares is SetStepConfig. They are separate operations
+ * because they are separate things — one is the step, the other is what the
+ * step passes to its plugin — and each has its own inverse.
+ */
 interface Pending {
+  readonly kind: "property" | "config";
   readonly property: string;
   readonly from: string;
   readonly to: string;
@@ -207,7 +235,23 @@ export function PropertyPanel({
   const pipeline = edited ?? loaded.data?.pipeline;
   const step = pipeline?.steps.find((candidate) => candidate.id === stepId);
 
-  const declaration = useMemo(() => declarationOf(step), [step]);
+  // What the plugin declares, from the catalog. `enabled` keeps the call out
+  // of the way for a step that names no plugin, and a failure is not
+  // surfaced as an error: a plugin_ref that is not a catalog reference — a
+  // bare `command:` scheme, say — is a legitimate step, and the fallback
+  // below is the right answer for it rather than a red panel.
+  const published = useQuery({
+    queryKey: ["plugin", step?.pluginRef ?? ""],
+    enabled: (step?.pluginRef ?? "") !== "",
+    retry: false,
+    queryFn: () =>
+      pipelineClient.getPlugin({ pluginRef: step?.pluginRef ?? "" }),
+  });
+
+  const declaration = useMemo(
+    () => declarationOf(step, published.data?.plugin),
+    [step, published.data],
+  );
 
   const parsed = useMemo(
     () =>
@@ -231,15 +275,20 @@ export function PropertyPanel({
   // must never look like a plugin that declares nothing.
   const schemaNote =
     declaration.source === ""
-      ? "this step declares no plugin input schema, so only the properties the " +
-        "contract itself defines are shown."
+      ? "no plugin declaration was found for this step — the catalog knows " +
+        "nothing of its plugin_ref and its ports carry no schema — so only " +
+        "the properties the contract itself defines are shown."
       : parsed !== undefined && "error" in parsed
         ? parsed.error
         : rendered !== undefined && "error" in rendered
           ? rendered.error
-          : declaration.others.length > 0
-            ? `rendering the schema on port "${declaration.port}"; ports ` +
-              `${declaration.others.join(", ")} also declare one and are not shown.`
+          : declaration.from === "definition"
+            ? "the catalog has no entry for this step's plugin_ref, so the " +
+              `schema on port "${declaration.port}" is being rendered instead` +
+              (declaration.others.length > 0
+                ? `; ports ${declaration.others.join(", ")} also declare one ` +
+                  "and are not shown."
+                : ".")
             : "";
 
   const fields = useMemo(() => {
@@ -253,7 +302,11 @@ export function PropertyPanel({
   const base: FormValues = useMemo(() => {
     const values: Record<string, string | number | boolean> = {};
     for (const field of fields) {
-      values[field.name] = field.fallback;
+      // What the step is configured with, falling back to what the schema
+      // says the plugin would use. Comparing against THIS is what keeps
+      // opening the panel and pressing save from writing every default the
+      // person never chose.
+      values[field.name] = step?.config[field.name] ?? field.fallback;
     }
     values[pluginRefProperty] = step?.pluginRef ?? "";
     values[effectClassProperty] = enumName(
@@ -286,11 +339,24 @@ export function PropertyPanel({
       const to = String(values[property] ?? "");
       const from = String(base[property] ?? "");
       if (to !== from) {
-        out.push({ property, from, to });
+        out.push({ kind: "property", property, from, to });
+      }
+    }
+    for (const field of fields) {
+      if (
+        settable.includes(field.name) ||
+        field.control.kind === "unsupported"
+      ) {
+        continue;
+      }
+      const to = String(values[field.name] ?? "");
+      const from = String(base[field.name] ?? "");
+      if (to !== from) {
+        out.push({ kind: "config", property: field.name, from, to });
       }
     }
     return out;
-  }, [base, values]);
+  }, [base, fields, values]);
 
   /** proposed is the definition as it would stand, so the control plane can
    * be asked about the RESULT rather than about what is saved now. */
@@ -305,6 +371,10 @@ export function PropertyPanel({
         return undefined;
       }
       for (const edit of pending) {
+        if (edit.kind === "config") {
+          target.config[edit.property] = edit.to;
+          continue;
+        }
         switch (edit.property) {
           case pluginRefProperty:
             target.pluginRef = edit.to;
@@ -391,18 +461,37 @@ export function PropertyPanel({
     const changes: Change[] = [];
     try {
       for (const edit of review.pending) {
-        const operation: Operation = {
-          $typeName: "dhole.v1.Operation",
-          kind: {
-            case: "setProperty",
-            value: {
-              $typeName: "dhole.v1.SetProperty",
-              stepId,
-              property: edit.property,
-              value: edit.to,
-            },
-          },
-        };
+        const operation: Operation =
+          edit.kind === "config"
+            ? {
+                $typeName: "dhole.v1.Operation",
+                kind: {
+                  case: "setStepConfig",
+                  value: {
+                    $typeName: "dhole.v1.SetStepConfig",
+                    stepId,
+                    key: edit.property,
+                    value: edit.to,
+                    // Clearing a field is REMOVING the key, not storing an
+                    // empty string: the two are different definitions and
+                    // therefore different cache keys, and only the removal
+                    // lets the plugin's own default apply again.
+                    remove: edit.to === "",
+                  },
+                },
+              }
+            : {
+                $typeName: "dhole.v1.Operation",
+                kind: {
+                  case: "setProperty",
+                  value: {
+                    $typeName: "dhole.v1.SetProperty",
+                    stepId,
+                    property: edit.property,
+                    value: edit.to,
+                  },
+                },
+              };
         const response = await pipelineClient.applyOperation({
           pipelineId,
           baseRevision: at,
@@ -477,13 +566,10 @@ export function PropertyPanel({
         }}
       >
         {fields.map((field) => {
-          const storable = settable.includes(field.name);
           const readOnly =
             field.control.kind === "unsupported"
               ? "declared, and not editable here."
-              : storable
-                ? undefined
-                : notStorable;
+              : undefined;
           const shown = attempted ? errors[field.name] : undefined;
           return (
             <SchemaField

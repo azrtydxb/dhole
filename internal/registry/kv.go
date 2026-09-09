@@ -68,6 +68,18 @@ type record struct {
 	// InFlight is how many jobs the last heartbeat declared. A draining engine
 	// is gone the moment this reaches zero.
 	InFlight int `json:"in_flight"`
+	// Jobs is WHICH jobs that heartbeat declared. The count above decides the
+	// drain; this decides where a cancellation is sent, which nothing else in
+	// the system can answer.
+	Jobs []job `json:"jobs,omitempty"`
+}
+
+// job is one in-flight attempt at rest.
+type job struct {
+	RunID      string `json:"run_id"`
+	StepID     string `json:"step_id"`
+	Attempt    uint32 `json:"attempt"`
+	FenceToken string `json:"fence_token"`
 }
 
 // New binds the engine bucket on conn for one tenant, creating it if it is not
@@ -158,6 +170,15 @@ func (k *KV) Heartbeat(ctx context.Context, h *dholev1.EngineHeartbeat) error {
 	}
 
 	rec.InFlight = len(h.GetInFlight())
+	rec.Jobs = make([]job, 0, rec.InFlight)
+	for _, held := range h.GetInFlight() {
+		rec.Jobs = append(rec.Jobs, job{
+			RunID:      held.GetRunId(),
+			StepID:     held.GetStepId(),
+			Attempt:    held.GetAttempt(),
+			FenceToken: held.GetFenceToken(),
+		})
+	}
 	switch rec.State {
 	case StateDraining:
 		// A drain finishes when the last job does, and not before. Nothing
@@ -292,8 +313,13 @@ func (r record) instance() Instance {
 	for _, c := range r.Capabilities {
 		caps = append(caps, dholev1.Capability(c))
 	}
+	jobs := make([]Job, 0, len(r.Jobs))
+	for _, held := range r.Jobs {
+		jobs = append(jobs, Job(held))
+	}
 	return Instance{
 		ID:               r.EngineID,
+		InFlight:         jobs,
 		State:            r.State,
 		Capabilities:     caps,
 		OS:               r.OS,

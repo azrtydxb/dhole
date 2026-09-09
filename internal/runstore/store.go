@@ -35,6 +35,12 @@ const (
 	// events that take a run out of the open-run index, and an index that knew
 	// only one of them would offer every failed run for advancement forever.
 	RunFailed EventType = "RUN_FAILED"
+	// RunCancelled closes a run somebody stopped. It lives here with the
+	// other two for the same reason: it takes the run out of the open-run
+	// index, and an index that did not know about it would offer a cancelled
+	// run for advancement forever — which would re-dispatch the very steps
+	// the cancellation asked engines to stop.
+	RunCancelled EventType = "RUN_CANCELLED"
 )
 
 // closesRun reports whether an event ends a run's life. It is the store's own
@@ -42,7 +48,7 @@ const (
 // on the append path: a writer that forgot to tell the store would leave a
 // finished run in the index or an open one out of it.
 func closesRun(t EventType) bool {
-	return t == RunCompleted || t == RunFailed
+	return t == RunCompleted || t == RunFailed || t == RunCancelled
 }
 
 // Event is one immutable entry in the log.

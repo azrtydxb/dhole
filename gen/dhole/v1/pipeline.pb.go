@@ -278,7 +278,22 @@ type Step struct {
 	// How long the sandbox this step runs in lives. Unspecified means
 	// LEASE_SCOPE_STEP: a fresh sandbox, which is the only safe default because
 	// every other scope carries state a cache key cannot see.
-	LeaseScope    LeaseScope `protobuf:"varint,8,opt,name=lease_scope,json=leaseScope,proto3,enum=dhole.v1.LeaseScope" json:"lease_scope,omitempty"`
+	LeaseScope LeaseScope `protobuf:"varint,8,opt,name=lease_scope,json=leaseScope,proto3,enum=dhole.v1.LeaseScope" json:"lease_scope,omitempty"`
+	// The values this step passes to its plugin, keyed by the field name the
+	// plugin's input schema declares.
+	//
+	// Strings, because that is what the schema-driven form produces and what a
+	// command line carries; a plugin whose field is a number declares it as one
+	// and the value is the text of that number. A typed value here would mean a
+	// second type system beside JSON Schema, disagreeing with it at the edges.
+	//
+	// It exists because a field a plugin declares could be rendered and
+	// validated and then had nowhere to go: set_property covers plugin_ref,
+	// effect_class and lease_scope, and nothing else on a Step could hold what
+	// the plugin actually takes. The map is part of the definition, so it is
+	// part of the content hash and therefore part of the cache key — two runs
+	// configured differently are two different pieces of work.
+	Config        map[string]string `protobuf:"bytes,9,rep,name=config,proto3" json:"config,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -367,6 +382,13 @@ func (x *Step) GetLeaseScope() LeaseScope {
 		return x.LeaseScope
 	}
 	return LeaseScope_LEASE_SCOPE_UNSPECIFIED
+}
+
+func (x *Step) GetConfig() map[string]string {
+	if x != nil {
+		return x.Config
+	}
+	return nil
 }
 
 // Edge connects one step's output port to another step's input port. The DAG
@@ -529,7 +551,7 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\x04kind\"B\n" +
 	"\x04Port\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
-	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\xc6\x02\n" +
+	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\xb5\x03\n" +
 	"\x04Step\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -540,7 +562,11 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\aoutputs\x18\x06 \x03(\v2\x0e.dhole.v1.PortR\aoutputs\x128\n" +
 	"\fcapabilities\x18\a \x03(\x0e2\x14.dhole.v1.CapabilityR\fcapabilities\x125\n" +
 	"\vlease_scope\x18\b \x01(\x0e2\x14.dhole.v1.LeaseScopeR\n" +
-	"leaseScope\"r\n" +
+	"leaseScope\x122\n" +
+	"\x06config\x18\t \x03(\v2\x1a.dhole.v1.Step.ConfigEntryR\x06config\x1a9\n" +
+	"\vConfigEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +
 	"\x04Edge\x12\x1b\n" +
 	"\tfrom_step\x18\x01 \x01(\tR\bfromStep\x12\x1b\n" +
 	"\tfrom_port\x18\x02 \x01(\tR\bfromPort\x12\x17\n" +
@@ -565,7 +591,7 @@ func file_dhole_v1_pipeline_proto_rawDescGZIP() []byte {
 	return file_dhole_v1_pipeline_proto_rawDescData
 }
 
-var file_dhole_v1_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_dhole_v1_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_dhole_v1_pipeline_proto_goTypes = []any{
 	(*BlobType)(nil),   // 0: dhole.v1.BlobType
 	(*StructType)(nil), // 1: dhole.v1.StructType
@@ -574,28 +600,30 @@ var file_dhole_v1_pipeline_proto_goTypes = []any{
 	(*Step)(nil),       // 4: dhole.v1.Step
 	(*Edge)(nil),       // 5: dhole.v1.Edge
 	(*Pipeline)(nil),   // 6: dhole.v1.Pipeline
-	(EffectClass)(0),   // 7: dhole.v1.EffectClass
-	(Capability)(0),    // 8: dhole.v1.Capability
-	(LeaseScope)(0),    // 9: dhole.v1.LeaseScope
-	(*Tenant)(nil),     // 10: dhole.v1.Tenant
+	nil,                // 7: dhole.v1.Step.ConfigEntry
+	(EffectClass)(0),   // 8: dhole.v1.EffectClass
+	(Capability)(0),    // 9: dhole.v1.Capability
+	(LeaseScope)(0),    // 10: dhole.v1.LeaseScope
+	(*Tenant)(nil),     // 11: dhole.v1.Tenant
 }
 var file_dhole_v1_pipeline_proto_depIdxs = []int32{
 	0,  // 0: dhole.v1.PortType.blob:type_name -> dhole.v1.BlobType
 	1,  // 1: dhole.v1.PortType.structured:type_name -> dhole.v1.StructType
 	2,  // 2: dhole.v1.Port.type:type_name -> dhole.v1.PortType
-	7,  // 3: dhole.v1.Step.effect_class:type_name -> dhole.v1.EffectClass
+	8,  // 3: dhole.v1.Step.effect_class:type_name -> dhole.v1.EffectClass
 	3,  // 4: dhole.v1.Step.inputs:type_name -> dhole.v1.Port
 	3,  // 5: dhole.v1.Step.outputs:type_name -> dhole.v1.Port
-	8,  // 6: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
-	9,  // 7: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
-	10, // 8: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
-	4,  // 9: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
-	5,  // 10: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	9,  // 6: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
+	10, // 7: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
+	7,  // 8: dhole.v1.Step.config:type_name -> dhole.v1.Step.ConfigEntry
+	11, // 9: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
+	4,  // 10: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
+	5,  // 11: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_pipeline_proto_init() }
@@ -614,7 +642,7 @@ func file_dhole_v1_pipeline_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_pipeline_proto_rawDesc), len(file_dhole_v1_pipeline_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

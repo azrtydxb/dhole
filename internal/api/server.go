@@ -125,8 +125,16 @@ type Config struct {
 	// Cache answers whether a step's work has been done before. Plan reads
 	// it and never writes it.
 	Cache CacheReader
-	// Fleet is the live engine registry a plan matches steps against.
+	// Fleet is the live engine registry a plan matches steps against, and
+	// that EngineService lists.
 	Fleet Fleet
+	// Drain stops new work reaching one engine. Optional: without one,
+	// DrainEngine says so rather than pretending.
+	Drain Drainer
+	// Control reaches an engine holding a step, which is what makes a
+	// cancellation stop the work rather than only the bookkeeping. Optional,
+	// with the same rule.
+	Control EngineControl
 	// Environment is where steps would run: the engine kind and the digest
 	// every cache key is computed against. An executor.Executor satisfies it.
 	Environment Environment
@@ -161,8 +169,11 @@ type Server struct {
 	heads Heads
 	cache CacheReader
 	fleet Fleet
-	env   Environment
-	cat   StepResolver
+	drain Drainer
+	// control is the one inbound path to an engine. See control.go.
+	control EngineControl
+	env     Environment
+	cat     StepResolver
 	// live and archive are the two copies of a step's log: the ephemeral
 	// subject and the durable object. See stream.go for why both exist.
 	live    LiveLogs
@@ -196,6 +207,8 @@ func NewServer(cfg Config) (*Server, error) {
 		heads:   cfg.Heads,
 		cache:   cfg.Cache,
 		fleet:   cfg.Fleet,
+		drain:   cfg.Drain,
+		control: cfg.Control,
 		env:     cfg.Environment,
 		cat:     cfg.Catalog,
 		live:    cfg.LiveLogs,
@@ -221,6 +234,9 @@ func NewServer(cfg Config) (*Server, error) {
 func (s *Server) Handler(opts ...connect.HandlerOption) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(dholev1connect.NewPipelineServiceHandler(s, opts...))
+	// The fleet, on the same mux and the same credential. A service declared
+	// in the contract and served from somewhere else would be a second API.
+	mux.Handle(dholev1connect.NewEngineServiceHandler(s, opts...))
 	// The two SSE streams a browser holds open. They are plain HTTP because
 	// EventSource speaks neither Connect nor gRPC, and they authenticate
 	// through the same Server.principal every RPC above uses (stream.go).
@@ -602,7 +618,7 @@ func (s *Server) runnableRevision(
 
 // terminal says whether an event ends the run, and so the stream.
 func terminal(t runstore.EventType) bool {
-	return t == runstore.RunCompleted || t == scheduler.RunFailed
+	return t == runstore.RunCompleted || t == scheduler.RunFailed || t == runstore.RunCancelled
 }
 
 // wireRevision is the store's revision as the wire carries it.
