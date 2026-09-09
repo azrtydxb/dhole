@@ -305,6 +305,31 @@ Interfaces: adds an open-run index to `runstore.Store`; scopes `outbox` claims; 
 - [ ] **Orphan re-dispatch is not expressible.** `lease.Expire` returns orphans, but `scheduler.plan` counts any step with `attempts > 0` as in flight forever and no event says an attempt died. Add the event and the sweeper that writes it.
 - [ ] **Two runs can share a sequence.** `run_events`'s primary key is `(tenant, run, step, attempt, sequence)`, so the per-tenant log has no single total order. Decide whether it needs one — the outbox and the run view both assume order somewhere — and either make the sequence per-tenant or document what it does order.
 
+## Task 15b: The cache is never consulted on a real run
+
+Files: `internal/scheduler/scheduler.go`, `internal/engine/agent.go`, `internal/cache/`
+Interfaces: the scheduler consults `cache.Lookup` before dispatching an eligible step, and records `cache.Record` when one succeeds.
+
+Task 15 is titled "Cache keys and skip-on-hit" and built the first half. The
+second half was never wired: `cache.Lookup` and `cache.Record` have exactly one
+caller between them, `api.Plan`, which is required to have no side effects. The
+scheduler calls only `cache.Eligible`, and only to record WHY a step is not
+cacheable on its dispatch event.
+
+So a real run executes every step, every time. `Plan` truthfully reports which
+steps would hit a cache that a run will never consult, which is worse than
+having no cache — the report says the work will be skipped and it is not.
+ADR 0009 makes the content-addressed cache a v1 core primitive. Found while
+building Task 44, whose `cache_hit` metric label is always false for this
+reason.
+
+- [ ] Write the failing test first: run the two-step pipeline twice against one store and require the second run to skip the first step and reuse its outputs. It must fail on the tree as it stands.
+- [ ] Consult `cache.Lookup` in the scheduler before dispatching a step that `cache.Eligible` accepts, and emit a STEP_SUCCEEDED-equivalent carrying the recorded outputs instead of a dispatch.
+- [ ] Record a successful eligible step's outputs with `cache.Record`, keyed by `cache.Key` over its resolved inputs, the environment identity and the lockfile.
+- [ ] A cached step must still produce the same run events a real one does, so the run view and the DAG cannot tell the difference — apart from the recorded cache hit.
+- [ ] Feed the real `cache_hit` into Task 44's `dhole_step_duration_seconds` label, replacing the constant false.
+- [ ] Never serve a hit for a step whose effect class is not PURE or whose lease scope is not step-scoped — `cache.Eligible` already decides this; call it, do not restate it.
+
 ## Task 19: Effect classes, retry and idempotency keys
 
 Files: `internal/effects/effects.go`, `internal/effects/retry.go`, `internal/effects/effects_test.go`

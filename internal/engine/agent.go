@@ -37,6 +37,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/executor"
+	"github.com/azrtydxb/dhole/internal/obs"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
 
@@ -239,7 +240,23 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 		return
 	}
 
+	// The span continues the RUN's trace, taken from the dispatch itself: the
+	// scheduler that sent this message is in another process, and a span
+	// started from a root here would be a second, disconnected trace of the
+	// same run (docs/wire-contract.md, "Trace context").
+	ctx, span := obs.StepSpan(obs.ContextFrom(ctx, &d), d.GetRunId(), d.GetStepId())
+	outcome, stepErr := obs.OutcomeFailed, error(nil)
+	// Deferred, so the span is ended on every path out of here — a failing
+	// step, a cancelled one, a panic. An unended span is never exported at
+	// all, which would lose exactly the attempts anyone goes looking for.
+	defer func() { obs.EndStepSpan(span, outcome, stepErr) }()
+
+	started := time.Now()
 	status := a.run(ctx, &d)
+	outcome, stepErr = outcomeOf(status)
+	// cache_hit is false because this step really executed: a step served from
+	// the cache is never dispatched to an engine at all.
+	obs.RecordStepDuration(ctx, d.GetTenant().GetId(), time.Since(started), false, outcome)
 
 	// The ordering rule, and the reason this function is not shorter: the
 	// terminal status goes out first, and only a successful publish earns the
@@ -337,6 +354,11 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 		Stdout: sink.writer(dholev1.Stream_STREAM_STDOUT),
 		Stderr: sink.writer(dholev1.Stream_STREAM_STDERR),
 	})
+
+	// What the step's process tree actually consumed, straight from the
+	// sandbox that ran it. A backend that cannot measure reports nothing
+	// rather than a zero (see obs.RecordStepUsage).
+	obs.RecordStepUsage(ctx, tenantID, sandbox)
 
 	// The authoritative copy is finished here, before any terminal status can
 	// be published. Anyone who reads log_key off a status finds the whole log.
@@ -458,6 +480,26 @@ func (a *Agent) failure(d *dholev1.JobDispatch, message string) *dholev1.JobStat
 	status := a.phase(d, dholev1.Phase_PHASE_FAILED)
 	status.Error = message
 	return status
+}
+
+// outcomeOf reads a terminal status as the pair telemetry needs: the closed-set
+// outcome that is safe as a metric label, and the error the span records.
+func outcomeOf(status *dholev1.JobStatus) (string, error) {
+	var err error
+	if msg := status.GetError(); msg != "" {
+		err = errors.New(msg)
+	}
+	switch status.GetPhase() {
+	case dholev1.Phase_PHASE_SUCCEEDED:
+		return obs.OutcomeSucceeded, err
+	case dholev1.Phase_PHASE_CANCELLED:
+		return obs.OutcomeCancelled, err
+	case dholev1.Phase_PHASE_UNSPECIFIED, dholev1.Phase_PHASE_ACCEPTED,
+		dholev1.Phase_PHASE_RUNNING, dholev1.Phase_PHASE_FAILED:
+		return obs.OutcomeFailed, err
+	default:
+		return obs.OutcomeFailed, err
+	}
 }
 
 // logKeyFor names the authoritative log under the dispatch's output prefix, per
