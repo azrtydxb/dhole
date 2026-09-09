@@ -17,6 +17,9 @@ DHOLE_TEST_OCI_REGISTRY   ?= 127.0.0.1:55000
 # tool walks into them; they are neither ours to format nor ours to lint.
 GO_PKGS     := $(shell go list ./... | grep -v '/web/')
 GO_DIRS     := $(shell find . -name '*.go' -not -path './web/*' -exec dirname {} \; | sort -u)
+# A kubeconfig for a cluster the Kubernetes executor may create and delete pods
+# in. It creates and destroys its own namespace; unset, its tests skip.
+DHOLE_TEST_KUBECONFIG     ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
 .PHONY: check web-check web-e2e test test-integration build clean
@@ -72,6 +75,8 @@ test-integration:
 	DHOLE_TEST_POSTGRES_DSN='$(DHOLE_TEST_POSTGRES_DSN)' \
 	DHOLE_TEST_OCI_REGISTRY=$(DHOLE_TEST_OCI_REGISTRY) \
 	go test $(GO_PKGS) -tags=integration
+	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
+	go test ./... -tags=integration
 
 ## build: the single binary, stamped with its version and commit.
 build:

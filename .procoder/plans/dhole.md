@@ -579,12 +579,34 @@ Interfaces: produces `containerd.New(cfg containerd.Config) (executor.Executor, 
 Files: `internal/executor/kubernetes/kubernetes.go`, `internal/executor/kubernetes/kubernetes_test.go`
 Interfaces: produces `kubernetes.New(cfg kubernetes.Config) (executor.Executor, error)`; `Config{Kubeconfig, Namespace string; ServiceAccount string; PodTemplate *corev1.PodSpec}`.
 
-- [ ] Write `internal/executor/kubernetes/kubernetes_test.go` calling `executorContract` as `TestKubernetesExecutorContract` against a kind cluster from `DHOLE_TEST_KUBECONFIG`, skipping when unset. Run — expect FAIL with "undefined: kubernetes.New".
-- [ ] Add `TestPodPerStepLeaseIsDeletedOnRelease` asserting no pod remains after `Release` for a `LeaseStep` sandbox.
-- [ ] Add `TestPipelineLeaseReusesOnePodAcrossSteps` asserting two `Exec` calls under one `LeasePipeline` sandbox run in the same pod.
-- [ ] Add `TestPodEvictionSurfacesAsStepFailureNotSuccess` asserting a deleted pod mid-exec yields a non-zero exit and an error mentioning eviction.
-- [ ] Implement `internal/executor/kubernetes/kubernetes.go` with `client-go`, creating pods from the template, attaching via the exec subresource, and cleaning up on release with a finalizer-free delete.
-- [ ] Add a kind cluster to CI and run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/executor/kubernetes/kubernetes_test.go` calling `executorContract` as `TestKubernetesExecutorContract` against a kind cluster from `DHOLE_TEST_KUBECONFIG`, skipping when unset. Run — expect FAIL with "undefined: kubernetes.New".
+- [x] Add `TestPodPerStepLeaseIsDeletedOnRelease` asserting no pod remains after `Release` for a `LeaseStep` sandbox.
+- [x] Add `TestPipelineLeaseReusesOnePodAcrossSteps` asserting two `Exec` calls under one `LeasePipeline` sandbox run in the same pod.
+- [x] Add `TestPodEvictionSurfacesAsStepFailureNotSuccess` asserting a deleted pod mid-exec yields a non-zero exit and an error mentioning eviction.
+- [x] Implement `internal/executor/kubernetes/kubernetes.go` with `client-go`, creating pods from the template, attaching via the exec subresource, and cleaning up on release with a finalizer-free delete.
+- [x] Add a kind cluster to CI and run `make test-integration` — expect PASS. Commit.
+
+## Task 37b: Environment identity belongs to the sandbox, not the executor
+
+Files: `internal/executor/executor.go`, `internal/executor/executortest/contract.go`, `internal/executor/kubernetes/`, `internal/executor/process/`, `internal/cache/`, `internal/scheduler/`
+Interfaces: moves `EnvironmentIdentity()` from `executor.Executor` to the sandbox, or returns it from `Acquire`.
+
+Task 37 was the first real test of ADR 0006's claim that the executor
+interface is not Docker-shaped, and the claim held: the Kubernetes backend
+passes the identical `executortest.Contract` the process backend does, with
+nothing weakened or excused. It found one genuine mismatch.
+
+`EnvironmentIdentity()` is a method on the EXECUTOR, but the image is on the
+`Spec`. For a container backend, identity is a property of *(executor, spec)*
+— so one Kubernetes executor running several different images reports the
+digest of its configured template, and a cache key would describe the
+template rather than the step's actual image. Task 37 honours `Spec.Image`
+for the pod and documents the limitation on the method rather than bending
+the interface to hide it.
+
+- [ ] Move environment identity to where the image actually is: a `Sandbox.EnvironmentIdentity()`, or an identity returned from `Acquire`. Update `cache.Key`'s caller so the key describes the image a step really ran under.
+- [ ] Write the failing test first: one Kubernetes executor, two steps with different images, must produce different cache keys. It must fail on the tree as it stands.
+- [ ] The contract's 2s SIGTERM window is a local-process budget; a remote backend spends ~80ms per exec round trip and has far less headroom. Decide whether the contract should scale that per backend, or stay strict deliberately.
 
 ## Task 38: Lease scopes, warm pools and lazy image pull
 
