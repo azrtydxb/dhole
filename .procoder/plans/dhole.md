@@ -461,35 +461,35 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
 - [ ] **`policy.Input` carries no taint keys.** Task 51's `taint.Check` returns a `policy.Decision` but builds it itself, because `internal/policy` was a concurrent task's file. Add the taint fields to `policy.Input` and the CEL environment so an operator can write a taint rule instead of relying on the four built-in ones. Found building Task 51.
-- [ ] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
+- [x] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
 - [x] **`dhole serve` does not serve the API.** `internal/server` assembles the bus, scheduler, outbox
-  and an engine, and never calls `api.Server`'s handler — nothing in `cmd/` or `internal/server` imports
-  `internal/api` at all. So the binary runs a control plane with no contract on it: the CLI has nothing to
-  talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
-  the server, and delete `web/e2e/fixture/main.go`, which says in its own header that it exists only until
-  this is fixed. Found building Task 46.
+      and an engine, and never calls `api.Server`'s handler — nothing in `cmd/` or `internal/server` imports
+      `internal/api` at all. So the binary runs a control plane with no contract on it: the CLI has nothing to
+      talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
+      the server, and delete `web/e2e/fixture/main.go`, which says in its own header that it exists only until
+      this is fixed. Found building Task 46.
 - [ ] **`PipelineService` has no catalog RPC.** The browser cannot read a plugin's
-  `catalog.Manifest.InputSchema`, so Task 47's panel renders the declaration the DEFINITION carries — the
-  step's structured input port's inline schema — instead. One function, `declarationOf()`, is what changes
-  when a catalog RPC lands. Found building Task 47.
+      `catalog.Manifest.InputSchema`, so Task 47's panel renders the declaration the DEFINITION carries — the
+      step's structured input port's inline schema — instead. One function, `declarationOf()`, is what changes
+      when a catalog RPC lands. Found building Task 47.
 - [ ] **A step has nowhere to store its plugin's input values.** `SetProperty` accepts only `plugin_ref`,
-  `effect_class` and `lease_scope`, so a field a plugin declares can be rendered and validated but not
-  persisted; the panel shows those fields with that reason attached rather than hiding them. Add a step
-  config field, or extend `SetProperty` over plugin inputs. Found building Task 47.
+      `effect_class` and `lease_scope`, so a field a plugin declares can be rendered and validated but not
+      persisted; the panel shows those fields with that reason attached rather than hiding them. Add a step
+      config field, or extend `SetProperty` over plugin inputs. Found building Task 47.
 - [ ] **No RPC creates a pipeline from scratch.** `ApplyOperation` requires an existing
-  `base_revision`, so a brand-new pipeline cannot be created through the contract at all — both Task 46 and
-  Task 48 had to seed one through a fixture-only HTTP route. That is a hole in ADR 0013 exactly where it
-  matters: the GUI cannot create a pipeline without a back door. Add `CreatePipeline`, or let
-  `ApplyOperation` accept an empty base for a new id. Found independently by Tasks 46 and 48.
+      `base_revision`, so a brand-new pipeline cannot be created through the contract at all — both Task 46 and
+      Task 48 had to seed one through a fixture-only HTTP route. That is a hole in ADR 0013 exactly where it
+      matters: the GUI cannot create a pipeline without a back door. Add `CreatePipeline`, or let
+      `ApplyOperation` accept an empty base for a new id. Found independently by Tasks 46 and 48.
 - [x] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
-  there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
-  tenant, not only whatever a plane prints at startup. Found building Task 48.
+      there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
+      tenant, not only whatever a plane prints at startup. Found building Task 48.
 - [ ] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and
-  `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
-  ready steps are still dispatched inline, and no per-pipeline cap is enforced. Wire them — enqueue ready
-  steps, drain with `Next(ctx, slots)` against the fleet's free capacity, `Acquire` before the lease claim,
-  and release on EVERY terminal status, not only success. This is the same shape as the cache gap
-  (Task 15b): everything built, one end unconnected.
+      `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
+      ready steps are still dispatched inline, and no per-pipeline cap is enforced. Wire them — enqueue ready
+      steps, drain with `Next(ctx, slots)` against the fleet's free capacity, `Acquire` before the lease claim,
+      and release on EVERY terminal status, not only success. This is the same shape as the cache gap
+      (Task 15b): everything built, one end unconnected.
 - [ ] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
 - [ ] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
 - [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
@@ -603,7 +603,6 @@ liveness probe adding five seconds to every signalled exec) that a fake
 clientset would have hidden, and a containerd backend written against a mock
 would carry the same class of defect into production.
 
-
 Files: `internal/executor/containerd/containerd.go`, `internal/executor/containerd/identity.go`, `internal/executor/containerd/containerd_test.go`
 Interfaces: produces `containerd.New(cfg containerd.Config) (executor.Executor, error)` satisfying Task 9's interface; `Executor.EnvironmentIdentity() (string, error)` returning the image digest.
 
@@ -637,7 +636,7 @@ passes the identical `executortest.Contract` the process backend does, with
 nothing weakened or excused. It found one genuine mismatch.
 
 `EnvironmentIdentity()` is a method on the EXECUTOR, but the image is on the
-`Spec`. For a container backend, identity is a property of *(executor, spec)*
+`Spec`. For a container backend, identity is a property of _(executor, spec)_
 — so one Kubernetes executor running several different images reports the
 digest of its configured template, and a cache key would describe the
 template rather than the step's actual image. Task 37 honours `Spec.Image`
@@ -816,7 +815,6 @@ clean, which is the one failure mode taint tracking exists to prevent. Move
 the four functions here under this task's planned names and either delegate
 from `internal/trigger/taint.go` or update the three triggers. Nothing in
 Task 41 clears a taint; the sanitisation gate is still this task's work.
-
 
 Files: `internal/taint/taint.go`, `internal/taint/propagate.go`, `internal/taint/taint_test.go`
 Interfaces: produces `taint.Mark(v *structpb.Value, source string) *structpb.Value`, `taint.IsTainted(v *structpb.Value) bool`, `taint.Propagate(in []*dholev1.OutputRef, out []*dholev1.OutputRef)`, `taint.Gate` step type clearing marks after explicit sanitisation.

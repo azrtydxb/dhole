@@ -215,6 +215,22 @@ treats the step as orphaned and re-dispatches it under a new fence.
 An engine that finds itself holding a job whose fence is no longer valid must
 stop that job. It has been superseded, and its output would be discarded anyway.
 
+**An engine re-announces itself every third heartbeat** — every fifteen seconds
+— by publishing `EngineRegistration` again, unchanged. This is not optional.
+
+`EngineRegistration` is fire-and-forget on a core subject, so a registration
+published while the control plane was down is simply gone, and a heartbeat
+cannot replace it: a heartbeat carries only an engine id and an in-flight list,
+so a plane rebuilding an engine from one would have a fleet member advertising
+no capabilities, no platform and no slots, which can never be matched to any
+step. The plane therefore refuses to resurrect an engine from a heartbeat, and
+the re-announce is how an engine that started first, or outlived a restart,
+becomes visible again.
+
+An engine that registers once and never again works perfectly until the first
+time the plane restarts, and is then invisible until the engine itself is
+restarted — with nothing anywhere reporting a fault.
+
 ## Control
 
 `EngineControl` is the only message an engine receives besides dispatches.
