@@ -46,7 +46,8 @@ decide what may be cached and what may be retried.
   two branches picking "the next free number" collide at merge. Reserved:
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
-  0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15). A task
+  0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
+  0011 policy_audit (21). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -54,6 +55,16 @@ decide what may be cached and what may be retried.
   be idempotent (`CREATE TABLE IF NOT EXISTS`). A migration that ALTERS an
   existing table therefore cannot rely on running once or running last, and
   needs the runner to grow a version table first. Discovered building Task 15.
+- KNOWN GAP — five packages are SQLite-only and must be made dialect-agnostic
+  before Task 18's distributed-mode parity test can pass. `internal/defstore`,
+  `internal/cache`, `internal/catalog`, `internal/policy` and `internal/cas`'s
+  GC all write `?` placeholders, which pgx rejects, and three of them open a
+  SQLite handle themselves via `runstore.NewSQLite` rather than accepting a
+  `*sql.DB`. Their TABLES exist on Postgres — that was fixed once the migration
+  runner stopped skipping them — but the code cannot query them there, so a
+  Postgres deployment today has only run_events and the outbox. Every one of
+  these packages was written and reviewed in isolation against SQLite, and
+  nothing in a per-package suite could have noticed.
 - Postgres and SQLite migrations are told apart by FILENAME: a plain `.sql`
   file is dialect-neutral and applied by BOTH runners, and a same-numbered
   `.postgres.sql` REPLACES it for Postgres. So write the DDL once, and add the
@@ -224,6 +235,7 @@ Interfaces: produces `scheduler.Scheduler` with `Advance(ctx, tenantID, runID st
 - [ ] Write `internal/scheduler/scheduler_test.go` asserting `TestAdvanceDispatchesOnlyReadySteps`: for the Task 3 diamond pipeline, the first `Advance` dispatches only `a`; after `a` succeeds, the next dispatches `b` and `c` but not `d`. Run — expect FAIL with "undefined: scheduler.New".
 - [ ] Add `TestMatchFiltersByCapabilityOSAndArch` asserting a step requiring `PRIVILEGED` on `linux/arm64` matches only an instance advertising all three.
 - [ ] Add `TestUnschedulableStepReportsWhy` asserting a step whose requirements match no instance produces an event whose payload contains "no engine advertises capability PRIVILEGED".
+- [ ] Wire `policy.Engine.Evaluate` into the scheduler before dispatch. This is the second half of Task 21, which could only do the definition-save side because the scheduler did not exist yet. The save guard also cannot populate `Input.Signed` or `Input.Upstream` — those come from Tasks 30 and 33 — so the scheduler is where a dispatch-time decision gets the full input.
 - [ ] Implement `internal/scheduler/match.go` (pure filtering, no I/O) and `internal/scheduler/scheduler.go` reading the run's event log, computing ready steps from `dag.Graph`, claiming a lease, and enqueuing a `JobDispatch` through the outbox.
 - [ ] Run `go test ./internal/scheduler` — expect PASS. Commit.
 
@@ -302,13 +314,13 @@ Interfaces: produces `wait.Timers` with `Schedule(ctx, tenantID, runID, stepID s
 Files: `internal/policy/policy.go`, `internal/policy/cel.go`, `internal/policy/audit.go`, `internal/policy/policy_test.go`
 Interfaces: produces `policy.Engine` with `Evaluate(ctx, in policy.Input) (policy.Decision, error)`; `Input{Tier, TenantID, Subject string; Capabilities []dholev1.Capability; EffectClass dholev1.EffectClass; PluginRef string; Signed bool; Upstream string}`; `Decision{Allow bool; Rule, Reason string}`.
 
-- [ ] Write `internal/policy/policy_test.go` asserting `TestForbiddenCapabilityRefusedAtSave`: a tier whose rule is `!("PRIVILEGED" in input.capabilities)` denies a step requesting `PRIVILEGED`, with `Decision.Rule` naming the rule id. Run — expect FAIL with "undefined: policy.New".
-- [ ] Add `TestPolicyDenialAuditedWithinLatencyBudget` asserting a denial writes an audit row containing rule, tier and subject, and that 1000 sequential evaluations average under 10ms each with the compiled-program cache warm.
-- [ ] Add `TestPolicyEvaluationErrorFailsClosed` asserting a rule referencing an undefined field yields `Allow: false` and a `Reason` containing "policy error".
-- [ ] Add `TestUnsignedPluginDeniedInProductionTierAllowedInDev` asserting the same input differs by tier only.
-- [ ] Implement `internal/policy/cel.go` using `github.com/google/cel-go` with an env declaring every `Input` field, compiling and caching programs keyed by `(tier, policy revision)`, and `internal/policy/audit.go` writing decisions to `policy_audit`.
-- [ ] Wire the engine into the scheduler before dispatch and into definition save.
-- [ ] Run `go test ./internal/policy` — expect PASS. Commit.
+- [x] Write `internal/policy/policy_test.go` asserting `TestForbiddenCapabilityRefusedAtSave`: a tier whose rule is `!("PRIVILEGED" in input.capabilities)` denies a step requesting `PRIVILEGED`, with `Decision.Rule` naming the rule id. Run — expect FAIL with "undefined: policy.New".
+- [x] Add `TestPolicyDenialAuditedWithinLatencyBudget` asserting a denial writes an audit row containing rule, tier and subject, and that 1000 sequential evaluations average under 10ms each with the compiled-program cache warm.
+- [x] Add `TestPolicyEvaluationErrorFailsClosed` asserting a rule referencing an undefined field yields `Allow: false` and a `Reason` containing "policy error".
+- [x] Add `TestUnsignedPluginDeniedInProductionTierAllowedInDev` asserting the same input differs by tier only.
+- [x] Implement `internal/policy/cel.go` using `github.com/google/cel-go` with an env declaring every `Input` field, compiling and caching programs keyed by `(tier, policy revision)`, and `internal/policy/audit.go` writing decisions to `policy_audit`.
+- [x] Wire the engine into definition save, via `policy.NewSaveGuard` — a decorator over `defstore.Store`, so `internal/defstore` needed no change. The scheduler half moved to Task 14, which is where the dispatch-time decision lives; it is listed there rather than left as an unticked box here.
+- [x] Run `go test ./internal/policy` — expect PASS. Commit.
 
 ## Task 22: Tenancy enforcement across store and bus
 
