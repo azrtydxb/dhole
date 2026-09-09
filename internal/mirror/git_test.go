@@ -50,7 +50,9 @@ func newStore(t *testing.T) defstore.Store {
 	_, err = db.ExecContext(context.Background(), string(schema))
 	require.NoError(t, err)
 
-	return defstore.New(db)
+	// These tests are about the git mirror, not about plugin pinning, so the
+	// store opts out of it explicitly rather than by omission.
+	return defstore.New(db, defstore.WithoutPinning())
 }
 
 // newBareRepo initialises an empty bare repository to mirror into, with HEAD

@@ -37,15 +37,23 @@ import (
 type Option func(*SQLStore)
 
 // WithResolver gives the store the resolver it pins plugin references with at
-// save time.
-//
-// It is an option rather than a constructor argument because a store with no
-// resolver is a meaningful configuration — a deployment whose definitions carry
-// no plugin references, and the tests of everything in this package that is not
-// about plugins. What it must never become is a silent fallback: with a
-// resolver configured, an unresolvable reference fails the save.
+// save time. With a resolver configured, an unresolvable reference fails the
+// save rather than producing a partial lockfile.
 func WithResolver(r plugins.Resolver) Option {
-	return func(s *SQLStore) { s.resolver = r }
+	return func(s *SQLStore) { s.resolver = r; s.pinningWaived = false }
+}
+
+// WithoutPinning permits saving a definition whose plugin references are not
+// pinned.
+//
+// It exists because a store with no resolver is a meaningful configuration —
+// a deployment whose definitions name no plugin, and the tests of everything
+// in this package that is not about plugins. It is a separate, typed option
+// rather than the default so that a caller who merely forgot WithResolver gets
+// an error, instead of a revision that carries a lockfile, looks pinned, and
+// is not.
+func WithoutPinning() Option {
+	return func(s *SQLStore) { s.pinningWaived = true }
 }
 
 // ResolveLockfile pins every plugin reference in p to a digest, returning the

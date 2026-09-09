@@ -344,21 +344,6 @@ func TestResolveLockfileWithNoResolverRefusesRatherThanPinningNothing(t *testing
 	require.Contains(t, err.Error(), "no resolver configured")
 }
 
-// TestAStoreWithNoResolverPinsNothing states the one way an unpinned revision
-// can exist, so that it is a deliberate configuration rather than a surprise:
-// a store built without WithResolver stores an empty lockfile. Any deployment
-// serving plugin references has to configure a resolver, and this test exists
-// to make that requirement visible rather than to bless the gap.
-func TestAStoreWithNoResolverPinsNothing(t *testing.T) {
-	ctx := context.Background()
-	store := defstore.New(openTestDB(t))
-
-	saved, err := store.Save(ctx, tenant, lockfilePipeline("p1", "oci://reg/img:v1"), "ada")
-	require.NoError(t, err)
-	require.NotNil(t, saved.Lockfile)
-	require.Empty(t, saved.Lockfile, "nothing pinned, and nothing pretending to be pinned")
-}
-
 // TestPipelineWithoutPluginRefsResolvesToAnEmptyLockfile: a definition with
 // nothing to pin is pinned trivially, not rejected. Refusing it would make an
 // empty lockfile impossible to tell from a failed one.
@@ -432,4 +417,50 @@ func TestLockfileContentHashesTheSameWhateverTheIterationOrder(t *testing.T) {
 		require.Equal(t, want, key.GetHex(),
 			"cache/key.go sorts the lockfile pairs; the key must not depend on map order")
 	}
+}
+
+// TestSaveRefusesToStoreAnUnpinnedRevision closes the one way an unpinned
+// revision could reach the database.
+//
+// ResolveLockfile has always refused to pin nothing when there is something to
+// pin. Save did not call it at all without a resolver, so a store built by a
+// caller who simply forgot the option accepted a definition naming plugins and
+// stored an empty lockfile beside it. That revision looks pinned — it has a
+// lockfile — and it is not, so every guarantee built on top of it (a moved tag
+// changing nothing, a cache key that stays honest) is quietly void.
+//
+// Opting out is still possible, because tests and definitions that name no
+// plugin need it, but it now has to be typed: WithoutPinning.
+func TestSaveRefusesToStoreAnUnpinnedRevision(t *testing.T) {
+	ctx := context.Background()
+	store := defstore.New(openTestDB(t))
+
+	_, err := store.Save(ctx, tenant, lockfilePipeline("p1", "oci://reg/img:v1"), "ada")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "no resolver configured")
+	require.ErrorContains(t, err, "WithoutPinning",
+		"the error has to name the way out, or the only way past it is to guess")
+}
+
+// TestWithoutPinningIsAnExplicitChoice: the opt-out works, and it is the only
+// thing that makes an unpinned save legal.
+func TestWithoutPinningIsAnExplicitChoice(t *testing.T) {
+	ctx := context.Background()
+	store := defstore.New(openTestDB(t), defstore.WithoutPinning())
+
+	saved, err := store.Save(ctx, tenant, lockfilePipeline("p1", "oci://reg/img:v1"), "ada")
+	require.NoError(t, err)
+	require.NotNil(t, saved.Lockfile)
+	require.Empty(t, saved.Lockfile, "nothing pinned, and nothing pretending to be pinned")
+}
+
+// TestSaveWithoutAResolverIsFineWhenThereIsNothingToPin keeps the refusal
+// narrow: it is about unpinned plugin references, not about resolvers.
+func TestSaveWithoutAResolverIsFineWhenThereIsNothingToPin(t *testing.T) {
+	ctx := context.Background()
+	store := defstore.New(openTestDB(t))
+
+	saved, err := store.Save(ctx, tenant, lockfilePipeline("p1"), "ada")
+	require.NoError(t, err)
+	require.Empty(t, saved.Lockfile)
 }

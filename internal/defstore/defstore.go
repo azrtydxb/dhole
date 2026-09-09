@@ -93,8 +93,10 @@ type Store interface {
 // as the run store: definitions and run history are one transactional unit,
 // so a run can never be recorded against a revision the store does not hold.
 type SQLStore struct {
-	db      *sql.DB
-	dialect runstore.Dialect
+	// pinningWaived records that a caller explicitly chose to save unpinned.
+	pinningWaived bool
+	db            *sql.DB
+	dialect       runstore.Dialect
 	// resolver pins plugin references at save time. See lockfile.go for why
 	// that moment, and no later one, is the only one that can be trusted.
 	resolver plugins.Resolver
@@ -144,11 +146,19 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	// An empty lockfile on a definition that names plugins is not a pinned
 	// revision; it is a revision nobody pinned.
 	lockfile := map[string]string{}
-	if s.resolver != nil {
+	switch {
+	case s.resolver != nil:
 		var err error
 		if lockfile, err = ResolveLockfile(ctx, tenantID, p, s.resolver); err != nil {
 			return Revision{}, fmt.Errorf("save definition: %w", err)
 		}
+	case !s.pinningWaived && len(pluginRefs(p)) > 0:
+		// Storing an empty lockfile here would produce a revision that looks
+		// pinned and is not, voiding every guarantee built on top of it.
+		return Revision{}, fmt.Errorf(
+			"save definition: %d plugin reference(s) to pin and no resolver configured; "+
+				"pass defstore.WithResolver, or defstore.WithoutPinning to save unpinned deliberately",
+			len(pluginRefs(p)))
 	}
 
 	hash := ContentHash(p)

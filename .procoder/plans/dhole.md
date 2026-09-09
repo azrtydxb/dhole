@@ -482,12 +482,12 @@ Interfaces: produces `plugins.Upstreams` with `Add(ctx, tenantID string, u Upstr
 Files: `internal/defstore/lockfile.go`, `internal/defstore/lockfile_test.go`
 Interfaces: produces `defstore.ResolveLockfile(ctx, tenantID string, p *dholev1.Pipeline, r plugins.Resolver) (map[string]string, error)` returning plugin ref to digest.
 
-- [ ] Write `internal/defstore/lockfile_test.go` asserting `TestLockfilePinsPluginDigestsAgainstMovedTag`: save a pipeline referencing `oci://reg/img:v1`, retag the registry to different content, and require a run of the saved revision fetches the original digest. Run — expect FAIL with "undefined: defstore.ResolveLockfile".
-- [ ] Add `TestSaveFailsWhenAPluginCannotBeResolved` asserting `Save` returns an error naming the unresolvable ref rather than persisting a partial lockfile.
-- [ ] Add `TestLockfileChangeProducesVisibleDiff` asserting a re-save after an intentional plugin upgrade yields a diff listing the old and new digests.
-- [ ] Add `TestCacheKeyChangesWhenLockfileChanges` asserting the Task 15 key differs between two revisions differing only in lockfile.
-- [ ] Implement `internal/defstore/lockfile.go` resolving every plugin ref during `Save` and storing the map on the revision.
-- [ ] Run `go test ./internal/defstore ./internal/cache` — expect PASS. Commit.
+- [x] Write `internal/defstore/lockfile_test.go` asserting `TestLockfilePinsPluginDigestsAgainstMovedTag`: save a pipeline referencing `oci://reg/img:v1`, retag the registry to different content, and require a run of the saved revision fetches the original digest. Run — expect FAIL with "undefined: defstore.ResolveLockfile".
+- [x] Add `TestSaveFailsWhenAPluginCannotBeResolved` asserting `Save` returns an error naming the unresolvable ref rather than persisting a partial lockfile.
+- [x] Add `TestLockfileChangeProducesVisibleDiff` asserting a re-save after an intentional plugin upgrade yields a diff listing the old and new digests.
+- [x] Add `TestCacheKeyChangesWhenLockfileChanges` asserting the Task 15 key differs between two revisions differing only in lockfile.
+- [x] Implement `internal/defstore/lockfile.go` resolving every plugin ref during `Save` and storing the map on the revision.
+- [x] Run `go test ./internal/defstore ./internal/cache` — expect PASS. Commit.
 
 ## Task 36: containerd/OCI executor
 
