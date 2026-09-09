@@ -13,6 +13,7 @@ import (
 
 	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/bus"
+	"github.com/azrtydxb/dhole/internal/cache"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
@@ -49,6 +50,13 @@ type infra struct {
 
 	cas   cas.Store
 	blobs blobstore.Store
+	// cache is the content-addressed step cache, and refs is the reference
+	// index that keeps the blobs an entry points at from being collected.
+	// Both live in the run store's database, which is what lets a
+	// reclamation span the cache and the runs that pin it in one transaction
+	// (ADR 0009).
+	cache *cache.Cache
+	refs  *cas.GC
 
 	// embedded is the in-process NATS server, nil in distributed mode.
 	embedded *bus.Embedded
@@ -88,11 +96,12 @@ func openInfra(ctx context.Context, cfg Config) (_ *infra, err error) {
 	if err = i.openBlobs(cfg); err != nil {
 		return nil, err
 	}
+	i.openCache()
 	if err = i.openBus(ctx, cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Mode == ModeEmbedded {
-		if err = i.openEngineSide(ctx); err != nil {
+		if err = i.openEngineSide(ctx, cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -154,6 +163,15 @@ func (i *infra) openBlobs(cfg Config) error {
 	return nil
 }
 
+// openCache builds the step cache and the blob reference index over the run
+// store's own database and the CAS opened above. Neither owns a handle: the
+// cache and the collector must be able to commit against the same database as
+// the run log.
+func (i *infra) openCache() {
+	i.cache = cache.New(i.db, i.dialect)
+	i.refs = &cas.GC{Store: i.cas, Runs: i.store, DB: i.db, Dialect: i.dialect}
+}
+
 // openBus starts or dials the bus and declares the two durable streams the
 // control plane owns.
 func (i *infra) openBus(ctx context.Context, cfg Config) error {
@@ -211,7 +229,7 @@ func (i *infra) openBus(ctx context.Context, cfg Config) error {
 // back towards an in-process shortcut: two halves that share a client are two
 // halves that can start sharing other things. This one dials the bus exactly
 // as a remote engine does.
-func (i *infra) openEngineSide(ctx context.Context) error {
+func (i *infra) openEngineSide(ctx context.Context, cfg Config) error {
 	engineBus, err := bus.Connect(ctx, i.busURL)
 	if err != nil {
 		return err
@@ -219,7 +237,16 @@ func (i *infra) openEngineSide(ctx context.Context) error {
 	i.engineBus = engineBus
 	i.onClose(engineBus.Close)
 
-	i.exec = process.New()
+	// The backend is the deployment's choice; the host process executor is
+	// what a deployment that has not chosen gets. It is named here rather than
+	// hard-wired because the environment identity a backend reports is what
+	// decides whether ANYTHING is cacheable, and a process executor honestly
+	// reports it has none — so a deployment whose steps run somewhere
+	// reproducible has to be able to say so by supplying that backend.
+	i.exec = cfg.Executor
+	if i.exec == nil {
+		i.exec = process.New()
+	}
 	identity, err := i.exec.EnvironmentIdentity()
 	switch {
 	case err == nil:

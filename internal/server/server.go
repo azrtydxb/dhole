@@ -49,6 +49,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/dag"
 	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/engine"
+	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/outbox"
 	"github.com/azrtydxb/dhole/internal/registry"
@@ -142,6 +143,16 @@ type Config struct {
 	// alone: stable across restarts, and different for two planes that share
 	// nothing but a database.
 	DeploymentID string
+	// Executor is where the hosted engine runs steps, in ModeEmbedded. Nil
+	// means the host process backend.
+	//
+	// It is configuration rather than a constant because the backend is what
+	// reports the environment identity every cache key is folded over
+	// (ADR 0009). A host process has none and says so, which makes every step
+	// of such a deployment non-cacheable — correctly, since nobody can name
+	// the compilers and libraries the host happens to carry. A deployment
+	// running steps somewhere reproducible supplies that backend here.
+	Executor executor.Executor
 }
 
 // Server is one control plane.
@@ -269,6 +280,13 @@ func (s *Server) Start(ctx context.Context) error {
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		EnvIdentity: in.envIdentity,
+		// The cache, wired to the thing that actually runs steps. It was
+		// built, tested and consulted only by Plan — a dry run — so every real
+		// run executed every step again while Plan truthfully reported which
+		// ones "would" be skipped (ADR 0009).
+		Cache:     in.cache,
+		Revisions: defs,
+		BlobRefs:  in.refs,
 	})
 	if err != nil {
 		in.close()

@@ -36,7 +36,9 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cache"
+	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/dag"
+	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/effects"
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
@@ -114,6 +116,41 @@ type Definitions interface {
 	Get(ctx context.Context, tenantID, pipelineID, revisionID string) (*dholev1.Pipeline, error)
 }
 
+// CacheStore is the content-addressed step cache, BOTH halves of it.
+//
+// api.Plan narrows the same store to Lookup alone, because a question that
+// recorded something would change its own answer. Here the opposite is true:
+// a scheduler that could only look up would consult a cache nothing ever
+// filled, which is the shape this package was in — and a cache with no writer
+// is indistinguishable from no cache at all.
+type CacheStore interface {
+	Lookup(ctx context.Context, tenantID string, key *dholev1.Digest) ([]*dholev1.OutputRef, bool, error)
+	Record(ctx context.Context, tenantID string, key *dholev1.Digest, outs []*dholev1.OutputRef) error
+}
+
+// Revisions resolves the revision a run pinned, for the plugin lockfile every
+// cache key is folded over.
+//
+// It is a second interface over the same store as Definitions rather than a
+// method on that one, because they are asked at different times and a
+// scheduler built without a cache has no use for this at all. defstore.Store
+// satisfies it.
+type Revisions interface {
+	Revision(ctx context.Context, tenantID, revisionID string) (defstore.Revision, error)
+}
+
+// BlobRefs pins the blobs a run depends on so the collector cannot take them.
+//
+// A cache hit is the case that makes this necessary rather than tidy. The
+// bytes a skipped step "produced" were produced by some earlier run, and
+// reclamation is by refcount from retained runs (ADR 0009): without a
+// reference from THIS run, a run whose every step was served from cache holds
+// nothing, and the first collection after its predecessor ages out deletes the
+// artifacts it is displaying. *cas.GC satisfies it.
+type BlobRefs interface {
+	Reference(ctx context.Context, tenantID string, d *dholev1.Digest, runID string) error
+}
+
 // Config is everything the scheduler needs. All of it is durable
 // infrastructure or a pure lookup: there is deliberately no place to keep
 // per-run state, because a field holding one would be the run position that
@@ -140,6 +177,15 @@ type Config struct {
 	// backend, say — and every step is then cached against nothing, which is
 	// to say not cached.
 	EnvIdentity string
+	// Cache is the step cache. Nil disables caching entirely, which is what a
+	// test of some other concern wants and what a deployment must never have:
+	// a scheduler with no cache runs every step of every run again, however
+	// pure it is.
+	Cache CacheStore
+	// Revisions resolves the lockfile a run pinned. Required with Cache.
+	Revisions Revisions
+	// BlobRefs pins the blobs a cache hit reuses. Required with Cache.
+	BlobRefs BlobRefs
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Now is the clock, injectable for tests.
@@ -154,6 +200,9 @@ type Scheduler struct {
 	leas  lease.Manager
 	fleet Fleet
 	defs  Definitions
+	cache CacheStore
+	revs  Revisions
+	refs  BlobRefs
 
 	tier        string
 	os          string
@@ -179,6 +228,25 @@ func New(cfg Config) (*Scheduler, error) {
 	case cfg.Tier == "":
 		return nil, errors.New("scheduler: a dispatch tier is required")
 	}
+	// All three or none. A cache wired without a lockfile resolver would key
+	// entries on an empty lockfile and serve a result produced by a plugin
+	// version that has since moved; one wired without a reference recorder
+	// would build runs on blobs nothing pins. Both are wrong quietly, which
+	// is the failure mode a cache must not have.
+	if cfg.Cache != nil {
+		switch {
+		case cfg.Revisions == nil:
+			return nil, errors.New("scheduler: a cache needs a revision store; " +
+				"a key that ignored the lockfile would serve results from a plugin version that has moved")
+		case cfg.BlobRefs == nil:
+			return nil, errors.New("scheduler: a cache needs a blob reference recorder; " +
+				"a run built on unreferenced blobs is one the collector may empty under it")
+		}
+	}
+	if cfg.Cache == nil && (cfg.Revisions != nil || cfg.BlobRefs != nil) {
+		return nil, errors.New("scheduler: a revision store and a blob reference recorder are only " +
+			"used by the cache; passing them without one is a cache that was meant to be wired and was not")
+	}
 
 	s := &Scheduler{
 		store:       cfg.Store,
@@ -186,6 +254,9 @@ func New(cfg Config) (*Scheduler, error) {
 		leas:        cfg.Leases,
 		fleet:       cfg.Fleet,
 		defs:        cfg.Definitions,
+		cache:       cfg.Cache,
+		revs:        cfg.Revisions,
+		refs:        cfg.BlobRefs,
 		tier:        cfg.Tier,
 		os:          cfg.OS,
 		arch:        cfg.Arch,
@@ -259,9 +330,287 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		}
 	}
 
+	served := false
 	for _, step := range pl.ready {
+		// The cache first, and only then the engine. This is the whole of
+		// ADR 0009's "skipped and its recorded outputs reused": a step that
+		// has already been done under this exact key is finished by writing
+		// the result down, not by doing it again.
+		hit, err := s.serveFromCache(ctx, tenantID, runID, pipeline, step, state)
+		if err != nil {
+			return err
+		}
+		if hit {
+			served = true
+			continue
+		}
 		if err := s.dispatch(ctx, tenantID, runID, pipeline, step, state); err != nil {
 			return err
+		}
+	}
+	if served {
+		// A hit finishes a step without any engine ever reporting one, so
+		// nothing else would come back to ask what became ready because of
+		// it. Advancing again is what lets a run whose every step is cached
+		// complete in one pass instead of one tick per step.
+		return s.Advance(ctx, tenantID, runID)
+	}
+	return nil
+}
+
+// serveFromCache finishes a step from what an earlier run recorded, and
+// reports whether it did.
+//
+// Whether a step MAY be served is cache.Eligible's decision and nobody else's.
+// Restating any part of it here — "pure only", "step-scoped leases only" —
+// would be a second copy of a rule whose false positives serve one run's
+// outputs as another's, and the two copies would drift.
+func (s *Scheduler) serveFromCache(
+	ctx context.Context,
+	tenantID, runID string,
+	pipeline *dholev1.Pipeline,
+	step *dholev1.Step,
+	state *runState,
+) (bool, error) {
+	if s.cache == nil {
+		return false, nil
+	}
+	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), s.envIdentity); !cacheable {
+		return false, nil
+	}
+
+	key, ok, err := s.cacheKey(ctx, tenantID, pipeline, step, state)
+	if err != nil || !ok {
+		return false, err
+	}
+	outputs, hit, err := s.cache.Lookup(ctx, tenantID, key)
+	if err != nil {
+		return false, fmt.Errorf("scheduler: cache lookup for %s/%s: %w", runID, step.GetId(), err)
+	}
+	if !hit {
+		return false, nil
+	}
+
+	// The bytes have to still BE there, and this run has to hold a reference
+	// to them before it is told they are its outputs. cas.Reference checks the
+	// blob exists inside the transaction that records the reference, so an
+	// entry whose blobs the collector already took is refused here — and the
+	// step is then run for real rather than succeeding with outputs nobody
+	// can read.
+	for _, out := range outputs {
+		switch err := s.refs.Reference(ctx, tenantID, out.GetDigest(), runID); {
+		case errors.Is(err, cas.ErrNotFound):
+			return false, nil
+		case err != nil:
+			return false, fmt.Errorf("scheduler: pinning cached blobs for %s/%s: %w",
+				runID, step.GetId(), err)
+		}
+	}
+	return s.recordCacheHit(ctx, tenantID, runID, step, outputs, state)
+}
+
+// recordCacheHit writes the history a real dispatch would have written, minus
+// the dispatch.
+//
+// The two events go in one transaction and are the SAME events an executed
+// step produces, because everything downstream of the log — the run view, the
+// DAG, plan(), a replay after a restart — reads that log and nothing else. A
+// hit that wrote a shorter history would make every one of those surfaces
+// need a second code path.
+//
+// The lease is claimed, re-read and validated exactly as a dispatch's is, for
+// the same reason: two control planes advancing one run must not both decide
+// to serve this hit and write the step's success twice.
+func (s *Scheduler) recordCacheHit(
+	ctx context.Context,
+	tenantID, runID string,
+	step *dholev1.Step,
+	outputs []*dholev1.OutputRef,
+	state *runState,
+) (bool, error) {
+	started := s.now()
+	attempt := state.attempts[step.GetId()] + 1
+	token, err := s.leas.Claim(ctx, tenantID, runID, step.GetId(), attempt, s.ttl)
+	if err != nil {
+		return false, fmt.Errorf("scheduler: claiming %s/%s: %w", runID, step.GetId(), err)
+	}
+	fresh, err := s.load(ctx, tenantID, runID)
+	if err != nil {
+		return false, err
+	}
+	if fresh.attempts[step.GetId()] >= attempt {
+		// Another plane got there first. The step is placed either way, so
+		// this one must not dispatch it.
+		return true, nil
+	}
+
+	dispatchPayload, err := MarshalDispatched(Dispatched{
+		Attempt:   attempt,
+		Fence:     token.Fence,
+		Cacheable: true,
+		CacheHit:  true,
+	})
+	if err != nil {
+		return false, err
+	}
+	statusPayload, err := proto.Marshal(&dholev1.JobStatus{
+		RunId:      runID,
+		StepId:     step.GetId(),
+		Attempt:    attempt,
+		FenceToken: EncodeFence(tenantID, token),
+		Phase:      dholev1.Phase_PHASE_SUCCEEDED,
+		Outputs:    outputs,
+	})
+	if err != nil {
+		return false, fmt.Errorf("scheduler: encoding the cached result for %s/%s: %w",
+			runID, step.GetId(), err)
+	}
+
+	at := s.now().UTC()
+	err = s.store.WithTx(ctx, func(tx runstore.Tx) error {
+		if err := tx.Append(ctx, tenantID, runstore.Event{
+			RunID:   runID,
+			StepID:  step.GetId(),
+			Attempt: attempt,
+			Type:    runstore.StepDispatched,
+			Payload: dispatchPayload,
+			At:      at,
+		}); err != nil {
+			return err
+		}
+		if err := tx.Append(ctx, tenantID, runstore.Event{
+			RunID:   runID,
+			StepID:  step.GetId(),
+			Attempt: attempt,
+			Type:    runstore.StepSucceeded,
+			Payload: statusPayload,
+			At:      at,
+		}); err != nil {
+			return err
+		}
+		return s.leas.Validate(ctx, token)
+	})
+	switch {
+	case errors.Is(err, lease.ErrFenced):
+		// Superseded between the claim and the commit. Nothing was written,
+		// and the plane that owns the attempt will place it.
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("scheduler: recording the cached result for %s/%s: %w",
+			runID, step.GetId(), err)
+	}
+
+	// The one metric label that could not be true before: a step whose
+	// duration is the time it took to NOT run it.
+	obs.RecordStepDuration(ctx, tenantID, s.now().Sub(started), true, obs.OutcomeSucceeded)
+	return true, nil
+}
+
+// recordCacheEntry stores what a step produced, so the next run that asks the
+// same question is answered without doing the work.
+//
+// A step SERVED from the cache is skipped here. Its outputs are already under
+// this key by definition, and re-recording them would rewrite the entry — and
+// its timestamp — on every run that reuses it, which is the one way an entry
+// could outlive the retention window it was supposed to age out of.
+func (s *Scheduler) recordCacheEntry(
+	ctx context.Context, tenantID string, st *dholev1.JobStatus, state *runState,
+) error {
+	if s.cache == nil || state.cacheHit[st.GetStepId()] {
+		return nil
+	}
+	pipeline, err := s.defs.Get(ctx, tenantID, state.pipelineID, state.revisionID)
+	if err != nil {
+		return fmt.Errorf("scheduler: run %q pins revision %q: %w",
+			st.GetRunId(), state.revisionID, err)
+	}
+	step := stepByID(pipeline, st.GetStepId())
+	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), s.envIdentity); !cacheable {
+		return nil
+	}
+	key, ok, err := s.cacheKey(ctx, tenantID, pipeline, step, state)
+	if err != nil || !ok {
+		return err
+	}
+	if err := s.cache.Record(ctx, tenantID, key, st.GetOutputs()); err != nil {
+		return fmt.Errorf("scheduler: recording the cache entry for %s/%s: %w",
+			st.GetRunId(), st.GetStepId(), err)
+	}
+	return nil
+}
+
+// cacheKey computes one step's key, and reports whether it could be computed
+// at all.
+//
+// It cannot be when an input digest is unknown, and that is answered honestly
+// rather than worked around. A key over a guessed or omitted input either
+// misses forever — harmless but pointless — or collides with another step's
+// work, which serves the wrong bytes. api.Plan faces the same question and
+// gives the same answer; the difference is that here it is nearly unreachable,
+// because a step is only ready once every predecessor SUCCEEDED and every
+// predecessor's outputs are therefore in the log.
+func (s *Scheduler) cacheKey(
+	ctx context.Context,
+	tenantID string,
+	pipeline *dholev1.Pipeline,
+	step *dholev1.Step,
+	state *runState,
+) (*dholev1.Digest, bool, error) {
+	inputs, resolved := inputDigests(pipeline, step.GetId(), state)
+	if !resolved {
+		return nil, false, nil
+	}
+	rev, err := s.revs.Revision(ctx, tenantID, state.revisionID)
+	if err != nil {
+		return nil, false, fmt.Errorf("scheduler: reading the lockfile of revision %q: %w",
+			state.revisionID, err)
+	}
+	key, err := cache.Key(step, s.envIdentity, inputs, rev.Lockfile)
+	if err != nil {
+		// Eligible has already agreed the step is cacheable, so a refusal
+		// here is the two disagreeing rather than an ordinary answer. It
+		// costs a cache entry, never a wrong one.
+		if errors.Is(err, cache.ErrNotCacheable) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("scheduler: computing the cache key for step %q: %w",
+			step.GetId(), err)
+	}
+	return key, true, nil
+}
+
+// inputDigests collects the digests feeding a step's input ports and says
+// whether ALL of them are known. One edge whose source port produced nothing
+// makes the answer false for the whole step: a key over a partial input set is
+// a key for a different step.
+func inputDigests(p *dholev1.Pipeline, stepID string, state *runState) ([]*dholev1.Digest, bool) {
+	var digests []*dholev1.Digest
+	for _, e := range p.GetEdges() {
+		if e.GetToStep() != stepID {
+			continue
+		}
+		found := false
+		for _, out := range state.outputs[e.GetFromStep()] {
+			if out.GetPort() != e.GetFromPort() {
+				continue
+			}
+			digests = append(digests, out.GetDigest())
+			found = true
+			break
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return digests, true
+}
+
+// stepByID finds one step of a pipeline, or nil. A nil step is not special-
+// cased by the callers: cache.Eligible refuses it in its own words.
+func stepByID(p *dholev1.Pipeline, stepID string) *dholev1.Step {
+	for _, step := range p.GetSteps() {
+		if step.GetId() == stepID {
+			return step
 		}
 	}
 	return nil
@@ -418,6 +767,16 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 	}); err != nil {
 		return err
 	}
+	// The other half of ADR 0009, and the half that was missing: a pure step
+	// that just did the work records what it produced, so the next run asking
+	// the same question is answered without repeating it. state is the run as
+	// it was BEFORE this event, which is exactly what the key needs — a
+	// step's inputs are its predecessors' outputs, not its own.
+	if eventType == runstore.StepSucceeded {
+		if err := s.recordCacheEntry(ctx, tenantID, st, state); err != nil {
+			return err
+		}
+	}
 	return s.Advance(ctx, tenantID, st.GetRunId())
 }
 
@@ -457,6 +816,11 @@ type runState struct {
 	failedAt map[string]time.Time
 	// awaiting is the set of steps already recorded as waiting for a human.
 	awaiting map[string]bool
+	// cacheHit is the set of steps that were SERVED from the cache rather than
+	// executed. It is read back off the dispatch event, because that event is
+	// the only record of which of the two happened — and re-recording a step
+	// that was itself a hit would rewrite its own entry on every reuse.
+	cacheHit map[string]bool
 	// gated is the set of steps stopped at a durable gate — a timer that has
 	// not come due, an approval nobody has decided. The gate is lifted by the
 	// step's own terminal event, written by whoever owns the gate.
@@ -477,6 +841,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		unschedulable: map[string]string{},
 		failedAt:      map[string]time.Time{},
 		awaiting:      map[string]bool{},
+		cacheHit:      map[string]bool{},
 		gated:         map[string]bool{},
 	}
 	for _, e := range events {
@@ -493,6 +858,14 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			if e.Attempt > state.attempts[e.StepID] {
 				state.attempts[e.StepID] = e.Attempt
 			}
+			dispatched, err := UnmarshalDispatched(e.Payload)
+			if err != nil {
+				return nil, fmt.Errorf("scheduler: run %q step %q: %w", runID, e.StepID, err)
+			}
+			// A later attempt replaces the verdict of an earlier one: a step
+			// re-dispatched for real after having been served from cache is
+			// not a cache hit any more.
+			state.cacheHit[e.StepID] = dispatched.CacheHit
 			// A retry supersedes the failure that justified it: the step is
 			// in flight again, and its earlier verdict no longer describes
 			// where it stands.
@@ -983,6 +1356,11 @@ type Dispatched struct {
 	Fence                 uint64 `json:"fence"`
 	Cacheable             bool   `json:"cacheable"`
 	CacheIneligibleReason string `json:"cache_ineligible_reason,omitempty"`
+	// CacheHit is true when this step was SERVED from the cache rather than
+	// sent to an engine. The event is otherwise identical to a real dispatch's
+	// — deliberately, so that nothing replaying the log has to know about the
+	// cache — which makes this flag the only place the difference is visible.
+	CacheHit bool `json:"cache_hit,omitempty"`
 	// IdempotencyKey is the key this attempt presented to the far end, when
 	// the step's effect class required one. It is recorded because the
 	// question after an incident is "did we send that twice", and the answer
