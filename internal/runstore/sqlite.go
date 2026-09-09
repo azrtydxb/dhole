@@ -22,12 +22,17 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// postgresSuffix marks a migration as Postgres-only. Both dialects are
-// embedded in one tree and one runner would otherwise feed BYTEA and
-// TIMESTAMPTZ to SQLite, so the filename is the switch: SQLite applies every
-// migration except these, Postgres applies only these. A migration that needs
-// to differ per dialect is written twice under the same number, once plain and
-// once with this suffix.
+// postgresSuffix marks a migration as the Postgres form of its number.
+//
+// Most DDL here is dialect-neutral, so a plain .sql file is applied by BOTH
+// runners. Where a statement cannot be — SQLite's BLOB is Postgres's BYTEA —
+// the number is written twice, plain and with this suffix, and the suffixed
+// file REPLACES the plain one for Postgres.
+//
+// The earlier rule was "Postgres applies only suffixed files", which meant a
+// migration written once reached SQLite and silently never reached Postgres.
+// Four tables were missing there before anything noticed, because every SQLite
+// test passed and the Postgres contract test only exercised run_events.
 const postgresSuffix = ".postgres.sql"
 
 // dialectMigrations lists the embedded migrations one dialect must apply, in
@@ -39,13 +44,35 @@ func dialectMigrations(postgres bool) ([]string, error) {
 		return nil, err
 	}
 	sort.Strings(names)
-	out := make([]string, 0, len(names))
+
+	// A number with a Postgres form is overridden there; SQLite never sees one.
+	overridden := make(map[string]bool, len(names))
 	for _, name := range names {
-		if strings.HasSuffix(name, postgresSuffix) == postgres {
-			out = append(out, name)
+		if strings.HasSuffix(name, postgresSuffix) {
+			overridden[migrationNumber(name)] = true
 		}
 	}
+
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		suffixed := strings.HasSuffix(name, postgresSuffix)
+		switch {
+		case !postgres && suffixed:
+			continue // Postgres DDL never reaches SQLite.
+		case postgres && !suffixed && overridden[migrationNumber(name)]:
+			continue // Superseded by this number's Postgres form.
+		}
+		out = append(out, name)
+	}
 	return out, nil
+}
+
+// migrationNumber is the leading number a migration is ordered and paired by:
+// "migrations/0005_definitions.postgres.sql" yields "0005".
+func migrationNumber(name string) string {
+	base := strings.TrimPrefix(name, "migrations/")
+	number, _, _ := strings.Cut(base, "_")
+	return number
 }
 
 // timeFormat is how an event timestamp is stored. SQLite has no time type;

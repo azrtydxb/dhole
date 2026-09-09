@@ -54,12 +54,14 @@ decide what may be cached and what may be retried.
   be idempotent (`CREATE TABLE IF NOT EXISTS`). A migration that ALTERS an
   existing table therefore cannot rely on running once or running last, and
   needs the runner to grow a version table first. Discovered building Task 15.
-- Postgres and SQLite migrations are told apart by FILENAME: a file ending
-  `.postgres.sql` is applied only by the Postgres runner, and every other
-  `.sql` only by the SQLite one. A dialect-specific table therefore ships as
-  two files with the same number. Discovered building Task 5, where applying
-  both sets to SQLite passed anyway — SQLite has type affinity rather than
-  types, so it accepts Postgres DDL silently.
+- Postgres and SQLite migrations are told apart by FILENAME: a plain `.sql`
+  file is dialect-neutral and applied by BOTH runners, and a same-numbered
+  `.postgres.sql` REPLACES it for Postgres. So write the DDL once, and add the
+  suffixed form only where a type actually differs (SQLite `BLOB` is Postgres
+  `BYTEA`). The earlier rule — Postgres applies only suffixed files — left four
+  tables reaching SQLite and silently never reaching Postgres, discovered after
+  Tasks 15, 17, 23 and 25 had each added one. A new table is added to the list
+  in `internal/runstore/schema_postgres_test.go` in the same commit.
 
 ## Task 1: Repository scaffold and quality gate
 
@@ -346,13 +348,13 @@ Interfaces: produces `identity.NewOIDC(cfg OIDCConfig) (identity.Provider, error
 Files: `internal/defstore/defstore.go`, `internal/defstore/revision.go`, `internal/defstore/defstore_test.go`, `internal/runstore/migrations/0005_definitions.sql`
 Interfaces: produces `defstore.Store` with `Save(ctx, tenantID string, p *dholev1.Pipeline, author string) (Revision, error)`, `Get(ctx, tenantID, pipelineID, revisionID string) (*dholev1.Pipeline, error)`, `Active(ctx, tenantID, pipelineID string) (Revision, error)`, `Approve(ctx, tenantID, revisionID, approver string) error`; `Revision{ID, PipelineID string; ContentHash string; State draft|reviewed|active; Lockfile map[string]string}`.
 
-- [ ] Write `internal/defstore/defstore_test.go` asserting `TestRevisionCreatedAndMirroredOnEdit`: saving a pipeline returns a revision whose `ContentHash` is stable across identical saves and changes when any field changes. Run — expect FAIL with "undefined: defstore.New".
-- [ ] Add `TestNewRevisionStartsAsDraftAndOnlyBecomesActiveOnApproval` asserting `Active` returns the previous revision until `Approve` is called, and that the approver is persisted.
-- [ ] Add `TestRunPinsRevisionAndIsUnaffectedBySubsequentSaves` asserting a run started against revision 1 still executes revision 1's definition after revision 2 is approved.
-- [ ] Add `TestApprovalRevokedMidRunDoesNotAlterRunningRun` asserting a run in flight completes on its pinned revision.
-- [ ] Write `0005_definitions.sql` creating `pipelines`, `revisions(tenant_id, id, pipeline_id, content_hash, state, lockfile, author, approver, created_at)`.
-- [ ] Implement `internal/defstore/revision.go` computing the content hash over canonical protobuf bytes and `defstore.go` over the run store's connection.
-- [ ] Run `go test ./internal/defstore` — expect PASS. Commit.
+- [x] Write `internal/defstore/defstore_test.go` asserting `TestRevisionCreatedAndMirroredOnEdit`: saving a pipeline returns a revision whose `ContentHash` is stable across identical saves and changes when any field changes. Run — expect FAIL with "undefined: defstore.New".
+- [x] Add `TestNewRevisionStartsAsDraftAndOnlyBecomesActiveOnApproval` asserting `Active` returns the previous revision until `Approve` is called, and that the approver is persisted.
+- [x] Add `TestRunPinsRevisionAndIsUnaffectedBySubsequentSaves` asserting a run started against revision 1 still executes revision 1's definition after revision 2 is approved.
+- [x] Add `TestApprovalRevokedMidRunDoesNotAlterRunningRun` asserting a run in flight completes on its pinned revision.
+- [x] Write `0005_definitions.sql` creating `pipelines`, `revisions(tenant_id, id, pipeline_id, content_hash, state, lockfile, author, approver, created_at)`.
+- [x] Implement `internal/defstore/revision.go` computing the content hash over canonical protobuf bytes and `defstore.go` over the run store's connection.
+- [x] Run `go test ./internal/defstore` — expect PASS. Commit.
 
 ## Task 26: One-way git mirror
 
