@@ -29,3 +29,18 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # The OCI registry the plugin resolver is tested against. A real registry,
+  # because the properties that matter — a tag resolving to a digest, and a
+  # moved tag NOT changing an already-resolved one — are registry behaviour,
+  # and a fake would only test our belief about it. The suite builds and pushes
+  # its images in-process, so no docker daemon is needed to produce them.
+  #
+  # zot publishes one image per architecture; swap the suffix to
+  # zot-linux-arm64 on an arm64 host. It ships distroless, with no shell and no
+  # HTTP client, so there is nothing inside the container to run as a
+  # healthcheck — the tests fail loudly against an unreachable registry instead.
+  zot:
+    image: ghcr.io/project-zot/zot-linux-amd64:v2.1.2
+    ports:
+      - "55000:5000"
