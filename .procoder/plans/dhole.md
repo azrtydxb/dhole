@@ -418,6 +418,7 @@ Files: `internal/defstore/`, `internal/api/`
 Interfaces: adds a revision-history query to `defstore.Store`; gives the editing head a home in the schema.
 
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
+- [ ] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
 - [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
 
 ## Task 28: Validate and plan endpoints
@@ -425,12 +426,12 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 Files: `internal/api/validate.go`, `internal/api/plan.go`, `internal/api/plan_test.go`
 Interfaces: produces `Validate(ctx, *ValidateRequest) (*ValidateResponse{repeated Diagnostic diagnostics})`, `Plan(ctx, *PlanRequest) (*PlanResponse{repeated PlannedStep steps})`; `PlannedStep{string step_id; bool cache_hit; string engine_kind; string non_cacheable_reason}`.
 
-- [ ] Write `internal/api/plan_test.go` asserting `TestPlanReportsCacheHitsAndEngineAssignment`: plan a pipeline whose first step is already cached and require `steps[0].cache_hit == true` and every step carries a non-empty `engine_kind`. Run — expect FAIL with "undefined: api.Plan".
-- [ ] Add `TestPlanReportsNonCacheableReasonForPoolLease` asserting a `LeasePool` step returns the exact reason string from Task 16.
-- [ ] Add `TestValidateSurfacesTypeErrorsWithPositions` asserting the Task 3 type error is returned with the step id and port name populated.
-- [ ] Add `TestPlanDoesNotDispatchAnything` asserting no message is published to any `job.dispatch.*` subject during a `Plan` call.
-- [ ] Implement `internal/api/validate.go` delegating to `dag.TypeCheck` plus plugin schema validation, and `internal/api/plan.go` resolving the DAG, computing cache keys, consulting `cache.Lookup` and `scheduler.Match` without side effects.
-- [ ] Run `go test ./internal/api` — expect PASS. Commit.
+- [x] Write `internal/api/plan_test.go` asserting `TestPlanReportsCacheHitsAndEngineAssignment`: plan a pipeline whose first step is already cached and require `steps[0].cache_hit == true` and every step carries a non-empty `engine_kind`. Run — expect FAIL with "undefined: api.Plan".
+- [x] Add `TestPlanReportsNonCacheableReasonForPoolLease` asserting a `LeasePool` step returns the exact reason string from Task 16.
+- [x] Add `TestValidateSurfacesTypeErrorsWithPositions` asserting the Task 3 type error is returned with the step id and port name populated.
+- [x] Add `TestPlanDoesNotDispatchAnything` asserting no message is published to any `job.dispatch.*` subject during a `Plan` call.
+- [x] Implement `internal/api/validate.go` delegating to `dag.TypeCheck` plus plugin schema validation, and `internal/api/plan.go` resolving the DAG, computing cache keys, consulting `cache.Lookup` and `scheduler.Match` without side effects.
+- [x] Run `go test ./internal/api` — expect PASS. Commit.
 
 ## Task 29: CLI at full API parity
 
