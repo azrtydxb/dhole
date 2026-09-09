@@ -63,6 +63,8 @@ writes a superseding record.
 | [0015](.procoder/adr/0015-agent-loops-are-bounded-nodes-and-untrusted-data-is-tainted.md) | Agent loops are bounded nodes and untrusted data is tainted |
 | [0016](.procoder/adr/0016-v1-is-three-acceptance-pipelines-built-in-parallel.md) | v1 is three acceptance pipelines built in parallel |
 | [0017](.procoder/adr/0017-the-project-is-named-dhole.md) | The project is named Dhole |
+| [0018](.procoder/adr/0018-dhole-is-licensed-apache-2-0.md) | Dhole is licensed Apache-2.0 |
+| [0019](.procoder/adr/0019-policy-is-expressed-in-cel.md) | Policy is expressed in CEL |
 
 ## Definition of done for v1
 
@@ -77,13 +79,18 @@ Three acceptance pipelines, one per profile, all running end to end:
 
 ## Still open
 
-Policy expression (built-in DSL, embedded Rego, or compiled Go), API identity and auth,
-the YAML surface for effect classes and taint, and the scheduler's fairness algorithm.
+API identity and auth, the YAML surface for effect classes and taint, and the scheduler's
+fairness algorithm.
 
 ## Stack
 
 Go control plane · NATS + JetStream · SQLite or Postgres · protobuf over ConnectRPC ·
-React and React Flow.
+CEL for policy · React and React Flow.
+
+## License
+
+[Apache-2.0](LICENSE). See [ADR 0018](.procoder/adr/0018-dhole-is-licensed-apache-2-0.md)
+for why, and what it gives up.
 
 ## Name
 
