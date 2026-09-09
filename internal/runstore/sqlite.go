@@ -6,7 +6,6 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -96,52 +95,11 @@ var _ Store = (*SQLiteStore)(nil)
 // NewSQLite opens (creating if needed) the SQLite run store at path and
 // applies the embedded migrations.
 func NewSQLite(path string) (Store, error) {
-	// WAL keeps a reader from blocking the writer; the busy timeout absorbs
-	// the brief contention that remains instead of failing the append.
-	//
-	// _txlock=immediate takes the write lock when a transaction BEGINS rather
-	// than at its first write. SQLite has no SELECT ... FOR UPDATE, so this
-	// database-wide write lock IS the outbox drainer's row claim: a second
-	// control plane cannot read the same unsent rows and publish them a
-	// second time, because it cannot enter the transaction at all until the
-	// first one commits. Deferred locking would instead let both read, both
-	// publish, and one fail at commit — after the duplicate had already gone
-	// out.
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" +
-		"&_txlock=immediate"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := OpenSQLite(path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite run store: %w", err)
 	}
-	// One writer at a time: SQLite serialises writes anyway, and a single
-	// connection turns lock contention into ordinary queueing.
-	db.SetMaxOpenConns(1)
-
-	store := &SQLiteStore{db: db}
-	if err := store.migrate(context.Background()); err != nil {
-		return nil, fmt.Errorf("migrate sqlite run store: %w", err)
-	}
-	return store, nil
-}
-
-// migrate applies every non-Postgres embedded migration in filename order. Each statement
-// is idempotent, so re-applying them on reopen is a no-op.
-func (s *SQLiteStore) migrate(ctx context.Context) error {
-	names, err := dialectMigrations(false)
-	if err != nil {
-		return err
-	}
-	for _, name := range names {
-		stmts, err := migrations.ReadFile(name)
-		if err != nil {
-			return err
-		}
-		if _, err := s.db.ExecContext(ctx, string(stmts)); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
-		}
-	}
-	return nil
+	return &SQLiteStore{db: db}, nil
 }
 
 // sqliteAppend is the one INSERT both the store and its transactions use. A

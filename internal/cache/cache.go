@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/url"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -23,39 +22,41 @@ const timeFormat = time.RFC3339Nano
 // what they produced. It holds references, never bytes — the bytes are in the
 // CAS, addressed by the digests recorded here.
 //
-// It shares the run store's SQLite file rather than owning a database of its
-// own, because cache entries and the runs that pin their blobs are collected
-// together (ADR 0009's refcount reclamation) and a reclamation that spans two
-// files cannot be made atomic.
+// It shares the run store's database rather than owning one, because cache
+// entries and the runs that pin their blobs are collected together (ADR 0009's
+// refcount reclamation) and a reclamation that spans two databases cannot be
+// made atomic. That database is SQLite for a developer and a homelab and
+// Postgres for the tuned target, so the dialect travels with the handle.
 type Cache struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect runstore.Dialect
+	// ownsDB is true only when this cache opened the handle itself, which is
+	// what makes Close safe: a cache handed a shared handle must not close the
+	// definition store's and the collector's database out from under them.
+	ownsDB bool
 }
 
-// NewSQLite opens the cache over the SQLite database at path.
-//
-// It opens the run store first and closes it again purely for its migrations:
-// the cache_entries DDL lives beside the run event log's, is embedded in the
-// same binary, and is applied by the same code, so there is exactly one place
-// the schema is defined. Closing that handle does not touch this one.
-func NewSQLite(path string) (*Cache, error) {
-	migrated, err := runstore.NewSQLite(path)
-	if err != nil {
-		return nil, fmt.Errorf("cache: apply migrations: %w", err)
-	}
-	if err := migrated.Close(); err != nil {
-		return nil, fmt.Errorf("cache: close migration handle: %w", err)
-	}
+// New returns a cache over an already-open handle speaking dialect. The handle
+// is the caller's: the cache shares the run store's database rather than
+// owning one, because cache entries and the runs that pin their blobs are
+// collected together (ADR 0009's refcount reclamation) and a reclamation that
+// spans two databases cannot be made atomic.
+func New(db *sql.DB, dialect runstore.Dialect) *Cache {
+	return &Cache{db: db, dialect: dialect}
+}
 
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	db, err := sql.Open("sqlite", dsn)
+// NewSQLite is the single-file convenience: it opens the SQLite database at
+// path, applies the embedded migrations, and hands back a cache that owns and
+// closes that handle. It is a shorthand for New over runstore.OpenSQLite, not
+// the only way in — a Postgres deployment passes its own handle to New.
+func NewSQLite(path string) (*Cache, error) {
+	db, err := runstore.OpenSQLite(path)
 	if err != nil {
 		return nil, fmt.Errorf("cache: open sqlite: %w", err)
 	}
-	// One writer at a time, as the run store does: SQLite serialises writes
-	// anyway, so a single connection turns lock contention into queueing.
-	db.SetMaxOpenConns(1)
-	return &Cache{db: db}, nil
+	c := New(db, runstore.DialectSQLite)
+	c.ownsDB = true
+	return c, nil
 }
 
 // Lookup returns the outputs recorded for key k under the tenant, and whether
@@ -74,7 +75,7 @@ func (c *Cache) Lookup(
 
 	const q = `SELECT outputs FROM cache_entries WHERE tenant_id = ? AND key = ?`
 	var encoded []byte
-	switch err := c.db.QueryRowContext(ctx, q, tenantID, keyText).Scan(&encoded); {
+	switch err := c.db.QueryRowContext(ctx, c.dialect.Rebind(q), tenantID, keyText).Scan(&encoded); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, false, nil
 	case err != nil:
@@ -114,15 +115,19 @@ func (c *Cache) Record(
 		ON CONFLICT (tenant_id, key) DO UPDATE SET
 			outputs = excluded.outputs,
 			created_at = excluded.created_at`
-	if _, err := c.db.ExecContext(ctx, q,
+	if _, err := c.db.ExecContext(ctx, c.dialect.Rebind(q),
 		tenantID, keyText, encoded, time.Now().UTC().Format(timeFormat)); err != nil {
 		return fmt.Errorf("cache: record entry: %w", err)
 	}
 	return nil
 }
 
-// Close releases the cache's database handle.
+// Close releases the cache's database handle, and only if the cache opened
+// it. A handle passed to New belongs to whoever opened it.
 func (c *Cache) Close() error {
+	if !c.ownsDB {
+		return nil
+	}
 	if err := c.db.Close(); err != nil {
 		return fmt.Errorf("cache: close: %w", err)
 	}

@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -72,49 +71,55 @@ type Store interface {
 	Close() error
 }
 
-// sqliteStore is the catalog over the same SQLite file as the run event log.
+// sqlStore is the catalog over the same database as the run event log.
 //
-// It shares that file rather than owning one, exactly as the cache does: the
-// catalog DDL lives beside the run store's, is embedded in the same binary and
-// applied by the same migration runner, so the schema has one definition.
-type sqliteStore struct {
-	db *sql.DB
+// It shares that database rather than owning one, exactly as the cache does:
+// the catalog DDL lives beside the run store's, is embedded in the same binary
+// and applied by the same migration runner, so the schema has one definition.
+// That database is SQLite for a developer and a homelab and Postgres for the
+// tuned target, so the dialect travels with the handle.
+type sqlStore struct {
+	db      *sql.DB
+	dialect runstore.Dialect
+	// ownsDB is true only when this store opened the handle itself. A catalog
+	// handed a shared handle must not close the definition store's and the
+	// collector's database out from under them.
+	ownsDB bool
 }
 
-var _ Store = (*sqliteStore)(nil)
+var _ Store = (*sqlStore)(nil)
 
-// New opens the catalog over the SQLite database at path, applying the
-// embedded migrations.
-//
-// It opens the run store first and closes it again purely for its migrations;
-// closing that handle does not touch this one.
-func New(path string) (Store, error) {
-	migrated, err := runstore.NewSQLite(path)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: apply migrations: %w", err)
-	}
-	if err := migrated.Close(); err != nil {
-		return nil, fmt.Errorf("catalog: close migration handle: %w", err)
-	}
+// New returns a catalog over an already-open handle speaking dialect. The
+// handle is the caller's, and its schema is expected to carry the migrations
+// the run store applies.
+func New(db *sql.DB, dialect runstore.Dialect) Store {
+	return &sqlStore{db: db, dialect: dialect}
+}
 
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	db, err := sql.Open("sqlite", dsn)
+// NewSQLite is the single-file convenience: it opens the SQLite database at
+// path, applies the embedded migrations, and hands back a catalog that owns
+// and closes that handle. It is a shorthand for New over runstore.OpenSQLite,
+// not the only way in — a Postgres deployment passes its own handle to New.
+func NewSQLite(path string) (Store, error) {
+	db, err := runstore.OpenSQLite(path)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: open sqlite: %w", err)
 	}
-	// One writer at a time, as the run store does: SQLite serialises writes
-	// anyway, so a single connection turns lock contention into queueing.
-	db.SetMaxOpenConns(1)
-	return &sqliteStore{db: db}, nil
+	return &sqlStore{db: db, dialect: runstore.DialectSQLite, ownsDB: true}, nil
 }
 
-// Close releases the database handle.
-func (s *sqliteStore) Close() error { return s.db.Close() }
+// Close releases the database handle, and only if this store opened it. A
+// handle passed to New belongs to whoever opened it.
+func (s *sqlStore) Close() error {
+	if !s.ownsDB {
+		return nil
+	}
+	return s.db.Close()
+}
 
 // Publish validates the manifest and stores it, refusing a republish that would
 // change an already-published version.
-func (s *sqliteStore) Publish(ctx context.Context, tenantID string, m Manifest) error {
+func (s *sqlStore) Publish(ctx context.Context, tenantID string, m Manifest) error {
 	if tenantID == "" {
 		return runstore.ErrTenantRequired
 	}
@@ -150,7 +155,7 @@ func (s *sqliteStore) Publish(ctx context.Context, tenantID string, m Manifest) 
 		(tenant_id, namespace, name, version, digest, kind, effect_class,
 		 capabilities, engine_types, input_schema, output_schema, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	if _, err := s.db.ExecContext(ctx, q,
+	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q),
 		tenantID, m.Namespace, m.Name, m.Version, row.digest, string(m.Kind),
 		row.effectClass, row.capabilities, row.engineTypes,
 		row.inputSchema, row.outputSchema,
@@ -166,7 +171,7 @@ const selectColumns = `namespace, name, version, digest, kind, effect_class,
 	capabilities, engine_types, input_schema, output_schema`
 
 // Resolve returns the entry a reference names.
-func (s *sqliteStore) Resolve(ctx context.Context, tenantID, ref string) (Entry, error) {
+func (s *sqlStore) Resolve(ctx context.Context, tenantID, ref string) (Entry, error) {
 	if tenantID == "" {
 		return Entry{}, runstore.ErrTenantRequired
 	}
@@ -178,7 +183,7 @@ func (s *sqliteStore) Resolve(ctx context.Context, tenantID, ref string) (Entry,
 	q := `SELECT ` + selectColumns + ` FROM catalog_entries
 		WHERE tenant_id = ? AND namespace = ? AND name = ? AND version = ?`
 	var r row
-	switch err := s.db.QueryRowContext(ctx, q, tenantID, namespace, name, version).Scan(
+	switch err := s.db.QueryRowContext(ctx, s.dialect.Rebind(q), tenantID, namespace, name, version).Scan(
 		&r.namespace, &r.name, &r.version, &r.digest, &r.kind, &r.effectClass,
 		&r.capabilities, &r.engineTypes, &r.inputSchema, &r.outputSchema,
 	); {
@@ -196,14 +201,14 @@ func (s *sqliteStore) Resolve(ctx context.Context, tenantID, ref string) (Entry,
 }
 
 // List returns the tenant's whole catalog.
-func (s *sqliteStore) List(ctx context.Context, tenantID string) ([]Entry, error) {
+func (s *sqlStore) List(ctx context.Context, tenantID string) ([]Entry, error) {
 	if tenantID == "" {
 		return nil, runstore.ErrTenantRequired
 	}
 
 	q := `SELECT ` + selectColumns + ` FROM catalog_entries
 		WHERE tenant_id = ? ORDER BY namespace, name, version`
-	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	rows, err := s.db.QueryContext(ctx, s.dialect.Rebind(q), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list: %w", err)
 	}
@@ -232,7 +237,7 @@ func (s *sqliteStore) List(ctx context.Context, tenantID string) ([]Entry, error
 
 // ResolveStep resolves the plugin a step names and folds the step's own
 // declaration into the entry it returns.
-func (s *sqliteStore) ResolveStep(
+func (s *sqlStore) ResolveStep(
 	ctx context.Context, tenantID string, step *dholev1.Step,
 ) (Entry, error) {
 	if tenantID == "" {
