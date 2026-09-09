@@ -1,0 +1,84 @@
+{{/*
+NATS with JetStream, for a deployment that has not brought its own.
+
+It is one replica. NATS JetStream is the availability floor (ADR 0005): a
+single-replica bus is a single point of failure, and this default is a starting
+point rather than a topology. Point `nats.external` at a clustered NATS — three
+or five servers with replicated streams — before this matters.
+*/}}
+{{- if not .Values.nats.external }}
+{{- if .Values.nats.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dhole.fullname" . }}-nats
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+data:
+  nats.conf: |
+    port: 4222
+    http: 8222
+    {{- if .Values.nats.jetstream.enabled }}
+    jetstream {
+      store_dir: "/data"
+      max_file_store: {{ .Values.nats.jetstream.storageSize | quote }}
+    }
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dhole.fullname" . }}-nats
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dhole.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: nats
+  template:
+    metadata:
+      labels:
+        {{- include "dhole.labels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
+    spec:
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image }}
+          args: ["-c", "/etc/nats/nats.conf"]
+          ports:
+            - { name: client, containerPort: 4222 }
+            - { name: monitor, containerPort: 8222 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: monitor }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - { name: config, mountPath: /etc/nats }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "dhole.fullname" . }}-nats
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dhole.fullname" . }}-nats
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { name: client, port: 4222, targetPort: client }
+    - { name: monitor, port: 8222, targetPort: monitor }
+  selector:
+    app.kubernetes.io/name: {{ include "dhole.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: nats
+{{- end }}
+{{- end }}

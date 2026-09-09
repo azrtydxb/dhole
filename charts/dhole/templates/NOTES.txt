@@ -1,0 +1,37 @@
+Dhole {{ .Chart.AppVersion }} is installed as {{ include "dhole.fullname" . }}.
+
+The API has no unauthenticated call. The control plane mints a bootstrap
+service token at start-up, prints it once, and writes it to
+/var/lib/dhole/bootstrap.token:
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "dhole.fullname" . }} | head -3
+
+Reach the contract:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "dhole.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  export DHOLE_SERVER=http://127.0.0.1:{{ .Values.service.port }}
+  export DHOLE_TOKEN=<the token from the log above>
+  dhole pipeline validate --file pipeline.yaml
+
+Engines, one Deployment per tier:
+{{- range .Values.engines }}
+  - {{ .name }} (tier {{ .tier }}, {{ .replicas | default 1 }} replica(s), {{ .slots | default 1 }} slot(s))
+{{- end }}
+
+{{- if not .Values.controlPlane.persistence.enabled }}
+
+WARNING: controlPlane.persistence is off, so the content-addressed store and the
+blob store live in an emptyDir and are discarded when the pod moves. Cached
+results and run artifacts do not survive a reschedule.
+{{- end }}
+{{- if and (not .Values.postgres.external) .Values.postgres.enabled }}
+
+WARNING: this release runs the chart's own single-replica Postgres. It is here so
+the defaults work, not because a chart is the right place to operate a database.
+Set postgres.external before this matters.
+{{- end }}
+{{- if not .Values.nats.external }}
+
+WARNING: this release runs a single-replica NATS. JetStream is the availability
+floor (ADR 0005); point nats.external at a clustered one for anything real.
+{{- end }}

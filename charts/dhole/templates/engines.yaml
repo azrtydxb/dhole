@@ -1,0 +1,81 @@
+{{/*
+One Deployment per trust tier.
+
+An engine dials the bus and opens no port, so there is no Service here and
+nothing to expose. Its bus credentials permit its own tier only — an engine in
+the untrusted tier that subscribes to the trusted tier's dispatch subjects
+receives a permissions error from the server, not a polite refusal from the
+control plane.
+*/}}
+{{- range .Values.engines }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dhole.fullname" $ }}-engine-{{ .name }}
+  labels:
+    {{- include "dhole.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: engine
+    dhole.dev/tier: {{ .tier | quote }}
+spec:
+  replicas: {{ .replicas | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dhole.name" $ }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: engine
+      dhole.dev/engine: {{ .name | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "dhole.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: engine
+        dhole.dev/engine: {{ .name | quote }}
+        dhole.dev/tier: {{ .tier | quote }}
+    spec:
+      serviceAccountName: {{ include "dhole.serviceAccountName" $ }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      # An engine stopped mid-step leaves its dispatch unacknowledged, and it
+      # comes back to somebody else. Long enough for the step to finish is
+      # better for everyone than long enough for nothing.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: engine
+          image: {{ $.Values.image.registry }}/{{ .image.repository }}:{{ .image.tag | default $.Chart.AppVersion }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          env:
+            - name: DHOLE_BUS_URL
+              value: {{ include "dhole.busURL" $ | quote }}
+            # The engine id must be unique per process: it is the subject its
+            # control messages arrive on. The pod name is the one identifier
+            # Kubernetes guarantees is unique and stable for a pod's life.
+            - name: DHOLE_ENGINE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DHOLE_TIER
+              value: {{ .tier | quote }}
+            - name: DHOLE_SLOTS
+              value: {{ .slots | default 1 | quote }}
+            - name: DHOLE_STATE_DIR
+              value: /var/lib/dhole-engine
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/dhole-engine
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

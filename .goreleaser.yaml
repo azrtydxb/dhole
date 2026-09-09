@@ -1,0 +1,232 @@
+# GoReleaser configuration for Dhole.
+#
+# Two binaries, six platform pairs each, multi-arch images, an SPDX SBOM per
+# artifact, and cosign signatures over everything. Nothing here is signed with a
+# key: release signing is keyless through the workflow's OIDC identity, so the
+# thing a verifier checks is "GitHub Actions, running THIS workflow, in THIS
+# repository", which is a claim no leaked key can forge.
+#
+# Locally, `goreleaser check` validates this file and `goreleaser release
+# --snapshot --clean` builds every artifact without publishing. The snapshot
+# still needs a working container runtime for the image steps; use
+# `--skip=docker,sign,sbom` on a machine without one.
+version: 2
+
+project_name: dhole
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: dhole
+    main: ./cmd/dhole
+    binary: dhole
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    # -trimpath and a fixed build id are what make two builds of one commit
+    # produce the same bytes. A release nobody can reproduce is a release
+    # nobody can audit.
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/azrtydxb/dhole/internal/version.version={{ .Version }}
+      - -X github.com/azrtydxb/dhole/internal/version.commit={{ .FullCommit }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: dhole-engine
+    main: ./cmd/dhole-engine
+    binary: dhole-engine
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/azrtydxb/dhole/internal/version.version={{ .Version }}
+      - -X github.com/azrtydxb/dhole/internal/version.commit={{ .FullCommit }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    ids: [dhole, dhole-engine]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - docs/**/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# One SBOM per archive, in SPDX. `TestReleaseArtifactsAreSignedAndHaveSBOM`
+# requires an SPDX attestation on the published image; this is the source
+# document that attestation carries.
+sboms:
+  - id: archive-sboms
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.spdx.sbom.json"
+    args: ["$artifact", "--output", "spdx-json=$document"]
+
+# Keyless signing of the checksum file and every SBOM. --yes because a release
+# runs unattended; the transparency log entry is what makes that safe to say.
+signs:
+  - id: checksum
+    cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+dockers:
+  - id: dhole-amd64
+    ids: [dhole]
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--build-arg=BINARY=dhole"
+      - "--label=org.opencontainers.image.title=dhole"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/azrtydxb/dhole"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: dhole-arm64
+    ids: [dhole]
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--build-arg=BINARY=dhole"
+      - "--label=org.opencontainers.image.title=dhole"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/azrtydxb/dhole"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: engine-amd64
+    ids: [dhole-engine]
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--build-arg=BINARY=dhole-engine"
+      - "--label=org.opencontainers.image.title=dhole-engine"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/azrtydxb/dhole"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: engine-arm64
+    ids: [dhole-engine]
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--build-arg=BINARY=dhole-engine"
+      - "--label=org.opencontainers.image.title=dhole-engine"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/azrtydxb/dhole"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+# The manifests are what anyone actually pulls: `docker pull ghcr.io/azrtydxb/
+# dhole:v1.2.3` resolves to the arch the puller is on. The per-arch tags above
+# exist to be pointed at from here.
+docker_manifests:
+  - name_template: "ghcr.io/azrtydxb/dhole:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole:{{ .Version }}-amd64"
+      - "ghcr.io/azrtydxb/dhole:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/azrtydxb/dhole:latest"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole:{{ .Version }}-amd64"
+      - "ghcr.io/azrtydxb/dhole:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}-amd64"
+      - "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/azrtydxb/dhole-engine:latest"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}-amd64"
+      - "ghcr.io/azrtydxb/dhole-engine:{{ .Version }}-arm64"
+
+# The manifest is signed, not the per-arch images: the manifest digest is what a
+# puller resolves and therefore what a verifier must be able to check.
+docker_signs:
+  - id: images
+    cmd: cosign
+    artifacts: manifests
+    args: ["sign", "--yes", "${artifact}@${digest}"]
+    output: true
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?!?:'
+      order: 1
+    - title: Documentation
+      regexp: '^docs(\(.+\))?!?:'
+      order: 2
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - "^style:"
+      - "^chore:"
+      - "^test:"
+      - Merge branch
+
+release:
+  prerelease: auto
+  draft: false
+  footer: |
+    ## Verifying this release
+
+    Every image is signed keylessly by the workflow that built it, and carries
+    an SPDX SBOM as an attestation. Verify before you run it:
+
+    ```
+    cosign verify ghcr.io/azrtydxb/dhole:{{ .Version }} \
+      --certificate-identity-regexp '^https://github.com/azrtydxb/dhole/\.github/workflows/release\.yml@' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+    cosign verify-attestation ghcr.io/azrtydxb/dhole:{{ .Version }} \
+      --type spdxjson \
+      --certificate-identity-regexp '^https://github.com/azrtydxb/dhole/\.github/workflows/release\.yml@' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```

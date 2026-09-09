@@ -1,0 +1,117 @@
+# Default values for the Dhole chart.
+#
+# The defaults deploy something that WORKS and is not something to run a
+# business on: an in-chart Postgres and an in-chart NATS, both single-replica
+# with ephemeral storage. That is deliberate — a chart whose defaults fail
+# teaches nothing, and a chart whose defaults quietly look production-ready
+# teaches something false. Point `postgres.external` and `nats.external` at real
+# ones before this matters.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ghcr.io
+  repository: azrtydxb/dhole
+  # Empty means the chart's appVersion, which the release workflow pins to the
+  # tag. A floating tag here would make two installs of "the same" chart run
+  # different code.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+controlPlane:
+  replicas: 1
+  # Two control planes may share a database — that is what lets both drain the
+  # same outbox backlog. They must then share a deployment id, and MUST NOT
+  # share one with a different deployment: an outbox row is addressed to one
+  # plane's bus. Empty derives it from the state directory.
+  deploymentID: ""
+  apiPort: 7777
+  # A browser origin allowed to make cross-origin API calls. Repeatable.
+  allowedOrigins: []
+  otlpEndpoint: ""
+  otlpInsecure: false
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  # The state directory holds the CAS and the blob store. emptyDir is fine for
+  # a trial and wrong for anything else: it is discarded when the pod moves.
+  persistence:
+    enabled: false
+    size: 20Gi
+    storageClass: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+engines:
+  # One entry per trust tier. An engine's bus credentials permit its own tier
+  # only, so a tier is a deployment decision rather than a label.
+  - name: trusted
+    tier: trusted
+    replicas: 1
+    slots: 2
+    image:
+      repository: azrtydxb/dhole-engine
+      tag: ""
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { memory: 2Gi }
+
+postgres:
+  # external: a DSN this chart does not manage. Set it for anything real.
+  external: ""
+  enabled: true
+  image: postgres:17-alpine
+  database: dhole
+  user: dhole
+  # Generated on first install when empty. Held in a Secret either way.
+  password: ""
+  existingSecret: ""
+  persistence:
+    enabled: false
+    size: 20Gi
+    storageClass: ""
+
+nats:
+  # external: a nats:// URL this chart does not manage.
+  external: ""
+  enabled: true
+  image: nats:2.12-alpine
+  jetstream:
+    enabled: true
+    storageSize: 10Gi
+  persistence:
+    enabled: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 7777
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+commonLabels: {}
