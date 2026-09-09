@@ -47,7 +47,7 @@ decide what may be cached and what may be retried.
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
-  0011 policy_audit (21). A task
+  0011 policy_audit (21), 0012 upstreams (34). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -470,12 +470,12 @@ Interfaces: produces `plugins.Signatures` with `Record(ctx, tenantID string, d *
 Files: `internal/plugins/upstream.go`, `internal/plugins/mirror.go`, `internal/plugins/upstream_test.go`
 Interfaces: produces `plugins.Upstreams` with `Add(ctx, tenantID string, u Upstream) error`, `Sync(ctx, tenantID, namespace string) (int, error)`; `Upstream{Namespace, URL string; AllowedIdentities []string; MirrorPolicy always|on_demand}`.
 
-- [ ] Write `internal/plugins/upstream_test.go` asserting `TestNamespacingPreventsCollisionBetweenUpstreams`: two upstreams both publishing `docker-build` resolve independently as `a/docker-build` and `b/docker-build`. Run — expect FAIL with "undefined: plugins.NewUpstreams".
-- [ ] Add `TestSyncMirrorsArtifactsLocallyAndSurvivesUpstreamOutage` asserting that after `Sync`, stopping the upstream registry still allows resolve and fetch from the local mirror.
-- [ ] Add `TestUnmirroredPluginBlocksDispatchWithClearDiagnostic` asserting dispatch of an unmirrored plugin from an unreachable upstream fails with an error naming the plugin and the upstream.
-- [ ] Add `TestPerUpstreamAllowedIdentitiesAreEnforced` asserting a plugin signed by an identity allowed on upstream `a` is rejected when pulled from upstream `b`.
-- [ ] Implement `internal/plugins/upstream.go` and `mirror.go` copying artifacts into the local CAS or registry mirror and recording signatures at sync time.
-- [ ] Run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/plugins/upstream_test.go` asserting `TestNamespacingPreventsCollisionBetweenUpstreams`: two upstreams both publishing `docker-build` resolve independently as `a/docker-build` and `b/docker-build`. Run — expect FAIL with "undefined: plugins.NewUpstreams".
+- [x] Add `TestSyncMirrorsArtifactsLocallyAndSurvivesUpstreamOutage` asserting that after `Sync`, stopping the upstream registry still allows resolve and fetch from the local mirror.
+- [x] Add `TestUnmirroredPluginBlocksDispatchWithClearDiagnostic` asserting dispatch of an unmirrored plugin from an unreachable upstream fails with an error naming the plugin and the upstream.
+- [x] Add `TestPerUpstreamAllowedIdentitiesAreEnforced` asserting a plugin signed by an identity allowed on upstream `a` is rejected when pulled from upstream `b`.
+- [x] Implement `internal/plugins/upstream.go` and `mirror.go` copying artifacts into the local CAS or registry mirror and recording signatures at sync time.
+- [x] Run `make test-integration` — expect PASS. Commit.
 
 ## Task 35: Lockfile resolution at definition save
 
