@@ -70,7 +70,7 @@ func TestSQLiteSatisfiesDefinitionStoreContract(t *testing.T) {
 }
 
 func TestPostgresSatisfiesDefinitionStoreContract(t *testing.T) {
-	definitionStoreContract(t, defstore.NewWithDialect(postgresDB(t), runstore.DialectPostgres))
+	definitionStoreContract(t, defstore.NewWithDialect(postgresDB(t), runstore.DialectPostgres, defstore.WithResolver(stubResolver{})))
 }
 
 // definitionStoreContract is the behaviour both dialects must show.

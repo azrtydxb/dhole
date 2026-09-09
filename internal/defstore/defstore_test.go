@@ -29,9 +29,9 @@ const tenant = "acme"
 // revision in an existing deployment.
 const goldenHash = "947107ebe467599ab5293459e97e21555fba216b1cebde3390aa6302d47ab27b"
 
-// newStore opens a throwaway SQLite database with the definition schema
+// openTestDB opens a throwaway SQLite database with the definition schema
 // applied, on the same connection shape the run store uses.
-func newStore(t *testing.T) defstore.Store {
+func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "definitions.db")
@@ -45,8 +45,17 @@ func newStore(t *testing.T) defstore.Store {
 	require.NoError(t, err)
 	_, err = db.ExecContext(context.Background(), string(schema))
 	require.NoError(t, err)
+	return db
+}
 
-	return defstore.New(db)
+// newStore is that database behind a definition store.
+func newStore(t *testing.T, opts ...defstore.Option) defstore.Store {
+	t.Helper()
+	// The stub resolver comes first so a caller passing its own overrides it:
+	// these tests are about revisions and approval, and a store that refused
+	// to save anything carrying a plugin reference would make every one of
+	// them a test of the resolver instead.
+	return defstore.New(openTestDB(t), append([]defstore.Option{defstore.WithResolver(stubResolver{})}, opts...)...)
 }
 
 // pipeline builds a small but non-trivial definition: repeated fields and a
@@ -347,8 +356,9 @@ func TestGetRefusesAnUnknownOrMismatchedRevision(t *testing.T) {
 	require.ErrorIs(t, store.Approve(ctx, tenant, "no-such-revision", "grace"), defstore.ErrNotFound)
 }
 
-// A revision carries a lockfile — empty until the resolver fills it — and it
-// must survive the round trip rather than come back nil and panic a caller.
+// A revision carries the lockfile the save resolved, and it must survive the
+// round trip intact rather than come back nil and panic a caller — what a
+// revision runs is unknowable without it.
 func TestRevisionCarriesALockfileAcrossTheRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store := newStore(t)
@@ -356,12 +366,12 @@ func TestRevisionCarriesALockfileAcrossTheRoundTrip(t *testing.T) {
 	saved, err := store.Save(ctx, tenant, pipeline("p1", "oci://dhole/build:1"), "ada")
 	require.NoError(t, err)
 	require.NotNil(t, saved.Lockfile)
-	require.Empty(t, saved.Lockfile)
+	require.Len(t, saved.Lockfile, 2, "both plugin references of the pipeline are pinned")
 
 	read, err := store.Revision(ctx, tenant, saved.ID)
 	require.NoError(t, err)
 	require.NotNil(t, read.Lockfile)
-	require.Empty(t, read.Lockfile)
+	require.Equal(t, saved.Lockfile, read.Lockfile)
 }
 
 // The content hash is the revision's identity, so it must be a property of the

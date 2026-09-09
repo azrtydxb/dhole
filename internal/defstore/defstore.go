@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/plugins"
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
@@ -94,6 +95,9 @@ type Store interface {
 type SQLStore struct {
 	db      *sql.DB
 	dialect runstore.Dialect
+	// resolver pins plugin references at save time. See lockfile.go for why
+	// that moment, and no later one, is the only one that can be trusted.
+	resolver plugins.Resolver
 }
 
 // Compile-time proof that the SQL implementation satisfies the interface later
@@ -104,14 +108,18 @@ var _ Store = (*SQLStore)(nil)
 // form of NewWithDialect and nothing more: a Postgres deployment calls
 // NewWithDialect, because pgx rejects the `?` placeholders these statements
 // are written with.
-func New(db *sql.DB) *SQLStore {
-	return NewWithDialect(db, runstore.DialectSQLite)
+func New(db *sql.DB, opts ...Option) *SQLStore {
+	return NewWithDialect(db, runstore.DialectSQLite, opts...)
 }
 
 // NewWithDialect returns a definition store over db, which speaks dialect and
 // whose schema is expected to carry the migrations the run store applies.
-func NewWithDialect(db *sql.DB, dialect runstore.Dialect) *SQLStore {
-	return &SQLStore{db: db, dialect: dialect}
+func NewWithDialect(db *sql.DB, dialect runstore.Dialect, opts ...Option) *SQLStore {
+	s := &SQLStore{db: db, dialect: dialect}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Save records a revision of p, as a draft.
@@ -123,13 +131,33 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 		return Revision{}, errors.New("save definition: nil pipeline")
 	}
 
+	// Resolution comes first, and outside the transaction: every plugin
+	// reference is pinned before a single row is written, so a registry that
+	// cannot answer for one of them leaves no half-pinned revision behind. A
+	// revision that looks pinned and is not would never be noticed.
+	//
+	// A store built without a resolver pins nothing and stores an empty
+	// lockfile. That is a real configuration — a deployment whose definitions
+	// carry no plugin references, and the tests of everything here that is not
+	// about plugins — but it is also the one way to get an unpinned revision,
+	// so any deployment that serves plugin references MUST pass WithResolver.
+	// An empty lockfile on a definition that names plugins is not a pinned
+	// revision; it is a revision nobody pinned.
+	lockfile := map[string]string{}
+	if s.resolver != nil {
+		var err error
+		if lockfile, err = ResolveLockfile(ctx, tenantID, p, s.resolver); err != nil {
+			return Revision{}, fmt.Errorf("save definition: %w", err)
+		}
+	}
+
 	hash := ContentHash(p)
 	rev := Revision{
 		ID:          "rev_" + hash,
 		PipelineID:  p.GetId(),
 		ContentHash: hash,
 		State:       StateDraft,
-		Lockfile:    map[string]string{},
+		Lockfile:    lockfile,
 		Author:      author,
 	}
 
@@ -149,7 +177,9 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	// The definition stored is the canonical encoding the hash was taken
 	// over, so what a run reads back cannot drift from what was hashed.
 	definition := canonicalBytes(p)
-	lockfile, err := json.Marshal(rev.Lockfile)
+	// encoding/json sorts map keys, so the stored bytes do not depend on the
+	// iteration order of the map they came from.
+	encodedLockfile, err := json.Marshal(rev.Lockfile)
 	if err != nil {
 		return Revision{}, fmt.Errorf("save definition: encode lockfile: %w", err)
 	}
@@ -160,7 +190,7 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 		ON CONFLICT DO NOTHING`
 	if _, err := tx.ExecContext(ctx, s.dialect.Rebind(insertRevision),
 		tenantID, rev.ID, rev.PipelineID, rev.ContentHash, string(rev.State),
-		string(lockfile), definition, author, now); err != nil {
+		string(encodedLockfile), definition, author, now); err != nil {
 		return Revision{}, fmt.Errorf("save definition: %w", err)
 	}
 
