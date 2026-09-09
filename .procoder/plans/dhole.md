@@ -462,7 +462,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
 - [ ] **`policy.Input` carries no taint keys.** Task 51's `taint.Check` returns a `policy.Decision` but builds it itself, because `internal/policy` was a concurrent task's file. Add the taint fields to `policy.Input` and the CEL environment so an operator can write a taint rule instead of relying on the four built-in ones. Found building Task 51.
 - [ ] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
-- [ ] **`dhole serve` does not serve the API.** `internal/server` assembles the bus, scheduler, outbox
+- [x] **`dhole serve` does not serve the API.** `internal/server` assembles the bus, scheduler, outbox
   and an engine, and never calls `api.Server`'s handler — nothing in `cmd/` or `internal/server` imports
   `internal/api` at all. So the binary runs a control plane with no contract on it: the CLI has nothing to
   talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
@@ -481,7 +481,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
   Task 48 had to seed one through a fixture-only HTTP route. That is a hole in ADR 0013 exactly where it
   matters: the GUI cannot create a pipeline without a back door. Add `CreatePipeline`, or let
   `ApplyOperation` accept an empty base for a new id. Found independently by Tasks 46 and 48.
-- [ ] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
+- [x] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
   there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
   tenant, not only whatever a plane prints at startup. Found building Task 48.
 - [ ] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and

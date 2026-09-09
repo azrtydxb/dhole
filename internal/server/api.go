@@ -134,16 +134,21 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		}
 	}()
 
-	s.apiHTTP = &http.Server{
+	httpSrv := &http.Server{
 		Handler:           allowOrigins(apiSrv.Handler(), s.cfg.APIAllowedOrigins),
 		ReadHeaderTimeout: apiReadHeaderTimeout,
 		BaseContext:       func(net.Listener) context.Context { return runCtx },
 	}
+	s.apiHTTP = httpSrv
 	s.apiAddr = listener.Addr().String()
 	s.bootstrap = token
 
+	// The goroutine serves the server it was given, not whatever s.apiHTTP
+	// holds when it happens to start. Stop clears that field, and a Stop that
+	// lands between spawn and the first statement here would otherwise leave
+	// this dereferencing nil.
 	s.spawn(func() {
-		if serveErr := s.apiHTTP.Serve(listener); serveErr != nil &&
+		if serveErr := httpSrv.Serve(listener); serveErr != nil &&
 			!errors.Is(serveErr, http.ErrServerClosed) {
 			s.log.Error("API server stopped", "error", serveErr)
 		}
