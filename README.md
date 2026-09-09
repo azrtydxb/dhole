@@ -3,8 +3,13 @@
 An everything-pipeline engine: durable, typed workflows that run anywhere, driven by
 anything, editable by humans and agents alike.
 
-> **Status: design.** There is no code yet. This repository currently holds the
-> architecture decision records that define what is being built and why.
+> **Status: early build.** A two-step pipeline runs end to end from a single
+> binary, and the same definition produces identical results against Postgres,
+> an out-of-process NATS and S3. The control plane, the engine protocol, the
+> executor interface, the content-addressed cache and store, policy, identity,
+> the plugin registry and the definition store are in place. The API, the web
+> editor and most engine backends are not. See `.procoder/plans/dhole.md` for
+> exactly what is done and what is next.
 
 ## What it is
 

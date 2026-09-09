@@ -279,12 +279,31 @@ Interfaces: produces `cas.GC{Store cas.Store; Runs runstore.Store; DB *sql.DB}` 
 Files: `cmd/dhole/main.go`, `internal/server/server.go`, `internal/server/singlebinary.go`, `internal/server/e2e_test.go`, `testdata/pipelines/two-step.yaml`
 Interfaces: produces `server.New(cfg server.Config) (*server.Server, error)`, `Server.Start(ctx) error`, `Server.Stop(ctx) error`; `server.Config{Mode ModeEmbedded|ModeDistributed; StoreDSN, BusURL, BlobRoot string}`.
 
-- [ ] Write `internal/server/e2e_test.go` asserting `TestSingleBinaryRunsTwoStepPipeline`: start a server in `ModeEmbedded`, submit `testdata/pipelines/two-step.yaml` (step `a` writes a file, step `b` reads it), and require the run reaches `RUN_COMPLETED` with `b`'s output containing `a`'s bytes. Run — expect FAIL with "undefined: server.New".
-- [ ] Add `TestSingleBinaryAndDistributedParity` running the same pipeline in `ModeDistributed` against the compose-provided Postgres, NATS and MinIO, requiring identical run output.
-- [ ] Add `TestEmbeddedEngineUsesLoopbackBusNotDirectCall` asserting the run's dispatch appears on the bus subject, proving there is no in-process shortcut.
-- [ ] Implement `internal/server/singlebinary.go` wiring embedded NATS, SQLite, filesystem CAS and blobstore, and an in-process `engine.Agent` connected over loopback.
-- [ ] Implement `cmd/dhole/main.go` with `dhole serve`, reading flags `--mode`, `--store-dsn`, `--bus-url`, `--blob-root`.
-- [ ] Run `go test ./internal/server && make test-integration` — expect PASS. Commit.
+- [x] Write `internal/server/e2e_test.go` asserting `TestSingleBinaryRunsTwoStepPipeline`: start a server in `ModeEmbedded`, submit `testdata/pipelines/two-step.yaml` (step `a` writes a file, step `b` reads it), and require the run reaches `RUN_COMPLETED` with `b`'s output containing `a`'s bytes. Run — expect FAIL with "undefined: server.New".
+- [x] Add `TestSingleBinaryAndDistributedParity` running the same pipeline in `ModeDistributed` against the compose-provided Postgres, NATS and MinIO, requiring identical run output.
+- [x] Add `TestEmbeddedEngineUsesLoopbackBusNotDirectCall` asserting the run's dispatch appears on the bus subject, proving there is no in-process shortcut.
+- [x] Implement `internal/server/singlebinary.go` wiring embedded NATS, SQLite, filesystem CAS and blobstore, and an in-process `engine.Agent` connected over loopback.
+- [x] Implement `cmd/dhole/main.go` with `dhole serve`, reading flags `--mode`, `--store-dsn`, `--bus-url`, `--blob-root`.
+- [x] Run `go test ./internal/server && make test-integration` — expect PASS. Commit.
+
+## Task 18b: What the first end-to-end run found
+
+Task 18 proved the architecture runs: a two-step pipeline completes from one
+binary, and the same definition produces identical bytes against Postgres, an
+out-of-process NATS and MinIO. It also surfaced seven gaps that no unit test
+could have shown, because each lives between components. They are recorded
+here as work, not as notes, because the plan had no task for any of them.
+
+Files: `internal/runstore/`, `internal/outbox/`, `internal/scheduler/`, `internal/server/`, `proto/dhole/v1/engine.proto`
+Interfaces: adds an open-run index to `runstore.Store`; scopes `outbox` claims; adds a message discriminator to the engine subjects or their payloads.
+
+- [ ] **The outbox claim is scoped to nothing.** `SELECT ... WHERE sent_at IS NULL` carries no tenant and no deployment id, so two control planes sharing a database steal each other's messages — observed for real: the server's drainer claimed and published `internal/outbox`'s own test fixtures onto its own bus. Scope the claim, and write the test that fails when two planes share a store.
+- [ ] **Nothing can enumerate unfinished runs.** `Replay` needs a run id you already have, so the set of runs still to advance lives only in the server's memory and a restart cannot rediscover a run that is merely waiting. This contradicts ADR 0003, whose whole claim is that a restart is a replay. Add an open-run index to the store and drive the advance loop from it.
+- [ ] **Nothing re-advances a run on its own.** `Advance` runs only when a status arrives, so a run submitted before any engine registered records `STEP_UNSCHEDULABLE` and stalls forever. Task 18 added a 250ms poll to get the run through; replace it with something driven by the index above, and keep the test that submits a run before any engine exists.
+- [ ] **A lost `EngineRegistration` is permanent.** It is fire-and-forget on a core subject, and `Heartbeat` refuses to rebuild an instance (Task 31, deliberately). An engine that starts before the plane is invisible until it restarts. Decide between a durable registration subject and a periodic re-announce, and implement it.
+- [ ] **An engine message's type cannot be recovered from its bytes.** An `EngineHeartbeat` decodes cleanly as an `EngineRegistration` — both start with `engine_id`, and packed `repeated uint32` shares a wire type with `repeated message`. Task 18 hit this by guessing from content and registering engines with an empty platform, which made every step unschedulable. It now subscribes to `engine.>` and dispatches on the subject. Put the discriminator somewhere it cannot be lost, and say so in the wire contract.
+- [ ] **Orphan re-dispatch is not expressible.** `lease.Expire` returns orphans, but `scheduler.plan` counts any step with `attempts > 0` as in flight forever and no event says an attempt died. Add the event and the sweeper that writes it.
+- [ ] **Two runs can share a sequence.** `run_events`'s primary key is `(tenant, run, step, attempt, sequence)`, so the per-tenant log has no single total order. Decide whether it needs one — the outbox and the run view both assume order somewhere — and either make the sequence per-tenant or document what it does order.
 
 ## Task 19: Effect classes, retry and idempotency keys
 

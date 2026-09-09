@@ -211,7 +211,13 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	defs := defstore.NewWithDialect(in.db, in.dialect)
+	// WithoutPinning is deliberate and temporary. The steps this server runs
+	// today carry `command:` references, which are inline commands rather than
+	// artifacts, so there is nothing a resolver could pin them to. The moment a
+	// step type maps a resolved artifact to a command — the mapping neither
+	// Task 32 nor 35 provides — this becomes WithResolver, and saving unpinned
+	// stops being allowed here.
+	defs := defstore.NewWithDialect(in.db, in.dialect, defstore.WithoutPinning())
 	out := outbox.New(in.store, in.plane, outbox.WithErrorHandler(func(err error) {
 		s.log.Error("outbox drain failed", "error", err)
 	}))
