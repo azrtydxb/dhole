@@ -37,3 +37,34 @@ jobs:
         run: make check
       - name: test
         run: make test
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: install
+        run: npm ci
+        working-directory: web
+      # web-check skips when node_modules is absent, which is right for the Go
+      # gate and wrong here — this job exists to run it, so it installs first.
+      - name: check
+        run: make web-check
+      - name: install browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      # The end-to-end suite starts a real `dhole serve`, so it needs the Go
+      # toolchain as well as the browser. It is deliberately not part of
+      # `make check`.
+      - name: e2e
+        run: make web-e2e

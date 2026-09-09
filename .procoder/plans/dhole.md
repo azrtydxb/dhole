@@ -654,12 +654,12 @@ Interfaces: produces `obs.Init(ctx, cfg obs.Config) (shutdown func(context.Conte
 Files: `web/package.json`, `web/vite.config.ts`, `web/src/main.tsx`, `web/src/api/client.ts`, `web/buf.gen.web.yaml`, `web/src/api/client.test.ts`, `web/playwright.config.ts`
 Interfaces: produces `web/src/api/client.ts` exporting `pipelineClient`, `runClient` built from generated Connect-Web stubs; `npm run gen` regenerates them; `make web-check` runs typecheck, lint and unit tests.
 
-- [ ] Write `web/src/api/client.test.ts` asserting `TestClientIsGeneratedNotHandWritten`: importing `pipelineClient` exposes a method for every RPC listed in the generated service descriptor, failing with the missing names. Run `npm test` — expect FAIL with "Cannot find module '../gen/dhole/v1/api_connect'".
-- [ ] Write `web/buf.gen.web.yaml` emitting `bufbuild/es` and `connectrpc/es` into `web/src/gen`, and add `npm run gen` invoking it.
-- [ ] Scaffold Vite + React 19 + TypeScript strict, TanStack Query, and set `web/package.json` engines to Node 22.
-- [ ] Implement `web/src/api/client.ts` wiring the Connect transport with the `Authorization` header from the stored token.
-- [ ] Add `make web-check` to `make check` and Playwright to CI with `playwright.config.ts` pointing at a `dhole serve --mode embedded` fixture.
-- [ ] Run `make check` — expect PASS. Commit.
+- [x] Write `web/src/api/client.test.ts` asserting `TestClientIsGeneratedNotHandWritten`: importing `pipelineClient` exposes a method for every RPC listed in the generated service descriptor, failing with the missing names. Run `npm test` — expect FAIL with "Cannot find module '../gen/dhole/v1/api_connect'".
+- [x] Write `web/buf.gen.web.yaml` emitting `bufbuild/es` and `connectrpc/es` into `web/src/gen`, and add `npm run gen` invoking it.
+- [x] Scaffold Vite + React 19 + TypeScript strict, TanStack Query, and set `web/package.json` engines to Node 22.
+- [x] Implement `web/src/api/client.ts` wiring the Connect transport with the `Authorization` header from the stored token.
+- [x] Add `make web-check` to `make check` and Playwright to CI with `playwright.config.ts` pointing at a `dhole serve --mode embedded` fixture.
+- [x] Run `make check` — expect PASS. Commit.
 
 ## Task 46: Canvas with typed ports
 
