@@ -1,0 +1,267 @@
+syntax = "proto3";
+
+package dhole.v1;
+
+import "dhole/v1/pipeline.proto";
+
+option go_package = "github.com/azrtydxb/dhole/gen/dhole/v1;dholev1";
+
+// AddStep introduces a step. The step's id is its identity for the life of
+// the pipeline; nothing else may be reused to mean a different step.
+message AddStep {
+  Step step = 1;
+}
+
+// RemoveStep takes a step out again.
+//
+// It exists because the editing vocabulary has to be CLOSED UNDER INVERSION.
+// Every operation returns the operation that undoes it, and without a removal
+// there is nothing an add_step could return: undo would stop being a property
+// of the API and become something each client reimplements, which is exactly
+// what ADR 0013 refuses.
+//
+// A step that still has edges is refused rather than removed together with
+// them, so that the inverse of a removal is a plain add_step and not an
+// add_step plus a set of reconnections whose order would matter.
+message RemoveStep {
+  string step_id = 1;
+}
+
+// Connect adds an edge from one step's output port to another's input port.
+// The DAG is these edges; there is no separate dependency list to drift.
+message Connect {
+  Edge edge = 1;
+}
+
+// RemoveEdge deletes an edge. It is the exact inverse of Connect, and Connect
+// of it.
+message RemoveEdge {
+  Edge edge = 1;
+}
+
+// SetProperty changes one scalar property of one step. The property is named
+// by its protobuf field name — "plugin_ref", "effect_class", "lease_scope" —
+// and the value is its text form, so an enum travels as its declared name
+// rather than an integer nobody can read in an audit log.
+message SetProperty {
+  string step_id = 1;
+  string property = 2;
+  string value = 3;
+}
+
+// Rename changes a step's display name.
+//
+// Any name is accepted, the empty one included: a name is a label and the id
+// is the identity, and refusing the empty name would make the inverse of
+// naming a previously unnamed step inexpressible.
+message Rename {
+  string step_id = 1;
+  string name = 2;
+}
+
+// Operation is one edit. The GUI emits one per interaction; the CLI and an
+// agent emit exactly the same ones. There is no document-level write: an
+// editor that sends whole documents cannot merge concurrent edits and cannot
+// undo (ADR 0013).
+message Operation {
+  oneof kind {
+    AddStep add_step = 1;
+    Connect connect = 2;
+    SetProperty set_property = 3;
+    RemoveEdge remove_edge = 4;
+    Rename rename = 5;
+    RemoveStep remove_step = 6;
+  }
+}
+
+// ChangeKind is what happened to one element of the pipeline.
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_ADDED = 1;
+  CHANGE_KIND_REMOVED = 2;
+  CHANGE_KIND_CHANGED = 3;
+}
+
+// Change is one element the operation touched. Exactly one of step_id and
+// edge is populated: a change that names neither describes nothing.
+message Change {
+  ChangeKind kind = 1;
+  string step_id = 2;
+  Edge edge = 3;
+  // Human-readable, and it names the step or the edge it is about, because
+  // this string is what a GUI shows and what an agent quotes back.
+  string summary = 4;
+}
+
+// Diff is what an operation changed.
+message Diff {
+  repeated Change changes = 1;
+}
+
+// Revision is one immutable definition of a pipeline, as the wire sees it.
+message Revision {
+  string id = 1;
+  string pipeline_id = 2;
+  string content_hash = 3;
+  // draft, reviewed or active.
+  string state = 4;
+  // Plugin reference to pinned digest.
+  map<string, string> lockfile = 5;
+  string author = 6;
+  string approver = 7;
+}
+
+// GetPipelineRequest asks for one revision of one pipeline. An empty
+// revision_id means the pipeline's current editing head.
+message GetPipelineRequest {
+  string pipeline_id = 1;
+  string revision_id = 2;
+}
+
+// GetPipelineResponse carries the definition and the revision it came from.
+message GetPipelineResponse {
+  Pipeline pipeline = 1;
+  Revision revision = 2;
+}
+
+// ApplyOperationRequest applies one edit to the revision the caller last saw.
+// base_revision is mandatory: an edit that cannot conflict is an edit that
+// silently overwrites someone else's.
+message ApplyOperationRequest {
+  string pipeline_id = 1;
+  string base_revision = 2;
+  Operation operation = 3;
+}
+
+// ApplyOperationResponse is the new revision, what changed, and the operation
+// that undoes it.
+message ApplyOperationResponse {
+  Revision revision = 1;
+  Diff diff = 2;
+  // inverse applied to revision yields the definition base_revision held.
+  Operation inverse = 3;
+  // The resulting definition, so an editor need not fetch what it just wrote.
+  Pipeline pipeline = 4;
+}
+
+// ValidateRequest asks for structured diagnostics on a revision, or on a
+// definition the caller has not saved yet.
+message ValidateRequest {
+  string pipeline_id = 1;
+  string revision_id = 2;
+  Pipeline pipeline = 3;
+}
+
+// Diagnostic is one problem, positioned at the step and port it is about.
+message Diagnostic {
+  // "error" or "warning".
+  string severity = 1;
+  string message = 2;
+  string step_id = 3;
+  string port = 4;
+}
+
+// ValidateResponse is every diagnostic found. An empty list means the
+// definition is well-formed.
+message ValidateResponse {
+  repeated Diagnostic diagnostics = 1;
+}
+
+// PlanRequest asks what a run of this revision would do, without doing any of
+// it.
+message PlanRequest {
+  string pipeline_id = 1;
+  string revision_id = 2;
+}
+
+// PlannedStep is one step of a dry run: whether it would be served from cache,
+// which kind of engine it would land on, and — when it would not be cached —
+// why not.
+message PlannedStep {
+  string step_id = 1;
+  bool cache_hit = 2;
+  string engine_kind = 3;
+  string non_cacheable_reason = 4;
+}
+
+// PlanResponse is the dry run.
+message PlanResponse {
+  repeated PlannedStep steps = 1;
+}
+
+// ListRevisionsRequest asks for a pipeline's revision history.
+message ListRevisionsRequest {
+  string pipeline_id = 1;
+}
+
+// ListRevisionsResponse is that history, oldest first.
+message ListRevisionsResponse {
+  repeated Revision revisions = 1;
+}
+
+// ApproveRevisionRequest promotes a revision to active. The approver is the
+// authenticated caller and is never taken from the request.
+message ApproveRevisionRequest {
+  string revision_id = 1;
+}
+
+// ApproveRevisionResponse is the revision as it now stands.
+message ApproveRevisionResponse {
+  Revision revision = 1;
+}
+
+// StartRunRequest starts a run. An empty revision_id means the pipeline's
+// active revision; a revision that is not active is refused.
+message StartRunRequest {
+  string pipeline_id = 1;
+  string revision_id = 2;
+}
+
+// StartRunResponse names the new run and the revision it pinned.
+message StartRunResponse {
+  string run_id = 1;
+  string revision_id = 2;
+}
+
+// WatchRunRequest follows one run.
+message WatchRunRequest {
+  string run_id = 1;
+}
+
+// WatchRunResponse is one entry of the run's event log — the run's only position
+// (ADR 0003). The stream replays the log from its beginning and then follows
+// it, so a client that connects late misses nothing.
+message WatchRunResponse {
+  string run_id = 1;
+  string step_id = 2;
+  uint32 attempt = 3;
+  uint64 sequence = 4;
+  // The stored event type, e.g. "STEP_DISPATCHED".
+  string type = 5;
+  bytes payload = 6;
+  int64 at_unix_nano = 7;
+}
+
+// PipelineService is the one API contract. The GUI has no privileged
+// endpoints: it is one client of this service among the CLI and agents
+// (ADR 0013). Every RPC is authenticated and tenant-scoped — the tenant comes
+// from the credential and never from the request.
+service PipelineService {
+  // GetPipeline reads one revision of one pipeline.
+  rpc GetPipeline(GetPipelineRequest) returns (GetPipelineResponse);
+  // ApplyOperation applies one edit and returns the diff and its inverse.
+  rpc ApplyOperation(ApplyOperationRequest) returns (ApplyOperationResponse);
+  // Validate returns structured diagnostics with source positions.
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  // Plan is a dry run: what would execute, what is a cache hit, and which
+  // engine each step lands on.
+  rpc Plan(PlanRequest) returns (PlanResponse);
+  // ListRevisions returns a pipeline's revision history.
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
+  // ApproveRevision promotes a revision to active.
+  rpc ApproveRevision(ApproveRevisionRequest) returns (ApproveRevisionResponse);
+  // StartRun starts a run of an approved revision.
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  // WatchRun streams a run's event log.
+  rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse);
+}
