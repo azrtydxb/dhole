@@ -1,0 +1,2 @@
+# Importing engine.py (the suite runs it as a script) leaves bytecode behind.
+__pycache__/
