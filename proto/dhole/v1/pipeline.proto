@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package dhole.v1;
+
+import "dhole/v1/common.proto";
+
+option go_package = "github.com/azrtydxb/dhole/gen/dhole/v1;dholev1";
+
+// BlobType is an opaque byte stream, identified by content and carried by
+// reference. Its media type is advisory; nothing type-checks against it.
+message BlobType {
+  // Advisory media type, e.g. "application/gzip". May be empty.
+  string media_type = 1;
+}
+
+// StructType is data with a JSON Schema. Two structured ports are compatible
+// when their schema ids match, which is what makes the editor able to reject a
+// bad edge before a run starts.
+message StructType {
+  // The schema's "$id". This is the identity used for compatibility.
+  string schema_id = 1;
+  // The schema source, when the control plane carries it inline.
+  string schema = 2;
+}
+
+// PortType is the type of one port. The oneof is the whole type system: a
+// blob and a structured value never connect to each other.
+message PortType {
+  oneof kind {
+    BlobType blob = 1;
+    StructType structured = 2;
+  }
+}
+
+// Port is one named input or output of a step. Ports are what the DAG is
+// derived from — a step never reaches into a shared workspace.
+message Port {
+  string name = 1;
+  PortType type = 2;
+}
+
+// Step is one unit of work: a plugin reference, its typed ports, the effect
+// class that governs caching and retry, and the capabilities it requires.
+message Step {
+  string id = 1;
+  string name = 2;
+  // Scheme-addressed reference to the plugin that implements this step.
+  string plugin_ref = 3;
+  EffectClass effect_class = 4;
+  repeated Port inputs = 5;
+  repeated Port outputs = 6;
+  repeated Capability capabilities = 7;
+}
+
+// Edge connects one step's output port to another step's input port. The DAG
+// is these edges; there is no separately authored dependency list to drift
+// from them.
+message Edge {
+  string from_step = 1;
+  string from_port = 2;
+  string to_step = 3;
+  string to_port = 4;
+}
+
+// Pipeline is a tenant-scoped set of steps and the edges between them.
+message Pipeline {
+  string id = 1;
+  Tenant tenant = 2;
+  repeated Step steps = 3;
+  repeated Edge edges = 4;
+}

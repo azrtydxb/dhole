@@ -55,11 +55,11 @@ Interfaces: produces `version.Version() string`, `version.Commit() string`; `mak
 Files: `proto/dhole/v1/pipeline.proto`, `proto/dhole/v1/common.proto`, `buf.yaml`, `buf.gen.yaml`, `gen/dhole/v1/` (generated), `internal/schema/schema_test.go`
 Interfaces: produces messages `Pipeline`, `Step`, `Port`, `PortType`, `Edge`, `Tenant`, enum `EffectClass` (`EFFECT_CLASS_PURE`, `EFFECT_CLASS_IDEMPOTENT`, `EFFECT_CLASS_AT_MOST_ONCE`), enum `Capability`; all later tasks import `gen/dhole/v1`.
 
-- [ ] Write `internal/schema/schema_test.go` asserting `TestEffectClassEnumValues`: `require.Equal(t, 1, int(dholev1.EffectClass_EFFECT_CLASS_PURE))` and that `EffectClass_name` has exactly four entries including the zero `EFFECT_CLASS_UNSPECIFIED`. Run `go test ./internal/schema` — expect FAIL with "no required module provides package .../gen/dhole/v1".
-- [ ] Write `proto/dhole/v1/common.proto` defining `Tenant{string id}`, `Digest{string algo; string hex}`, `EffectClass`, `Capability` (`NETWORK`, `SECRETS`, `PRIVILEGED`, `HOST_MOUNT`).
-- [ ] Write `proto/dhole/v1/pipeline.proto` defining `Pipeline{string id; Tenant tenant; repeated Step steps; repeated Edge edges}`, `Step{string id; string name; string plugin_ref; EffectClass effect_class; repeated Port inputs; repeated Port outputs; repeated Capability capabilities}`, `Port{string name; PortType type}`, `PortType{oneof{BlobType blob; StructType structured}}`, `Edge{string from_step; string from_port; string to_step; string to_port}`.
-- [ ] Write `buf.yaml` (lint `DEFAULT`, breaking `WIRE_JSON`) and `buf.gen.yaml` emitting `protocolbuffers/go` and `connectrpc/go` into `gen/`. Run `buf generate`.
-- [ ] Run `go test ./internal/schema` — expect PASS. Add `buf lint` and `buf breaking --against '.git#branch=main'` to `make check`. Commit.
+- [x] Write `internal/schema/schema_test.go` asserting `TestEffectClassEnumValues`: `require.Equal(t, 1, int(dholev1.EffectClass_EFFECT_CLASS_PURE))` and that `EffectClass_name` has exactly four entries including the zero `EFFECT_CLASS_UNSPECIFIED`. Run `go test ./internal/schema` — expect FAIL with "no required module provides package .../gen/dhole/v1".
+- [x] Write `proto/dhole/v1/common.proto` defining `Tenant{string id}`, `Digest{string algo; string hex}`, `EffectClass`, `Capability` (`NETWORK`, `SECRETS`, `PRIVILEGED`, `HOST_MOUNT`).
+- [x] Write `proto/dhole/v1/pipeline.proto` defining `Pipeline{string id; Tenant tenant; repeated Step steps; repeated Edge edges}`, `Step{string id; string name; string plugin_ref; EffectClass effect_class; repeated Port inputs; repeated Port outputs; repeated Capability capabilities}`, `Port{string name; PortType type}`, `PortType{oneof{BlobType blob; StructType structured}}`, `Edge{string from_step; string from_port; string to_step; string to_port}`.
+- [x] Write `buf.yaml` (lint `DEFAULT`, breaking `WIRE_JSON`) and `buf.gen.yaml` emitting `protocolbuffers/go` and `connectrpc/go` into `gen/`. Run `buf generate`.
+- [x] Run `go test ./internal/schema` — expect PASS. Add `buf lint` and `buf breaking --against '.git#branch=main'` to `make check`. Commit.
 
 ## Task 3: DAG derivation and port type checking
 

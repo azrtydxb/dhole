@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package dhole.v1;
+
+option go_package = "github.com/azrtydxb/dhole/gen/dhole/v1;dholev1";
+
+// Tenant scopes every stored record and every bus subject. There is no
+// unscoped query and no unscoped subject, even while only one tenant exists.
+message Tenant {
+  string id = 1;
+}
+
+// Digest names content by its hash. It is the identity of a blob in the
+// content-addressed store and the identity of a cache entry.
+message Digest {
+  // Hash algorithm, e.g. "sha256".
+  string algo = 1;
+  // Lowercase hex encoding of the hash.
+  string hex = 2;
+}
+
+// EffectClass decides what may be cached and what may be retried. It is the
+// single most load-bearing enum on the wire: the scheduler reads it to choose
+// a retry policy, and the cache refuses anything but PURE.
+enum EffectClass {
+  EFFECT_CLASS_UNSPECIFIED = 0;
+  // No observable effect beyond its declared outputs. Cacheable, freely
+  // retryable.
+  EFFECT_CLASS_PURE = 1;
+  // Has an external effect, but repeating it with the same idempotency key is
+  // indistinguishable from running it once. Retryable, never cached.
+  EFFECT_CLASS_IDEMPOTENT = 2;
+  // An external effect that cannot be repeated safely. Never auto-retried;
+  // a failure waits for a human to replay it.
+  EFFECT_CLASS_AT_MOST_ONCE = 3;
+}
+
+// Capability is a permission a step requires and an engine advertises. The
+// scheduler matches the two; policy decides whether the step may ask at all.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  // Outbound network access from inside the sandbox.
+  CAPABILITY_NETWORK = 1;
+  // May redeem secret references.
+  CAPABILITY_SECRETS = 2;
+  // Runs with elevated privileges.
+  CAPABILITY_PRIVILEGED = 3;
+  // May mount a path from the engine host.
+  CAPABILITY_HOST_MOUNT = 4;
+}

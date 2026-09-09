@@ -16,6 +16,12 @@ check:
 	fi
 	go vet ./...
 	golangci-lint run
+	buf lint
+	@# Breaking-change detection needs a main to compare against; on a branch
+	@# whose main has no proto tree yet there is nothing to break.
+	buf breaking --against '.git#branch=main' || \
+		{ git rev-parse --verify main:proto >/dev/null 2>&1 && exit 1 || \
+		  echo "buf breaking: main has no proto tree yet — skipped"; }
 
 ## test: the whole suite.
 test:

@@ -10,6 +10,9 @@ linters:
     - gosec
     - revive
   exclusions:
+    # Generated protobuf and Connect code is not ours to lint.
+    paths:
+      - "^gen/"
     rules:
       # Tests assert on error-returning helpers through require; the gosec
       # rules about file permissions and subprocesses target production paths.
