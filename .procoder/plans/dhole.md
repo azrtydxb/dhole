@@ -55,16 +55,16 @@ decide what may be cached and what may be retried.
   be idempotent (`CREATE TABLE IF NOT EXISTS`). A migration that ALTERS an
   existing table therefore cannot rely on running once or running last, and
   needs the runner to grow a version table first. Discovered building Task 15.
-- KNOWN GAP — five packages are SQLite-only and must be made dialect-agnostic
-  before Task 18's distributed-mode parity test can pass. `internal/defstore`,
-  `internal/cache`, `internal/catalog`, `internal/policy` and `internal/cas`'s
-  GC all write `?` placeholders, which pgx rejects, and three of them open a
-  SQLite handle themselves via `runstore.NewSQLite` rather than accepting a
-  `*sql.DB`. Their TABLES exist on Postgres — that was fixed once the migration
-  runner stopped skipping them — but the code cannot query them there, so a
-  Postgres deployment today has only run_events and the outbox. Every one of
-  these packages was written and reviewed in isolation against SQLite, and
-  nothing in a per-package suite could have noticed.
+- Storage is dialect-agnostic through `runstore.Dialect.Rebind`, which
+  renumbers `?` into `$n` for Postgres and returns the query byte-identical
+  for SQLite. Every store takes `(*sql.DB, runstore.Dialect)`; open one with
+  `runstore.OpenSQLite` or `runstore.OpenPostgres`. Do NOT write per-dialect
+  copies of a statement — two copies drift silently, and a drifted copy still
+  runs, which is worse than the failure it replaced. Five packages had each
+  independently written `?` placeholders that pgx rejects, so a Postgres
+  deployment had only run_events and the outbox; nothing caught it because
+  every per-package suite was green against SQLite. Each store now runs its
+  contract against BOTH dialects.
 - Postgres and SQLite migrations are told apart by FILENAME: a plain `.sql`
   file is dialect-neutral and applied by BOTH runners, and a same-numbered
   `.postgres.sql` REPLACES it for Postgres. So write the DDL once, and add the
