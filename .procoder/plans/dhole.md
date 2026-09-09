@@ -460,6 +460,7 @@ Files: `internal/defstore/`, `internal/api/`
 Interfaces: adds a revision-history query to `defstore.Store`; gives the editing head a home in the schema.
 
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
+- [ ] **`policy.Input` carries no taint keys.** Task 51's `taint.Check` returns a `policy.Decision` but builds it itself, because `internal/policy` was a concurrent task's file. Add the taint fields to `policy.Input` and the CEL environment so an operator can write a taint rule instead of relying on the four built-in ones. Found building Task 51.
 - [ ] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
 - [ ] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
 - [ ] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
@@ -758,12 +759,12 @@ Task 41 clears a taint; the sanitisation gate is still this task's work.
 Files: `internal/taint/taint.go`, `internal/taint/propagate.go`, `internal/taint/taint_test.go`
 Interfaces: produces `taint.Mark(v *structpb.Value, source string) *structpb.Value`, `taint.IsTainted(v *structpb.Value) bool`, `taint.Propagate(in []*dholev1.OutputRef, out []*dholev1.OutputRef)`, `taint.Gate` step type clearing marks after explicit sanitisation.
 
-- [ ] Write `internal/taint/taint_test.go` asserting `TestTaintBlocksEffectfulStepUntilSanitised`: data from an untrusted git webhook reaching an `AT_MOST_ONCE` step is refused with an error naming the trigger source; inserting a `taint.Gate` step allows it. Run — expect FAIL with "undefined: taint.Mark".
-- [ ] Add `TestTaintPropagatesThroughPureSteps` asserting a `pure` step consuming tainted input produces tainted output.
-- [ ] Add `TestTaintReachingPrivilegedEngineIsRefused` asserting dispatch to an engine advertising `PRIVILEGED` with tainted inputs is denied by policy with a reason naming the taint.
-- [ ] Add `TestGateRecordsWhoSanitisedWhat` asserting the gate writes an event naming the principal and the fields cleared.
-- [ ] Implement `taint.go` storing marks in a reserved `structpb` field and on CAS object metadata, `propagate.go` called by the scheduler on every step completion, and wire the check into Task 21's policy input.
-- [ ] Run `go test ./internal/taint ./internal/policy` — expect PASS. Commit.
+- [x] Write `internal/taint/taint_test.go` asserting `TestTaintBlocksEffectfulStepUntilSanitised`: data from an untrusted git webhook reaching an `AT_MOST_ONCE` step is refused with an error naming the trigger source; inserting a `taint.Gate` step allows it. Run — expect FAIL with "undefined: taint.Mark".
+- [x] Add `TestTaintPropagatesThroughPureSteps` asserting a `pure` step consuming tainted input produces tainted output.
+- [x] Add `TestTaintReachingPrivilegedEngineIsRefused` asserting dispatch to an engine advertising `PRIVILEGED` with tainted inputs is denied by policy with a reason naming the taint.
+- [x] Add `TestGateRecordsWhoSanitisedWhat` asserting the gate writes an event naming the principal and the fields cleared.
+- [x] Implement `taint.go` storing marks in a reserved `structpb` field and on CAS object metadata, `propagate.go` called by the scheduler on every step completion, and wire the check into Task 21's policy input.
+- [x] Run `go test ./internal/taint ./internal/policy` — expect PASS. Commit.
 
 ## Task 52: The three acceptance pipelines
 
