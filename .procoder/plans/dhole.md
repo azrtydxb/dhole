@@ -250,14 +250,14 @@ Interfaces: produces `cache.Eligible(step *dholev1.Step, lease executor.LeaseSco
 ## Task 17: CAS refcount garbage collection
 
 Files: `internal/cas/gc.go`, `internal/cas/gc_test.go`, `internal/runstore/migrations/0003_blob_refs.sql`
-Interfaces: produces `cas.GC{Store cas.Store; Runs runstore.Store}` with `Collect(ctx, tenantID string, retain time.Duration) (freed int, err error)`.
+Interfaces: produces `cas.GC{Store cas.Store; Runs runstore.Store; DB *sql.DB}` with `Collect(ctx, tenantID string, retain time.Duration) (freed int, err error)`, plus `cas.OpenIndex(path)`, `cas.Reference(...)` and a `Delete` method on the filesystem store. The `DB` field is not in the original signature and is needed because `runstore.Store` is an interface with no handle accessor: the collection must drop blob refs, cache entries and the blobs themselves in ONE transaction, which is only possible with the shared handle. The alternative — a `DB()` accessor on `runstore.Store` — would put a storage detail on an interface every caller sees.
 
-- [ ] Write `internal/cas/gc_test.go` asserting `TestRefcountGCPreservesRetainedRunBlobs`: two runs each producing a blob, one run aged beyond `retain`; `Collect` frees exactly the expired run's blob and `Has` still reports the retained one. Run — expect FAIL with "undefined: cas.GC".
-- [ ] Add `TestGCNeverCollectsBlobSharedWithRetainedRun` asserting a blob referenced by both an expired and a retained run survives.
-- [ ] Add `TestCacheEntryIsDroppedWhenItsOutputBlobIsCollected` asserting the `cache_entries` row is removed alongside the blob, so a later lookup misses rather than returning a dangling reference.
-- [ ] Write `0003_blob_refs.sql` creating `blob_refs(tenant_id, digest, run_id)` with a composite primary key.
-- [ ] Implement `internal/cas/gc.go` computing the retained run set, then deleting blobs with no remaining reference, in that order so a concurrent run cannot lose a blob.
-- [ ] Run `go test ./internal/cas` — expect PASS. Commit.
+- [x] Write `internal/cas/gc_test.go` asserting `TestRefcountGCPreservesRetainedRunBlobs`: two runs each producing a blob, one run aged beyond `retain`; `Collect` frees exactly the expired run's blob and `Has` still reports the retained one. Run — expect FAIL with "undefined: cas.GC".
+- [x] Add `TestGCNeverCollectsBlobSharedWithRetainedRun` asserting a blob referenced by both an expired and a retained run survives.
+- [x] Add `TestCacheEntryIsDroppedWhenItsOutputBlobIsCollected` asserting the `cache_entries` row is removed alongside the blob, so a later lookup misses rather than returning a dangling reference.
+- [x] Write `0003_blob_refs.sql` creating `blob_refs(tenant_id, digest, run_id)` with a composite primary key.
+- [x] Implement `internal/cas/gc.go` computing the retained run set, then deleting blobs with no remaining reference, in that order so a concurrent run cannot lose a blob.
+- [x] Run `go test ./internal/cas` — expect PASS. Commit.
 
 ## Task 18: Single binary and the first end-to-end run
 

@@ -323,6 +323,13 @@ func unreferencedDigests(
 // tables share one database so that this stays a single transaction; splitting
 // it across an API boundary would either reintroduce two-file atomicity or
 // leave the cache pointing at bytes this transaction removed.
+// debt: this reads and writes internal/cache's table directly, and decodes its
+// length-framed output encoding locally, because that package exports no way to
+// enumerate or drop entries. Ceiling: it holds only while the two tables share
+// one database and one transaction — the moment the cache moves to its own
+// store, or its encoding changes without this decoder changing with it, the
+// sweep silently stops dropping stale entries. Revisit when internal/cache
+// grows a DropEntries/iteration API, and delete this function's SQL then.
 func dropCacheEntries(ctx context.Context, tx *sql.Tx, tenantID string, collectable []string) error {
 	if len(collectable) == 0 {
 		return nil
