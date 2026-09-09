@@ -76,3 +76,20 @@ export async function tokenFor(
   expect(response.ok(), await response.text()).toBe(true);
   return ((await response.json()) as { token: string }).token;
 }
+
+/**
+ * A pipeline of a named shape, seeded because nothing creates one through the
+ * contract: ApplyOperation needs a base revision, and no operation sets a
+ * step's command. The shapes live in Go, beside the types they must satisfy.
+ */
+export async function seedShape(
+  request: APIRequestContext,
+  shape: "cacheable" | "impure",
+): Promise<Seeded> {
+  const response = await request.post(`${seedUrl}/shape/${shape}`);
+  expect(
+    response.ok(),
+    `seeding the ${shape} pipeline: ${response.status()} ${await response.text()}`,
+  ).toBeTruthy();
+  return (await response.json()) as Seeded;
+}

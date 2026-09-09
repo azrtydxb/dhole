@@ -9,3 +9,4 @@ node_modules/
 .lycheecache
 /dhole
 *.test
+/seed

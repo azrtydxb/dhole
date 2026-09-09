@@ -116,6 +116,35 @@ func run(addr, dsn, waitFor string) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(seeded{PipelineID: id, RevisionID: rev.ID})
 	})
+	// A pipeline of a named SHAPE. The run view needs particular ones — two
+	// pure steps where the second consumes the first, a step with no effect
+	// class, a bounded loop — and nothing creates them through the contract:
+	// ApplyOperation needs a base revision, and no operation sets a step's
+	// command or builds a loop node. They are seeded here rather than invented
+	// in TypeScript so the definition under test is one the Go types accept.
+	mux.HandleFunc("POST /shape/{name}", func(w http.ResponseWriter, r *http.Request) {
+		id := fmt.Sprintf("shape-%s-%d", r.PathValue("name"), n.Add(1))
+		pipeline, err := shaped(id, r.PathValue("name"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rev, err := defs.Save(r.Context(), "default", pipeline, "e2e-seed")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// A saved revision is a draft, and a run needs an active one. The
+		// approver differs from the author because defstore refuses
+		// self-approval — an author approving their own work records a review
+		// that never happened.
+		if err := defs.Approve(r.Context(), "default", rev.ID, "e2e-reviewer"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(seeded{PipelineID: id, RevisionID: rev.ID})
+	})
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -141,4 +170,60 @@ func awaitListener(addr string) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// shaped builds the definitions the run view's assertions need. Each shape is
+// named for the property it exists to exercise, not for its contents.
+func shaped(id, name string) (*dholev1.Pipeline, error) {
+	blob := func(port string) *dholev1.Port {
+		return &dholev1.Port{
+			Name: port,
+			Type: &dholev1.PortType{Kind: &dholev1.PortType_Blob{Blob: &dholev1.BlobType{}}},
+		}
+	}
+	step := func(sid, cmd string, class dholev1.EffectClass, in, out []string) *dholev1.Step {
+		s := &dholev1.Step{
+			Id:          sid,
+			Name:        sid,
+			PluginRef:   commandRef(cmd),
+			EffectClass: class,
+			LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
+		}
+		for _, p := range in {
+			s.Inputs = append(s.Inputs, blob(p))
+		}
+		for _, p := range out {
+			s.Outputs = append(s.Outputs, blob(p))
+		}
+		return s
+	}
+
+	switch name {
+	case "cacheable":
+		// Two pure steps, the second consuming the first: what a cache hit on
+		// a second run is visible against.
+		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
+			step("first", "printf one", dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
+			step("second", "cat", dholev1.EffectClass_EFFECT_CLASS_PURE, []string{"in"}, []string{"out"}),
+		}, Edges: []*dholev1.Edge{
+			{FromStep: "first", FromPort: "out", ToStep: "second", ToPort: "in"},
+		}}, nil
+	case "impure":
+		// No effect class, so cache.Eligible refuses it and the run view must
+		// show the reason rather than a blank.
+		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
+			step("first", "printf one", dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED, nil, []string{"out"}),
+		}}, nil
+	default:
+		return nil, fmt.Errorf("seed: unknown shape %q", name)
+	}
+}
+
+// commandRef is the inline command scheme the scheduler resolves. It is a
+// stopgap in the product too — see internal/scheduler/command.go.
+func commandRef(cmd string) string {
+	args, _ := json.Marshal(struct {
+		Args []string `json:"args"`
+	}{Args: []string{"/bin/sh", "-c", cmd}})
+	return "command:" + string(args)
 }

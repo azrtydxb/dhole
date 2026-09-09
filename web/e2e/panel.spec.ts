@@ -15,7 +15,6 @@
  * plugin" here means seeding a step whose declared input port carries that
  * plugin's input schema, done through the real ApplyOperation.
  */
-import { readFileSync } from "node:fs";
 
 import {
   expect,
@@ -24,37 +23,7 @@ import {
   type Page,
 } from "@playwright/test";
 
-interface Handshake {
-  baseUrl: string;
-  token: string;
-  tenantId: string;
-}
-
-interface Seeded {
-  pipelineId: string;
-  revisionId: string;
-}
-
-/**
- * The fixture writes this before it starts listening.
- *
- * This and seedPipeline are the only two places the suite knows how the
- * control plane was started; they are what changes on the day `dhole serve`
- * serves the API and web/e2e/fixture goes away.
- */
-function handshake(): Handshake {
-  const path = new URL("../.playwright/fixture.json", import.meta.url);
-  return JSON.parse(readFileSync(path, "utf8")) as Handshake;
-}
-
-/** A pipeline of this test's own: heads are per pipeline, so sharing one
- * would make concurrent tests conflict for a reason neither is about. */
-async function seedPipeline(request: APIRequestContext): Promise<Seeded> {
-  const { baseUrl } = handshake();
-  const response = await request.post(`${baseUrl}/fixture/pipeline`);
-  expect(response.ok()).toBe(true);
-  return (await response.json()) as Seeded;
-}
+import { apiUrl, bootstrapToken, seedPipeline, type Seeded } from "./plane.js";
 
 /** rpc calls one RPC of the real contract with the fixture's real token. */
 async function rpc(
@@ -62,9 +31,9 @@ async function rpc(
   method: string,
   body: unknown,
 ): Promise<Record<string, unknown>> {
-  const { baseUrl, token } = handshake();
+  const token = bootstrapToken();
   const response = await request.post(
-    `${baseUrl}/dhole.v1.PipelineService/${method}`,
+    `${apiUrl}/dhole.v1.PipelineService/${method}`,
     {
       headers: {
         "Content-Type": "application/json",
@@ -165,7 +134,7 @@ async function openPanel(
   revision: string,
   stepId: string,
 ): Promise<void> {
-  const { token } = handshake();
+  const token = bootstrapToken();
   await page.addInitScript((value: string) => {
     window.localStorage.setItem("dhole.token", value);
   }, token);

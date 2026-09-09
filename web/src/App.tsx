@@ -8,6 +8,7 @@
  * be guessing whose work it is about to overwrite.
  */
 import { Canvas } from "./canvas/Canvas.js";
+import { RunView } from "./run/RunView.js";
 import { getToken } from "./api/client.js";
 
 /** App picks the pipeline to edit and hands it to the canvas. */
@@ -16,6 +17,11 @@ export function App() {
   const parameters = new URLSearchParams(globalThis.location?.search ?? "");
   const pipelineId = parameters.get("pipeline") ?? "";
   const revisionId = parameters.get("revision") ?? "";
+  // A run is addressed by hash route, `#/runs/<id>`, so a link to a run
+  // survives being pasted somewhere that strips a query string.
+  const hash = globalThis.location?.hash ?? "";
+  const runId =
+    /^#\/runs\/([^/?#]+)/.exec(hash)?.[1] ?? parameters.get("run") ?? "";
 
   if (!signedIn) {
     return (
@@ -26,13 +32,25 @@ export function App() {
     );
   }
 
+  // A run is a different thing to look at, not a different app: the run view
+  // reads the realised graph and the logs, and the canvas edits a definition.
+  if (runId !== "") {
+    return (
+      <main>
+        <h1>Dhole</h1>
+        <RunView runId={runId} />
+      </main>
+    );
+  }
+
   if (pipelineId === "" || revisionId === "") {
     return (
       <main>
         <h1>Dhole</h1>
         <p>
           Signed in. Open a pipeline with{" "}
-          <code>?pipeline=ID&amp;revision=REV</code>.
+          <code>?pipeline=ID&amp;revision=REV</code>, or a run with{" "}
+          <code>?run=ID</code>.
         </p>
       </main>
     );
