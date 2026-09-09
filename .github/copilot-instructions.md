@@ -2,9 +2,10 @@
 
 Instructions for any AI coding agent — or human — picking up this repository.
 
-Dhole is in the **design phase**. There is no implementation yet: no Go module, no source
-tree. What exists is a complete, gated chain of design artifacts, and the first job is to
-execute them in order rather than to start writing code from the README.
+Dhole is **early in the build**. Behind the tree stands a complete, gated chain of design
+artifacts, and the job is to execute the plan in order rather than to start writing code
+from the README. `.procoder/plans/dhole.md` carries the progress: a ticked task is done and
+committed, the first unticked one is next.
 
 ## Read these, in this order
 
@@ -50,8 +51,8 @@ An implementation whose test never failed has not been shown to test anything.
 
 ## Where to start
 
-**Task 1** in `.procoder/plans/dhole.md` — repository scaffold and quality gate. Then 2, 3,
-and so on. Tasks 1–17 are all justified by **Task 18**, which is the first point where the
+The first unticked task in `.procoder/plans/dhole.md`, and then the one after it. Tasks
+1–17 are all justified by **Task 18**, which is the first point where the
 architecture either works or does not: single binary, embedded bus, in-process engine over
 a loopback bus, a two-step pipeline running end to end. Treat Task 18 as the first real
 checkpoint; if the design is wrong somewhere, that is where it will surface.

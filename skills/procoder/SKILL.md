@@ -1,3 +1,19 @@
+---
+name: procoder
+description: >-
+  Work like a senior developer in a repository governed by procoder: run the
+  commit gate before calling anything done, format and lint through the
+  binary, and drive the spec, plan, todo, backlog, and sprint chain in
+  .procoder/. Use this skill when the repository contains a .procoder/
+  directory or an AGENTS.md naming procoder, or when the user asks to run the
+  gate, check formatting, open a spec or plan, close a task, or prepare a
+  release.
+license: Apache-2.0
+metadata:
+  category: development
+  author: pascal-watteel
+---
+
 # Working on Dhole
 
 Instructions for any AI coding agent — or human — picking up this repository.

@@ -1,3 +1,7 @@
+---
+inclusion: always
+---
+
 # Working on Dhole
 
 Instructions for any AI coding agent — or human — picking up this repository.
