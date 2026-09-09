@@ -924,27 +924,6 @@ func TestWatchRunDoesNotShowAnotherTenantsRun(t *testing.T) {
 	require.Equal(t, connect.CodeNotFound, connect.CodeOf(stream.Err()))
 }
 
-// TestValidateAndPlanAreDeclaredButNotYetImplemented: Task 28 fills these in.
-// They refuse rather than answering an empty success, because a validate that
-// reports no diagnostics reads as "this pipeline is fine".
-func TestValidateAndPlanAreDeclaredButNotYetImplemented(t *testing.T) {
-	h := newRealHarness(t)
-	original, base := seed(t, h, tenantA)
-	ctx := context.Background()
-
-	_, err := h.client.Validate(ctx, authed(&dholev1.ValidateRequest{
-		PipelineId: original.GetId(), RevisionId: base.ID,
-	}, tokenAlice))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-
-	_, err = h.client.Plan(ctx, authed(&dholev1.PlanRequest{
-		PipelineId: original.GetId(), RevisionId: base.ID,
-	}, tokenAlice))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-}
-
 // TestNewServerRefusesAnIncompleteConfiguration: a server with no way to
 // authenticate would serve every caller.
 func TestNewServerRefusesAnIncompleteConfiguration(t *testing.T) {

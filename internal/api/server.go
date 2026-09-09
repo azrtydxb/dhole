@@ -113,6 +113,23 @@ type Config struct {
 	Advancer Advancer
 	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads.
 	Heads Heads
+	// Cache answers whether a step's work has been done before. Plan reads
+	// it and never writes it.
+	Cache CacheReader
+	// Fleet is the live engine registry a plan matches steps against.
+	Fleet Fleet
+	// Environment is where steps would run: the engine kind and the digest
+	// every cache key is computed against. An executor.Executor satisfies it.
+	Environment Environment
+	// Catalog resolves the plugin a step names, so Validate can report a
+	// step whose plugin is unpublished or whose declaration disagrees with
+	// it. Optional: without one, Validate checks only the definition.
+	Catalog StepResolver
+	// OS and Arch are the platform steps are planned for, in Go's
+	// GOOS/GOARCH vocabulary, and must match the scheduler's. Empty means
+	// the deployment does not care.
+	OS   string
+	Arch string
 	// PollInterval overrides DefaultPollInterval.
 	PollInterval time.Duration
 	// Now is the clock, injectable for tests.
@@ -126,6 +143,12 @@ type Server struct {
 	runs  runstore.Store
 	adv   Advancer
 	heads Heads
+	cache CacheReader
+	fleet Fleet
+	env   Environment
+	cat   StepResolver
+	os    string
+	arch  string
 	poll  time.Duration
 	now   func() time.Time
 }
@@ -151,6 +174,12 @@ func NewServer(cfg Config) (*Server, error) {
 		runs:  cfg.Runs,
 		adv:   cfg.Advancer,
 		heads: cfg.Heads,
+		cache: cfg.Cache,
+		fleet: cfg.Fleet,
+		env:   cfg.Environment,
+		cat:   cfg.Catalog,
+		os:    cfg.OS,
+		arch:  cfg.Arch,
 		poll:  cfg.PollInterval,
 		now:   cfg.Now,
 	}
@@ -265,36 +294,6 @@ func (s *Server) ApplyOperation(
 		Inverse:  inverse,
 		Pipeline: next,
 	}), nil
-}
-
-// Validate returns structured diagnostics.
-//
-// Task 28 implements it, in internal/api/validate.go. Until then it refuses
-// rather than answering an empty diagnostic list, because an empty list means
-// "this pipeline is fine" and a caller would believe it.
-func (s *Server) Validate(
-	ctx context.Context, req *connect.Request[dholev1.ValidateRequest],
-) (*connect.Response[dholev1.ValidateResponse], error) {
-	if _, err := s.principal(ctx, req.Header()); err != nil {
-		return nil, err
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented,
-		errors.New("api: Validate is declared but not implemented yet (Task 28: internal/api/validate.go)"))
-}
-
-// Plan is a dry run.
-//
-// Task 28 implements it, in internal/api/plan.go. Until then it refuses
-// rather than answering an empty plan, because an empty plan means "this
-// pipeline would execute nothing".
-func (s *Server) Plan(
-	ctx context.Context, req *connect.Request[dholev1.PlanRequest],
-) (*connect.Response[dholev1.PlanResponse], error) {
-	if _, err := s.principal(ctx, req.Header()); err != nil {
-		return nil, err
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented,
-		errors.New("api: Plan is declared but not implemented yet (Task 28: internal/api/plan.go)"))
 }
 
 // ListRevisions returns a pipeline's revision history.
