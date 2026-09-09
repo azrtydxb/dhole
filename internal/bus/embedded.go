@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -20,6 +21,12 @@ const readyTimeout = 10 * time.Second
 type Embedded struct {
 	srv   *server.Server
 	users map[string]string // tier -> password
+
+	// optsMu guards opts, which tracks the configuration the server is
+	// CURRENTLY running with. A caller adding an account reloads from this,
+	// so two accounts added in sequence do not drop each other.
+	optsMu sync.Mutex
+	opts   *server.Options
 }
 
 // StartEmbedded runs an in-process NATS server with JetStream storing under
@@ -82,7 +89,39 @@ func StartEmbeddedWithTiers(dir string, tiers []string) (*Embedded, error) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("embedded nats: not ready within %s", readyTimeout)
 	}
-	return &Embedded{srv: srv, users: users}, nil
+	return &Embedded{srv: srv, opts: opts, users: users}, nil
+}
+
+// Server is the running nats-server, and Options a copy of what it was
+// started with. They exist for internal/tenant, which provisions one NATS
+// account per tenant on a LIVE server (ADR 0014) and needs the server object
+// and its current configuration to reload it. Nothing else should reach
+// through this boundary: everything else in the tree talks to the Bus
+// interface, which says nothing about NATS.
+func (e *Embedded) Server() *server.Server { return e.srv }
+
+// Options returns a copy of the configuration the server is running with, so a
+// caller adding an account cannot mutate it in place.
+func (e *Embedded) Options() *server.Options {
+	e.optsMu.Lock()
+	defer e.optsMu.Unlock()
+	return e.opts.Clone()
+}
+
+// Reload applies opts to the running server and, only if that succeeds,
+// remembers them as the current configuration. Remembering is the load-bearing
+// half: a caller that reloaded against a stale copy would silently delete
+// whatever the previous reload added — one tenant's account provisioning
+// erasing the last one's.
+func (e *Embedded) Reload(opts *server.Options) error {
+	e.optsMu.Lock()
+	defer e.optsMu.Unlock()
+	applied := opts.Clone()
+	if err := e.srv.ReloadOptions(opts); err != nil {
+		return fmt.Errorf("embedded nats: reload: %w", err)
+	}
+	e.opts = applied
+	return nil
 }
 
 // PlaneUser is the username the control plane connects as on a tiered embedded

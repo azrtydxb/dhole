@@ -36,7 +36,7 @@ func TestPostgresSchemaHasEveryTable(t *testing.T) {
 	for _, table := range []string{
 		"run_events", "blob_refs", "principals", "tokens",
 		"pipelines", "revisions", "catalog_entries", "cache_entries",
-		"policy_audit", "artifact_signatures",
+		"policy_audit", "artifact_signatures", "tenants",
 	} {
 		var exists bool
 		require.NoError(t, conn.QueryRow(ctx,
