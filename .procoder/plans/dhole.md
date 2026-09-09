@@ -137,15 +137,15 @@ Interfaces: produces messages `JobDispatch`, `JobStatus`, `LogChunk`, `EngineReg
 
 ## Task 9: Executor interface and local process engine
 
-Files: `internal/executor/executor.go`, `internal/executor/process/process.go`, `internal/executor/process/process_test.go`, `internal/executor/contract_test.go`
+Files: `internal/executor/executor.go`, `internal/executor/executortest/contract.go`, `internal/executor/process/process.go`, `internal/executor/process/process_unix.go`, `internal/executor/process/process_other.go`, `internal/executor/process/process_test.go`, `internal/executor/contract_test.go`. The contract body lives in its own `executortest` package, not in a `_test.go` file: a test file is invisible to other packages, so `process_test.go` could not otherwise call it, and every future backend (container, VM, k8s) imports `executortest` to inherit the identical assertions.
 Interfaces: produces `executor.Executor` with `Acquire(ctx, spec Spec) (Sandbox, error)`, `Capabilities() []dholev1.Capability`, `Kind() string`; `executor.Sandbox` with `Exec(ctx, cmd Cmd) (ExitCode int32, err error)`, `Put(ctx, name string, r io.Reader) error`, `Get(ctx, name string) (io.ReadCloser, error)`, `Signal(ctx, sig Signal) error`, `Release(ctx) error`; `executor.LeaseScope` constants `LeaseStep`, `LeaseJob`, `LeasePipeline`, `LeasePool`, `LeaseService`.
 
-- [ ] Write `internal/executor/contract_test.go` exposing `executorContract(t *testing.T, e executor.Executor)` asserting: a sandbox runs `echo hi` with exit 0 and stdout `hi`; a command exiting 3 reports `ExitCode == 3`; `Signal(SIGTERM)` during `sleep 30` returns within 2s; `Put` then `Get` round-trips bytes; `Release` twice is not an error.
-- [ ] Write `internal/executor/process/process_test.go` calling `executorContract` as `TestProcessExecutorContract`. Run — expect FAIL with "undefined: process.New".
-- [ ] Implement `internal/executor/executor.go` with the interfaces, `Spec{Image string; Env map[string]string; WorkDir string; Lease LeaseScope; Requirements Requirements}` and `Requirements{OS, Arch string; Capabilities []dholev1.Capability}`.
-- [ ] Implement `internal/executor/process/process.go` running commands via `os/exec` in a temp directory, propagating `SIGTERM` to the process group with `Setpgid`, and reporting `Capabilities()` as `{}` — no privileged, no host mount.
-- [ ] Add `TestProcessExecutorReportsNoEnvironmentIdentity` asserting `process.New().EnvironmentIdentity()` returns `("", executor.ErrNoStableIdentity)` so Task 16 can mark its steps non-cacheable.
-- [ ] Run `go test ./internal/executor/...` — expect PASS. Commit.
+- [x] Write `internal/executor/contract_test.go` exposing `executorContract(t *testing.T, e executor.Executor)` asserting: a sandbox runs `echo hi` with exit 0 and stdout `hi`; a command exiting 3 reports `ExitCode == 3`; `Signal(SIGTERM)` during `sleep 30` returns within 2s; `Put` then `Get` round-trips bytes; `Release` twice is not an error.
+- [x] Write `internal/executor/process/process_test.go` calling `executorContract` as `TestProcessExecutorContract`. Run — expect FAIL with "undefined: process.New".
+- [x] Implement `internal/executor/executor.go` with the interfaces, `Spec{Image string; Env map[string]string; WorkDir string; Lease LeaseScope; Requirements Requirements}` and `Requirements{OS, Arch string; Capabilities []dholev1.Capability}`.
+- [x] Implement `internal/executor/process/process.go` running commands via `os/exec` in a temp directory, propagating `SIGTERM` to the process group with `Setpgid`, and reporting `Capabilities()` as `{}` — no privileged, no host mount.
+- [x] Add `TestProcessExecutorReportsNoEnvironmentIdentity` asserting `process.New().EnvironmentIdentity()` returns `("", executor.ErrNoStableIdentity)` so Task 16 can mark its steps non-cacheable.
+- [x] Run `go test ./internal/executor/...` — expect PASS. Commit.
 
 ## Task 10: Embedded NATS and bus client
 
