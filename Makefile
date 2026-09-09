@@ -10,6 +10,7 @@ VERSION_PKG := github.com/azrtydxb/dhole/internal/version
 DHOLE_TEST_S3_ENDPOINT    ?= http://127.0.0.1:59000
 DHOLE_TEST_S3_ACCESS_KEY  ?= dholetest
 DHOLE_TEST_S3_SECRET_KEY  ?= dholetestsecret
+DHOLE_TEST_POSTGRES_DSN   ?= postgres://dhole:dholetestsecret@127.0.0.1:55432/dhole?sslmode=disable
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
 .PHONY: check test test-integration build clean
@@ -41,6 +42,7 @@ test-integration:
 	DHOLE_TEST_S3_ENDPOINT=$(DHOLE_TEST_S3_ENDPOINT) \
 	DHOLE_TEST_S3_ACCESS_KEY=$(DHOLE_TEST_S3_ACCESS_KEY) \
 	DHOLE_TEST_S3_SECRET_KEY=$(DHOLE_TEST_S3_SECRET_KEY) \
+	DHOLE_TEST_POSTGRES_DSN='$(DHOLE_TEST_POSTGRES_DSN)' \
 	go test ./... -tags=integration
 
 ## build: the single binary, stamped with its version and commit.
