@@ -49,7 +49,11 @@ decide what may be cached and what may be retried.
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
-  only its own migration until it merges.
+  only its own migration until it merges. The runner applies every migration file in
+  filename order on every open, with no schema-version table, so each one must
+  be idempotent (`CREATE TABLE IF NOT EXISTS`). A migration that ALTERS an
+  existing table therefore cannot rely on running once or running last, and
+  needs the runner to grow a version table first. Discovered building Task 15.
 
 ## Task 1: Repository scaffold and quality gate
 
@@ -126,11 +130,11 @@ Interfaces: produces `cas.Store` interface with `Put(ctx, tenantID string, r io.
 Files: `internal/blobstore/blobstore.go`, `internal/blobstore/s3.go`, `internal/blobstore/filesystem.go`, `internal/blobstore/blobstore_test.go`
 Interfaces: produces `blobstore.Store` with `Write(ctx, tenantID, key string, r io.Reader) error`, `Read(ctx, tenantID, key string) (io.ReadCloser, error)`, `URL(ctx, tenantID, key string, ttl time.Duration) (string, error)`; `blobstore.NewS3(cfg S3Config)`, `blobstore.NewFilesystem(root string)`.
 
-- [ ] Write `internal/blobstore/blobstore_test.go` with `blobStoreContract(t *testing.T, s blobstore.Store)` asserting write-then-read round-trips bytes and reading an absent key returns `blobstore.ErrNotFound`; call it for the filesystem implementation as `TestFilesystemBlobStoreContract`. Run — expect FAIL with "undefined: blobstore.NewFilesystem".
-- [ ] Add `TestS3BlobStoreContract` running the same contract against MinIO from `DHOLE_TEST_S3_ENDPOINT`, skipping when unset; add MinIO to `docker-compose.test.yml` on port 59000.
-- [ ] Implement `internal/blobstore/blobstore.go`, `filesystem.go`, and `s3.go` using `aws-sdk-go-v2` with path-style addressing so MinIO works.
-- [ ] Add `TestWriteFailureIsReportedNotSwallowed` asserting a write to a read-only root returns a non-nil error mentioning the key.
-- [ ] Run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/blobstore/blobstore_test.go` with `blobStoreContract(t *testing.T, s blobstore.Store)` asserting write-then-read round-trips bytes and reading an absent key returns `blobstore.ErrNotFound`; call it for the filesystem implementation as `TestFilesystemBlobStoreContract`. Run — expect FAIL with "undefined: blobstore.NewFilesystem".
+- [x] Add `TestS3BlobStoreContract` running the same contract against MinIO from `DHOLE_TEST_S3_ENDPOINT`, skipping when unset; add MinIO to `docker-compose.test.yml` on port 59000.
+- [x] Implement `internal/blobstore/blobstore.go`, `filesystem.go`, and `s3.go` using `aws-sdk-go-v2` with path-style addressing so MinIO works.
+- [x] Add `TestWriteFailureIsReportedNotSwallowed` asserting a write to a read-only root returns a non-nil error mentioning the key.
+- [x] Run `make test-integration` — expect PASS. Commit.
 
 ## Task 8: Engine wire protocol and version negotiation
 
@@ -160,12 +164,12 @@ Interfaces: produces `executor.Executor` with `Acquire(ctx, spec Spec) (Sandbox,
 Files: `internal/bus/bus.go`, `internal/bus/nats.go`, `internal/bus/embedded.go`, `internal/bus/subjects.go`, `internal/bus/nats_test.go`
 Interfaces: produces `bus.Bus` with `Publish(ctx, subject string, msg proto.Message) error`, `Request(ctx, subject string, msg proto.Message, out proto.Message) error`, `SubscribePull(ctx, stream, consumer, subject string) (Subscription, error)`, `SubscribeEphemeral(ctx, subject string, fn func([]byte)) (func(), error)`; `bus.StartEmbedded(dir string) (*bus.Embedded, error)`; `bus.SubjectDispatch(tier, capsHash string) string` and siblings in `subjects.go`.
 
-- [ ] Write `internal/bus/nats_test.go` asserting `TestEmbeddedBusRoundTripsRequestReply`: start embedded NATS, register a responder on `engine.control.e1`, `Request` returns the reply. Run — expect FAIL with "undefined: bus.StartEmbedded".
-- [ ] Add `TestPullConsumerRedeliversUnackedMessage`: publish to a work-queue stream, receive without acking, close the subscription, resubscribe, and require the same message is delivered again.
-- [ ] Implement `internal/bus/subjects.go` with the exact subject builders from `docs/wire-contract.md` and a `TestSubjectsMatchDocumentedContract` asserting `SubjectDispatch("untrusted","abc") == "job.dispatch.untrusted.abc"`.
-- [ ] Implement `internal/bus/embedded.go` running `nats-server` in-process with JetStream on a temp dir, and `internal/bus/nats.go` wrapping `nats.go` plus `jetstream` for pull consumers.
-- [ ] Add `TestEngineCannotSubscribeToForeignTier` asserting a connection with credentials scoped to `untrusted` receives a permissions error subscribing to `job.dispatch.trusted.*`.
-- [ ] Run `go test ./internal/bus` — expect PASS. Commit.
+- [x] Write `internal/bus/nats_test.go` asserting `TestEmbeddedBusRoundTripsRequestReply`: start embedded NATS, register a responder on `engine.control.e1`, `Request` returns the reply. Run — expect FAIL with "undefined: bus.StartEmbedded".
+- [x] Add `TestPullConsumerRedeliversUnackedMessage`: publish to a work-queue stream, receive without acking, close the subscription, resubscribe, and require the same message is delivered again.
+- [x] Implement `internal/bus/subjects.go` with the exact subject builders from `docs/wire-contract.md` and a `TestSubjectsMatchDocumentedContract` asserting `SubjectDispatch("untrusted","abc") == "job.dispatch.untrusted.abc"`.
+- [x] Implement `internal/bus/embedded.go` running `nats-server` in-process with JetStream on a temp dir, and `internal/bus/nats.go` wrapping `nats.go` plus `jetstream` for pull consumers.
+- [x] Add `TestEngineCannotSubscribeToForeignTier` asserting a connection with credentials scoped to `untrusted` receives a permissions error subscribing to `job.dispatch.trusted.*`.
+- [x] Run `go test ./internal/bus` — expect PASS. Commit.
 
 ## Task 11: Outbox bridging store and bus
 
@@ -219,12 +223,12 @@ Interfaces: produces `scheduler.Scheduler` with `Advance(ctx, tenantID, runID st
 Files: `internal/cache/key.go`, `internal/cache/cache.go`, `internal/cache/key_test.go`, `internal/cache/cache_test.go`
 Interfaces: produces `cache.Key(step *dholev1.Step, envIdentity string, inputs []*dholev1.Digest, lockfile map[string]string) (*dholev1.Digest, error)`, `cache.Lookup(ctx, tenantID string, k *dholev1.Digest) ([]*dholev1.OutputRef, bool, error)`, `cache.Record(ctx, tenantID string, k *dholev1.Digest, outs []*dholev1.OutputRef) error`.
 
-- [ ] Write `internal/cache/key_test.go` asserting `TestKeyIsStableAcrossOrderingAndUnstableOnInputChange`: reordering the `inputs` slice yields the same key; changing one input digest changes it; changing `envIdentity` changes it; changing a lockfile entry changes it. Run — expect FAIL with "undefined: cache.Key".
-- [ ] Add `TestKeyRefusesNonPureStep` asserting `cache.Key` on a step whose `EffectClass` is `AT_MOST_ONCE` returns an error containing "only pure steps are cacheable".
-- [ ] Add `TestKeyRefusesEmptyEnvironmentIdentity` asserting an empty `envIdentity` returns an error containing "no stable environment identity".
-- [ ] Write `internal/cache/cache_test.go` asserting `TestCacheHitOnUnchangedInputsAndInvalidationOnChange` end to end against the SQLite store and filesystem CAS.
-- [ ] Implement `internal/cache/key.go` hashing a canonical protobuf encoding of `(step command, image digest/envIdentity, sorted input digests, sorted lockfile pairs)` with SHA-256, and `internal/cache/cache.go` persisting `cache_entries(tenant_id, key, outputs, created_at)`.
-- [ ] Run `go test ./internal/cache` — expect PASS. Commit.
+- [x] Write `internal/cache/key_test.go` asserting `TestKeyIsStableAcrossOrderingAndUnstableOnInputChange`: reordering the `inputs` slice yields the same key; changing one input digest changes it; changing `envIdentity` changes it; changing a lockfile entry changes it. Run — expect FAIL with "undefined: cache.Key".
+- [x] Add `TestKeyRefusesNonPureStep` asserting `cache.Key` on a step whose `EffectClass` is `AT_MOST_ONCE` returns an error containing "only pure steps are cacheable".
+- [x] Add `TestKeyRefusesEmptyEnvironmentIdentity` asserting an empty `envIdentity` returns an error containing "no stable environment identity".
+- [x] Write `internal/cache/cache_test.go` asserting `TestCacheHitOnUnchangedInputsAndInvalidationOnChange` end to end against the SQLite store and filesystem CAS.
+- [x] Implement `internal/cache/key.go` hashing a canonical protobuf encoding of `(step command, image digest/envIdentity, sorted input digests, sorted lockfile pairs)` with SHA-256, and `internal/cache/cache.go` persisting `cache_entries(tenant_id, key, outputs, created_at)`.
+- [x] Run `go test ./internal/cache` — expect PASS. Commit.
 
 ## Task 16: Pool leases degrade cacheability visibly
 
