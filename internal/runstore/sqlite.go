@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	// modernc.org/sqlite is the pure-Go driver: no cgo, so the single binary
@@ -19,6 +21,32 @@ import (
 //
 //go:embed migrations/*.sql
 var migrations embed.FS
+
+// postgresSuffix marks a migration as Postgres-only. Both dialects are
+// embedded in one tree and one runner would otherwise feed BYTEA and
+// TIMESTAMPTZ to SQLite, so the filename is the switch: SQLite applies every
+// migration except these, Postgres applies only these. A migration that needs
+// to differ per dialect is written twice under the same number, once plain and
+// once with this suffix.
+const postgresSuffix = ".postgres.sql"
+
+// dialectMigrations lists the embedded migrations one dialect must apply, in
+// filename order — which is migration-number order, as the plan's numbering
+// ledger requires.
+func dialectMigrations(postgres bool) ([]string, error) {
+	names, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if strings.HasSuffix(name, postgresSuffix) == postgres {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
 
 // timeFormat is how an event timestamp is stored. SQLite has no time type;
 // RFC3339 with nanoseconds in UTC sorts lexicographically in the same order it
@@ -58,10 +86,10 @@ func NewSQLite(path string) (Store, error) {
 	return store, nil
 }
 
-// migrate applies every embedded migration in filename order. Each statement
+// migrate applies every non-Postgres embedded migration in filename order. Each statement
 // is idempotent, so re-applying them on reopen is a no-op.
 func (s *SQLiteStore) migrate(ctx context.Context) error {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
+	names, err := dialectMigrations(false)
 	if err != nil {
 		return err
 	}

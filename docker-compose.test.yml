@@ -15,3 +15,17 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: dhole
+      POSTGRES_PASSWORD: dholetestsecret
+      POSTGRES_DB: dhole
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dhole -d dhole"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

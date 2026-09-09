@@ -54,6 +54,12 @@ decide what may be cached and what may be retried.
   be idempotent (`CREATE TABLE IF NOT EXISTS`). A migration that ALTERS an
   existing table therefore cannot rely on running once or running last, and
   needs the runner to grow a version table first. Discovered building Task 15.
+- Postgres and SQLite migrations are told apart by FILENAME: a file ending
+  `.postgres.sql` is applied only by the Postgres runner, and every other
+  `.sql` only by the SQLite one. A dialect-specific table therefore ships as
+  two files with the same number. Discovered building Task 5, where applying
+  both sets to SQLite passed anyway — SQLite has type affinity rather than
+  types, so it accepts Postgres DDL silently.
 
 ## Task 1: Repository scaffold and quality gate
 
@@ -107,12 +113,12 @@ Interfaces: produces `runstore.Store` interface with `Append(ctx, tenantID strin
 Files: `internal/runstore/postgres.go`, `internal/runstore/postgres_test.go`, `internal/runstore/migrations/0001_init.postgres.sql`, `docker-compose.test.yml`
 Interfaces: produces `runstore.NewPostgres(ctx, dsn string) (runstore.Store, error)` satisfying the same `runstore.Store` interface as Task 4.
 
-- [ ] Write `internal/runstore/postgres_test.go` with `TestPostgresSatisfiesStoreContract` running the identical assertions as Task 4's tests against a Postgres DSN from `DHOLE_TEST_POSTGRES_DSN`, skipping with `t.Skip("DHOLE_TEST_POSTGRES_DSN not set")` when absent. Run — expect FAIL with "undefined: runstore.NewPostgres".
-- [ ] Extract Task 4's assertions into `internal/runstore/contract_test.go` exposing `runStoreContract(t *testing.T, s runstore.Store)` and call it from both the SQLite and Postgres tests, so the two implementations are held to one contract.
-- [ ] Write `0001_init.postgres.sql` mirroring the SQLite schema with `BIGINT` sequences and `TIMESTAMPTZ`.
-- [ ] Implement `internal/runstore/postgres.go` with `jackc/pgx/v5`, using `INSERT ... ON CONFLICT DO NOTHING`.
-- [ ] Write `docker-compose.test.yml` starting `postgres:17` on port 55432 and add `make test-integration` exporting the DSN and running `go test ./... -tags=integration`.
-- [ ] Run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/runstore/postgres_test.go` with `TestPostgresSatisfiesStoreContract` running the identical assertions as Task 4's tests against a Postgres DSN from `DHOLE_TEST_POSTGRES_DSN`, skipping with `t.Skip("DHOLE_TEST_POSTGRES_DSN not set")` when absent. Run — expect FAIL with "undefined: runstore.NewPostgres".
+- [x] Extract Task 4's assertions into `internal/runstore/contract_test.go` exposing `runStoreContract(t *testing.T, s runstore.Store)` and call it from both the SQLite and Postgres tests, so the two implementations are held to one contract.
+- [x] Write `0001_init.postgres.sql` mirroring the SQLite schema with `BIGINT` sequences and `TIMESTAMPTZ`.
+- [x] Implement `internal/runstore/postgres.go` with `jackc/pgx/v5`, using `INSERT ... ON CONFLICT DO NOTHING`.
+- [x] Write `docker-compose.test.yml` starting `postgres:17` on port 55432 and add `make test-integration` exporting the DSN and running `go test ./... -tags=integration`.
+- [x] Run `make test-integration` — expect PASS. Commit.
 
 ## Task 6: Content-addressed store
 
