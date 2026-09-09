@@ -468,6 +468,14 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
   talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
   the server, and delete `web/e2e/fixture/main.go`, which says in its own header that it exists only until
   this is fixed. Found building Task 46.
+- [ ] **`PipelineService` has no catalog RPC.** The browser cannot read a plugin's
+  `catalog.Manifest.InputSchema`, so Task 47's panel renders the declaration the DEFINITION carries — the
+  step's structured input port's inline schema — instead. One function, `declarationOf()`, is what changes
+  when a catalog RPC lands. Found building Task 47.
+- [ ] **A step has nowhere to store its plugin's input values.** `SetProperty` accepts only `plugin_ref`,
+  `effect_class` and `lease_scope`, so a field a plugin declares can be rendered and validated but not
+  persisted; the panel shows those fields with that reason attached rather than hiding them. Add a step
+  config field, or extend `SetProperty` over plugin inputs. Found building Task 47.
 - [ ] **No RPC creates a pipeline from scratch.** `ApplyOperation` requires an existing
   `base_revision`, so a brand-new pipeline cannot be created through the contract at all — both Task 46 and
   Task 48 had to seed one through a fixture-only HTTP route. That is a hole in ADR 0013 exactly where it
@@ -750,12 +758,12 @@ Interfaces: produces `<Canvas pipelineId revisionId />`; `layout.autoLayout(step
 Files: `web/src/panel/PropertyPanel.tsx`, `web/src/panel/schemaForm.tsx`, `web/src/review/DiffView.tsx`, `web/e2e/panel.spec.ts`
 Interfaces: produces `<PropertyPanel stepId />` rendering a form from the plugin's `InputSchema`; `<DiffView revisionId />` showing the diff returned by `ApplyOperation`.
 
-- [ ] Write `web/e2e/panel.spec.ts` asserting `TestPanelIsRenderedFromPluginSchemaNotHardcoded`: publishing a new plugin with an added `retries` integer field causes that field to appear in the panel with no web code change. Run — expect FAIL with "locator not found: [name=retries]".
-- [ ] Add a case asserting a value violating the schema is rejected in the form with the schema's own error message before any request is sent.
-- [ ] Add a case asserting every save shows a diff the user must confirm, and cancelling it makes no `ApplyOperation` call.
-- [ ] Add a case asserting an effect-class override that widens capability is highlighted in the diff as a policy decision point.
-- [ ] Implement `schemaForm.tsx` rendering JSON Schema draft 2020-12 to controls, `PropertyPanel.tsx`, and `DiffView.tsx`.
-- [ ] Run `npx playwright test` — expect PASS. Commit.
+- [x] Write `web/e2e/panel.spec.ts` asserting `TestPanelIsRenderedFromPluginSchemaNotHardcoded`: publishing a new plugin with an added `retries` integer field causes that field to appear in the panel with no web code change. Run — expect FAIL with "locator not found: [name=retries]".
+- [x] Add a case asserting a value violating the schema is rejected in the form with the schema's own error message before any request is sent.
+- [x] Add a case asserting every save shows a diff the user must confirm, and cancelling it makes no `ApplyOperation` call.
+- [x] Add a case asserting an effect-class override that widens capability is highlighted in the diff as a policy decision point.
+- [x] Implement `schemaForm.tsx` rendering JSON Schema draft 2020-12 to controls, `PropertyPanel.tsx`, and `DiffView.tsx`.
+- [x] Run `npx playwright test` — expect PASS. Commit.
 
 ## Task 48: Run view with realised graph and streamed logs
 
