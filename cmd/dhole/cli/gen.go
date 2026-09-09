@@ -34,6 +34,7 @@ type surface struct {
 // its own tests while the API grew a corner it could not reach.
 func surfaces() map[string]surface {
 	return map[string]surface{
+		"CreatePipeline":  {group: groupPipeline, build: pipelineCreateCmd},
 		"GetPipeline":     {group: groupPipeline, build: pipelineGetCmd},
 		"ApplyOperation":  {group: groupPipeline, build: pipelineApplyCmd},
 		"Validate":        {group: groupPipeline, build: pipelineValidateCmd},

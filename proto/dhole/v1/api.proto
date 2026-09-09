@@ -124,6 +124,31 @@ message GetPipelineResponse {
   Revision revision = 2;
 }
 
+// CreatePipelineRequest creates a pipeline and writes its first revision.
+//
+// It is a separate RPC rather than an ApplyOperation with an empty base,
+// because an empty base_revision is a REFUSAL and has to stay one: an edit
+// that cannot conflict silently overwrites whatever someone else wrote. A
+// client that lost track of its base would then be indistinguishable from one
+// asking to start something new, which is exactly the case where the
+// difference matters most. Creation says so in its own name.
+message CreatePipelineRequest {
+  string pipeline_id = 1;
+  // The definition to start from. Optional: the empty pipeline is the normal
+  // case, because everything after it is an Operation like any other. Its own
+  // id and tenant are ignored — the id is pipeline_id and the tenant comes
+  // from the credential, never from the request.
+  Pipeline pipeline = 2;
+}
+
+// CreatePipelineResponse is the new pipeline and the revision an edit may be
+// based on. It is the same shape GetPipeline answers with, so a client can
+// create and then edit without a second read.
+message CreatePipelineResponse {
+  Pipeline pipeline = 1;
+  Revision revision = 2;
+}
+
 // ApplyOperationRequest applies one edit to the revision the caller last saw.
 // base_revision is mandatory: an edit that cannot conflict is an edit that
 // silently overwrites someone else's.
@@ -247,6 +272,11 @@ message WatchRunResponse {
 // (ADR 0013). Every RPC is authenticated and tenant-scoped — the tenant comes
 // from the credential and never from the request.
 service PipelineService {
+  // CreatePipeline creates a pipeline and its first revision. Nothing else
+  // in this service can write a first revision, so without it the GUI could
+  // not create a pipeline at all and every client had to reach around the
+  // API to seed one.
+  rpc CreatePipeline(CreatePipelineRequest) returns (CreatePipelineResponse);
   // GetPipeline reads one revision of one pipeline.
   rpc GetPipeline(GetPipelineRequest) returns (GetPipelineResponse);
   // ApplyOperation applies one edit and returns the diff and its inverse.

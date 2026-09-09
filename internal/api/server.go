@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/gen/dhole/v1/dholev1connect"
@@ -225,6 +226,76 @@ func (s *Server) Handler(opts ...connect.HandlerOption) http.Handler {
 	// through the same Server.principal every RPC above uses (stream.go).
 	s.registerStreams(mux)
 	return mux
+}
+
+// CreatePipeline creates a pipeline and writes its first revision.
+//
+// It exists because nothing else in this service can write one: ApplyOperation
+// requires a base_revision, and that requirement is load-bearing rather than
+// incidental — an edit that cannot conflict silently overwrites someone
+// else's. So creation is its own act, and the alternative of letting an empty
+// base mean "create" is refused: a client that lost its base would then read
+// as a client starting fresh, in precisely the situation where the two must
+// not be confused.
+//
+// The id is taken; a second create of the same id is refused rather than
+// returning the existing pipeline or overwriting it. The refusal is the head
+// seeding, which is one statement and therefore holds between control planes
+// as well as within one.
+func (s *Server) CreatePipeline(
+	ctx context.Context, req *connect.Request[dholev1.CreatePipelineRequest],
+) (*connect.Response[dholev1.CreatePipelineResponse], error) {
+	p, err := s.principal(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	pipelineID := req.Msg.GetPipelineId()
+	if pipelineID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("api: a pipeline_id is required"))
+	}
+
+	// The friendly refusal. It is a read and therefore racy on its own, which
+	// is why the head seeding below is the one that actually decides.
+	existing, err := s.defs.Revisions(ctx, p.TenantID, pipelineID)
+	if err != nil {
+		return nil, storeError("list revisions", err)
+	}
+	if len(existing) > 0 {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf(
+			"api: pipeline %q already exists, with %d revision(s)", pipelineID, len(existing)))
+	}
+
+	// The definition is built here rather than taken as given: the id is
+	// pipeline_id and the tenant is the credential's, because there is no
+	// unscoped record in this system and a caller does not get to name the
+	// tenant it writes into.
+	definition, ok := proto.Clone(req.Msg.GetPipeline()).(*dholev1.Pipeline)
+	if !ok || definition == nil {
+		definition = &dholev1.Pipeline{}
+	}
+	definition.Id = pipelineID
+	definition.Tenant = &dholev1.Tenant{Id: p.TenantID}
+
+	rev, err := s.defs.Save(ctx, p.TenantID, definition, p.Subject)
+	if err != nil {
+		return nil, storeError("save revision", err)
+	}
+	// Seeding the head is what makes the create atomic: two callers racing on
+	// the same id both save a revision — they are content-addressed and
+	// harmless — and exactly one of them seeds the head. The other is told the
+	// id is taken.
+	if err := s.heads.CompareAndSetHead(ctx, p.TenantID, pipelineID, "", rev.ID); err != nil {
+		if errors.Is(err, defstore.ErrHeadMoved) {
+			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf(
+				"api: pipeline %q already exists", pipelineID))
+		}
+		return nil, storeError("record head", err)
+	}
+
+	return connect.NewResponse(&dholev1.CreatePipelineResponse{
+		Pipeline: definition,
+		Revision: wireRevision(rev),
+	}), nil
 }
 
 // GetPipeline reads one revision of one pipeline.

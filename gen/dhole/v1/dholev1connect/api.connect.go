@@ -33,6 +33,9 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// PipelineServiceCreatePipelineProcedure is the fully-qualified name of the PipelineService's
+	// CreatePipeline RPC.
+	PipelineServiceCreatePipelineProcedure = "/dhole.v1.PipelineService/CreatePipeline"
 	// PipelineServiceGetPipelineProcedure is the fully-qualified name of the PipelineService's
 	// GetPipeline RPC.
 	PipelineServiceGetPipelineProcedure = "/dhole.v1.PipelineService/GetPipeline"
@@ -60,6 +63,11 @@ const (
 
 // PipelineServiceClient is a client for the dhole.v1.PipelineService service.
 type PipelineServiceClient interface {
+	// CreatePipeline creates a pipeline and its first revision. Nothing else
+	// in this service can write a first revision, so without it the GUI could
+	// not create a pipeline at all and every client had to reach around the
+	// API to seed one.
+	CreatePipeline(context.Context, *connect.Request[v1.CreatePipelineRequest]) (*connect.Response[v1.CreatePipelineResponse], error)
 	// GetPipeline reads one revision of one pipeline.
 	GetPipeline(context.Context, *connect.Request[v1.GetPipelineRequest]) (*connect.Response[v1.GetPipelineResponse], error)
 	// ApplyOperation applies one edit and returns the diff and its inverse.
@@ -90,6 +98,12 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 	baseURL = strings.TrimRight(baseURL, "/")
 	pipelineServiceMethods := v1.File_dhole_v1_api_proto.Services().ByName("PipelineService").Methods()
 	return &pipelineServiceClient{
+		createPipeline: connect.NewClient[v1.CreatePipelineRequest, v1.CreatePipelineResponse](
+			httpClient,
+			baseURL+PipelineServiceCreatePipelineProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("CreatePipeline")),
+			connect.WithClientOptions(opts...),
+		),
 		getPipeline: connect.NewClient[v1.GetPipelineRequest, v1.GetPipelineResponse](
 			httpClient,
 			baseURL+PipelineServiceGetPipelineProcedure,
@@ -143,6 +157,7 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 
 // pipelineServiceClient implements PipelineServiceClient.
 type pipelineServiceClient struct {
+	createPipeline  *connect.Client[v1.CreatePipelineRequest, v1.CreatePipelineResponse]
 	getPipeline     *connect.Client[v1.GetPipelineRequest, v1.GetPipelineResponse]
 	applyOperation  *connect.Client[v1.ApplyOperationRequest, v1.ApplyOperationResponse]
 	validate        *connect.Client[v1.ValidateRequest, v1.ValidateResponse]
@@ -151,6 +166,11 @@ type pipelineServiceClient struct {
 	approveRevision *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
 	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
 	watchRun        *connect.Client[v1.WatchRunRequest, v1.WatchRunResponse]
+}
+
+// CreatePipeline calls dhole.v1.PipelineService.CreatePipeline.
+func (c *pipelineServiceClient) CreatePipeline(ctx context.Context, req *connect.Request[v1.CreatePipelineRequest]) (*connect.Response[v1.CreatePipelineResponse], error) {
+	return c.createPipeline.CallUnary(ctx, req)
 }
 
 // GetPipeline calls dhole.v1.PipelineService.GetPipeline.
@@ -195,6 +215,11 @@ func (c *pipelineServiceClient) WatchRun(ctx context.Context, req *connect.Reque
 
 // PipelineServiceHandler is an implementation of the dhole.v1.PipelineService service.
 type PipelineServiceHandler interface {
+	// CreatePipeline creates a pipeline and its first revision. Nothing else
+	// in this service can write a first revision, so without it the GUI could
+	// not create a pipeline at all and every client had to reach around the
+	// API to seed one.
+	CreatePipeline(context.Context, *connect.Request[v1.CreatePipelineRequest]) (*connect.Response[v1.CreatePipelineResponse], error)
 	// GetPipeline reads one revision of one pipeline.
 	GetPipeline(context.Context, *connect.Request[v1.GetPipelineRequest]) (*connect.Response[v1.GetPipelineResponse], error)
 	// ApplyOperation applies one edit and returns the diff and its inverse.
@@ -221,6 +246,12 @@ type PipelineServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	pipelineServiceMethods := v1.File_dhole_v1_api_proto.Services().ByName("PipelineService").Methods()
+	pipelineServiceCreatePipelineHandler := connect.NewUnaryHandler(
+		PipelineServiceCreatePipelineProcedure,
+		svc.CreatePipeline,
+		connect.WithSchema(pipelineServiceMethods.ByName("CreatePipeline")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pipelineServiceGetPipelineHandler := connect.NewUnaryHandler(
 		PipelineServiceGetPipelineProcedure,
 		svc.GetPipeline,
@@ -271,6 +302,8 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 	)
 	return "/dhole.v1.PipelineService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case PipelineServiceCreatePipelineProcedure:
+			pipelineServiceCreatePipelineHandler.ServeHTTP(w, r)
 		case PipelineServiceGetPipelineProcedure:
 			pipelineServiceGetPipelineHandler.ServeHTTP(w, r)
 		case PipelineServiceApplyOperationProcedure:
@@ -295,6 +328,10 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 
 // UnimplementedPipelineServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedPipelineServiceHandler struct{}
+
+func (UnimplementedPipelineServiceHandler) CreatePipeline(context.Context, *connect.Request[v1.CreatePipelineRequest]) (*connect.Response[v1.CreatePipelineResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.CreatePipeline is not implemented"))
+}
 
 func (UnimplementedPipelineServiceHandler) GetPipeline(context.Context, *connect.Request[v1.GetPipelineRequest]) (*connect.Response[v1.GetPipelineResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.GetPipeline is not implemented"))

@@ -24,7 +24,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_api: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkijQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSABCBgoEa2luZCJsCgZDaGFuZ2USIgoEa2luZBgBIAEoDjIULmRob2xlLnYxLkNoYW5nZUtpbmQSDwoHc3RlcF9pZBgCIAEoCRIcCgRlZGdlGAMgASgLMg4uZGhvbGUudjEuRWRnZRIPCgdzdW1tYXJ5GAQgASgJIikKBERpZmYSIQoHY2hhbmdlcxgBIAMoCzIQLmRob2xlLnYxLkNoYW5nZSLXAQoIUmV2aXNpb24SCgoCaWQYASABKAkSEwoLcGlwZWxpbmVfaWQYAiABKAkSFAoMY29udGVudF9oYXNoGAMgASgJEg0KBXN0YXRlGAQgASgJEjIKCGxvY2tmaWxlGAUgAygLMiAuZGhvbGUudjEuUmV2aXNpb24uTG9ja2ZpbGVFbnRyeRIOCgZhdXRob3IYBiABKAkSEAoIYXBwcm92ZXIYByABKAkaLwoNTG9ja2ZpbGVFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIj4KEkdldFBpcGVsaW5lUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSJhChNHZXRQaXBlbGluZVJlc3BvbnNlEiQKCHBpcGVsaW5lGAEgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUSJAoIcmV2aXNpb24YAiABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiJrChVBcHBseU9wZXJhdGlvblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSFQoNYmFzZV9yZXZpc2lvbhgCIAEoCRImCglvcGVyYXRpb24YAyABKAsyEy5kaG9sZS52MS5PcGVyYXRpb24iqAEKFkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbhIcCgRkaWZmGAIgASgLMg4uZGhvbGUudjEuRGlmZhIkCgdpbnZlcnNlGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uEiQKCHBpcGVsaW5lGAQgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiYQoPVmFsaWRhdGVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhMKC3JldmlzaW9uX2lkGAIgASgJEiQKCHBpcGVsaW5lGAMgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiTgoKRGlhZ25vc3RpYxIQCghzZXZlcml0eRgBIAEoCRIPCgdtZXNzYWdlGAIgASgJEg8KB3N0ZXBfaWQYAyABKAkSDAoEcG9ydBgEIAEoCSI9ChBWYWxpZGF0ZVJlc3BvbnNlEikKC2RpYWdub3N0aWNzGAEgAygLMhQuZGhvbGUudjEuRGlhZ25vc3RpYyI3CgtQbGFuUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSJkCgtQbGFubmVkU3RlcBIPCgdzdGVwX2lkGAEgASgJEhEKCWNhY2hlX2hpdBgCIAEoCBITCgtlbmdpbmVfa2luZBgDIAEoCRIcChRub25fY2FjaGVhYmxlX3JlYXNvbhgEIAEoCSI0CgxQbGFuUmVzcG9uc2USJAoFc3RlcHMYASADKAsyFS5kaG9sZS52MS5QbGFubmVkU3RlcCIrChRMaXN0UmV2aXNpb25zUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCSI+ChVMaXN0UmV2aXNpb25zUmVzcG9uc2USJQoJcmV2aXNpb25zGAEgAygLMhIuZGhvbGUudjEuUmV2aXNpb24iLQoWQXBwcm92ZVJldmlzaW9uUmVxdWVzdBITCgtyZXZpc2lvbl9pZBgBIAEoCSI/ChdBcHByb3ZlUmV2aXNpb25SZXNwb25zZRIkCghyZXZpc2lvbhgBIAEoCzISLmRob2xlLnYxLlJldmlzaW9uIjsKD1N0YXJ0UnVuUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSI3ChBTdGFydFJ1blJlc3BvbnNlEg4KBnJ1bl9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSIhCg9XYXRjaFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJIosBChBXYXRjaFJ1blJlc3BvbnNlEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEAoIc2VxdWVuY2UYBCABKAQSDAoEdHlwZRgFIAEoCRIPCgdwYXlsb2FkGAYgASgMEhQKDGF0X3VuaXhfbmFubxgHIAEoAypyCgpDaGFuZ2VLaW5kEhsKF0NIQU5HRV9LSU5EX1VOU1BFQ0lGSUVEEAASFQoRQ0hBTkdFX0tJTkRfQURERUQQARIXChNDSEFOR0VfS0lORF9SRU1PVkVEEAISFwoTQ0hBTkdFX0tJTkRfQ0hBTkdFRBADMt4ECg9QaXBlbGluZVNlcnZpY2USSgoLR2V0UGlwZWxpbmUSHC5kaG9sZS52MS5HZXRQaXBlbGluZVJlcXVlc3QaHS5kaG9sZS52MS5HZXRQaXBlbGluZVJlc3BvbnNlElMKDkFwcGx5T3BlcmF0aW9uEh8uZGhvbGUudjEuQXBwbHlPcGVyYXRpb25SZXF1ZXN0GiAuZGhvbGUudjEuQXBwbHlPcGVyYXRpb25SZXNwb25zZRJBCghWYWxpZGF0ZRIZLmRob2xlLnYxLlZhbGlkYXRlUmVxdWVzdBoaLmRob2xlLnYxLlZhbGlkYXRlUmVzcG9uc2USNQoEUGxhbhIVLmRob2xlLnYxLlBsYW5SZXF1ZXN0GhYuZGhvbGUudjEuUGxhblJlc3BvbnNlElAKDUxpc3RSZXZpc2lvbnMSHi5kaG9sZS52MS5MaXN0UmV2aXNpb25zUmVxdWVzdBofLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXNwb25zZRJWCg9BcHByb3ZlUmV2aXNpb24SIC5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXF1ZXN0GiEuZGhvbGUudjEuQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USQQoIU3RhcnRSdW4SGS5kaG9sZS52MS5TdGFydFJ1blJlcXVlc3QaGi5kaG9sZS52MS5TdGFydFJ1blJlc3BvbnNlEkMKCFdhdGNoUnVuEhkuZGhvbGUudjEuV2F0Y2hSdW5SZXF1ZXN0GhouZGhvbGUudjEuV2F0Y2hSdW5SZXNwb25zZTABQokBCgxjb20uZGhvbGUudjFCCEFwaVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkijQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSABCBgoEa2luZCJsCgZDaGFuZ2USIgoEa2luZBgBIAEoDjIULmRob2xlLnYxLkNoYW5nZUtpbmQSDwoHc3RlcF9pZBgCIAEoCRIcCgRlZGdlGAMgASgLMg4uZGhvbGUudjEuRWRnZRIPCgdzdW1tYXJ5GAQgASgJIikKBERpZmYSIQoHY2hhbmdlcxgBIAMoCzIQLmRob2xlLnYxLkNoYW5nZSLXAQoIUmV2aXNpb24SCgoCaWQYASABKAkSEwoLcGlwZWxpbmVfaWQYAiABKAkSFAoMY29udGVudF9oYXNoGAMgASgJEg0KBXN0YXRlGAQgASgJEjIKCGxvY2tmaWxlGAUgAygLMiAuZGhvbGUudjEuUmV2aXNpb24uTG9ja2ZpbGVFbnRyeRIOCgZhdXRob3IYBiABKAkSEAoIYXBwcm92ZXIYByABKAkaLwoNTG9ja2ZpbGVFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIj4KEkdldFBpcGVsaW5lUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSJhChNHZXRQaXBlbGluZVJlc3BvbnNlEiQKCHBpcGVsaW5lGAEgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUSJAoIcmV2aXNpb24YAiABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiJSChVDcmVhdGVQaXBlbGluZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSJAoIcGlwZWxpbmUYAiABKAsyEi5kaG9sZS52MS5QaXBlbGluZSJkChZDcmVhdGVQaXBlbGluZVJlc3BvbnNlEiQKCHBpcGVsaW5lGAEgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUSJAoIcmV2aXNpb24YAiABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiJrChVBcHBseU9wZXJhdGlvblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSFQoNYmFzZV9yZXZpc2lvbhgCIAEoCRImCglvcGVyYXRpb24YAyABKAsyEy5kaG9sZS52MS5PcGVyYXRpb24iqAEKFkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbhIcCgRkaWZmGAIgASgLMg4uZGhvbGUudjEuRGlmZhIkCgdpbnZlcnNlGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uEiQKCHBpcGVsaW5lGAQgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiYQoPVmFsaWRhdGVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhMKC3JldmlzaW9uX2lkGAIgASgJEiQKCHBpcGVsaW5lGAMgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiTgoKRGlhZ25vc3RpYxIQCghzZXZlcml0eRgBIAEoCRIPCgdtZXNzYWdlGAIgASgJEg8KB3N0ZXBfaWQYAyABKAkSDAoEcG9ydBgEIAEoCSI9ChBWYWxpZGF0ZVJlc3BvbnNlEikKC2RpYWdub3N0aWNzGAEgAygLMhQuZGhvbGUudjEuRGlhZ25vc3RpYyI3CgtQbGFuUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSJkCgtQbGFubmVkU3RlcBIPCgdzdGVwX2lkGAEgASgJEhEKCWNhY2hlX2hpdBgCIAEoCBITCgtlbmdpbmVfa2luZBgDIAEoCRIcChRub25fY2FjaGVhYmxlX3JlYXNvbhgEIAEoCSI0CgxQbGFuUmVzcG9uc2USJAoFc3RlcHMYASADKAsyFS5kaG9sZS52MS5QbGFubmVkU3RlcCIrChRMaXN0UmV2aXNpb25zUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCSI+ChVMaXN0UmV2aXNpb25zUmVzcG9uc2USJQoJcmV2aXNpb25zGAEgAygLMhIuZGhvbGUudjEuUmV2aXNpb24iLQoWQXBwcm92ZVJldmlzaW9uUmVxdWVzdBITCgtyZXZpc2lvbl9pZBgBIAEoCSI/ChdBcHByb3ZlUmV2aXNpb25SZXNwb25zZRIkCghyZXZpc2lvbhgBIAEoCzISLmRob2xlLnYxLlJldmlzaW9uIjsKD1N0YXJ0UnVuUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSI3ChBTdGFydFJ1blJlc3BvbnNlEg4KBnJ1bl9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCSIhCg9XYXRjaFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJIosBChBXYXRjaFJ1blJlc3BvbnNlEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEAoIc2VxdWVuY2UYBCABKAQSDAoEdHlwZRgFIAEoCRIPCgdwYXlsb2FkGAYgASgMEhQKDGF0X3VuaXhfbmFubxgHIAEoAypyCgpDaGFuZ2VLaW5kEhsKF0NIQU5HRV9LSU5EX1VOU1BFQ0lGSUVEEAASFQoRQ0hBTkdFX0tJTkRfQURERUQQARIXChNDSEFOR0VfS0lORF9SRU1PVkVEEAISFwoTQ0hBTkdFX0tJTkRfQ0hBTkdFRBADMrMFCg9QaXBlbGluZVNlcnZpY2USUwoOQ3JlYXRlUGlwZWxpbmUSHy5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlcXVlc3QaIC5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlc3BvbnNlEkoKC0dldFBpcGVsaW5lEhwuZGhvbGUudjEuR2V0UGlwZWxpbmVSZXF1ZXN0Gh0uZGhvbGUudjEuR2V0UGlwZWxpbmVSZXNwb25zZRJTCg5BcHBseU9wZXJhdGlvbhIfLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVxdWVzdBogLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USQQoIVmFsaWRhdGUSGS5kaG9sZS52MS5WYWxpZGF0ZVJlcXVlc3QaGi5kaG9sZS52MS5WYWxpZGF0ZVJlc3BvbnNlEjUKBFBsYW4SFS5kaG9sZS52MS5QbGFuUmVxdWVzdBoWLmRob2xlLnYxLlBsYW5SZXNwb25zZRJQCg1MaXN0UmV2aXNpb25zEh4uZGhvbGUudjEuTGlzdFJldmlzaW9uc1JlcXVlc3QaHy5kaG9sZS52MS5MaXN0UmV2aXNpb25zUmVzcG9uc2USVgoPQXBwcm92ZVJldmlzaW9uEiAuZGhvbGUudjEuQXBwcm92ZVJldmlzaW9uUmVxdWVzdBohLmRob2xlLnYxLkFwcHJvdmVSZXZpc2lvblJlc3BvbnNlEkEKCFN0YXJ0UnVuEhkuZGhvbGUudjEuU3RhcnRSdW5SZXF1ZXN0GhouZGhvbGUudjEuU3RhcnRSdW5SZXNwb25zZRJDCghXYXRjaFJ1bhIZLmRob2xlLnYxLldhdGNoUnVuUmVxdWVzdBoaLmRob2xlLnYxLldhdGNoUnVuUmVzcG9uc2UwAUKJAQoMY29tLmRob2xlLnYxQghBcGlQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
     [file_dhole_v1_pipeline],
   );
 
@@ -414,6 +414,72 @@ export const GetPipelineResponseSchema: GenMessage<GetPipelineResponse> =
   messageDesc(file_dhole_v1_api, 11);
 
 /**
+ * CreatePipelineRequest creates a pipeline and writes its first revision.
+ *
+ * It is a separate RPC rather than an ApplyOperation with an empty base,
+ * because an empty base_revision is a REFUSAL and has to stay one: an edit
+ * that cannot conflict silently overwrites whatever someone else wrote. A
+ * client that lost track of its base would then be indistinguishable from one
+ * asking to start something new, which is exactly the case where the
+ * difference matters most. Creation says so in its own name.
+ *
+ * @generated from message dhole.v1.CreatePipelineRequest
+ */
+export type CreatePipelineRequest =
+  Message<"dhole.v1.CreatePipelineRequest"> & {
+    /**
+     * @generated from field: string pipeline_id = 1;
+     */
+    pipelineId: string;
+
+    /**
+     * The definition to start from. Optional: the empty pipeline is the normal
+     * case, because everything after it is an Operation like any other. Its own
+     * id and tenant are ignored — the id is pipeline_id and the tenant comes
+     * from the credential, never from the request.
+     *
+     * @generated from field: dhole.v1.Pipeline pipeline = 2;
+     */
+    pipeline?: Pipeline | undefined;
+  };
+
+/**
+ * Describes the message dhole.v1.CreatePipelineRequest.
+ * Use `create(CreatePipelineRequestSchema)` to create a new message.
+ */
+export const CreatePipelineRequestSchema: GenMessage<CreatePipelineRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 12);
+
+/**
+ * CreatePipelineResponse is the new pipeline and the revision an edit may be
+ * based on. It is the same shape GetPipeline answers with, so a client can
+ * create and then edit without a second read.
+ *
+ * @generated from message dhole.v1.CreatePipelineResponse
+ */
+export type CreatePipelineResponse =
+  Message<"dhole.v1.CreatePipelineResponse"> & {
+    /**
+     * @generated from field: dhole.v1.Pipeline pipeline = 1;
+     */
+    pipeline?: Pipeline | undefined;
+
+    /**
+     * @generated from field: dhole.v1.Revision revision = 2;
+     */
+    revision?: Revision | undefined;
+  };
+
+/**
+ * Describes the message dhole.v1.CreatePipelineResponse.
+ * Use `create(CreatePipelineResponseSchema)` to create a new message.
+ */
+export const CreatePipelineResponseSchema: GenMessage<CreatePipelineResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 13);
+
+/**
  * ApplyOperationRequest applies one edit to the revision the caller last saw.
  * base_revision is mandatory: an edit that cannot conflict is an edit that
  * silently overwrites someone else's.
@@ -444,7 +510,7 @@ export type ApplyOperationRequest =
  */
 export const ApplyOperationRequestSchema: GenMessage<ApplyOperationRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 12);
+  messageDesc(file_dhole_v1_api, 14);
 
 /**
  * ApplyOperationResponse is the new revision, what changed, and the operation
@@ -485,7 +551,7 @@ export type ApplyOperationResponse =
  */
 export const ApplyOperationResponseSchema: GenMessage<ApplyOperationResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 13);
+  messageDesc(file_dhole_v1_api, 15);
 
 /**
  * ValidateRequest asks for structured diagnostics on a revision, or on a
@@ -516,7 +582,7 @@ export type ValidateRequest = Message<"dhole.v1.ValidateRequest"> & {
  */
 export const ValidateRequestSchema: GenMessage<ValidateRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 14);
+  messageDesc(file_dhole_v1_api, 16);
 
 /**
  * Diagnostic is one problem, positioned at the step and port it is about.
@@ -553,7 +619,7 @@ export type Diagnostic = Message<"dhole.v1.Diagnostic"> & {
  */
 export const DiagnosticSchema: GenMessage<Diagnostic> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 15);
+  messageDesc(file_dhole_v1_api, 17);
 
 /**
  * ValidateResponse is every diagnostic found. An empty list means the
@@ -574,7 +640,7 @@ export type ValidateResponse = Message<"dhole.v1.ValidateResponse"> & {
  */
 export const ValidateResponseSchema: GenMessage<ValidateResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 16);
+  messageDesc(file_dhole_v1_api, 18);
 
 /**
  * PlanRequest asks what a run of this revision would do, without doing any of
@@ -600,7 +666,7 @@ export type PlanRequest = Message<"dhole.v1.PlanRequest"> & {
  */
 export const PlanRequestSchema: GenMessage<PlanRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 17);
+  messageDesc(file_dhole_v1_api, 19);
 
 /**
  * PlannedStep is one step of a dry run: whether it would be served from cache,
@@ -637,7 +703,7 @@ export type PlannedStep = Message<"dhole.v1.PlannedStep"> & {
  */
 export const PlannedStepSchema: GenMessage<PlannedStep> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 18);
+  messageDesc(file_dhole_v1_api, 20);
 
 /**
  * PlanResponse is the dry run.
@@ -657,7 +723,7 @@ export type PlanResponse = Message<"dhole.v1.PlanResponse"> & {
  */
 export const PlanResponseSchema: GenMessage<PlanResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 19);
+  messageDesc(file_dhole_v1_api, 21);
 
 /**
  * ListRevisionsRequest asks for a pipeline's revision history.
@@ -677,7 +743,7 @@ export type ListRevisionsRequest = Message<"dhole.v1.ListRevisionsRequest"> & {
  */
 export const ListRevisionsRequestSchema: GenMessage<ListRevisionsRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 20);
+  messageDesc(file_dhole_v1_api, 22);
 
 /**
  * ListRevisionsResponse is that history, oldest first.
@@ -698,7 +764,7 @@ export type ListRevisionsResponse =
  */
 export const ListRevisionsResponseSchema: GenMessage<ListRevisionsResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 21);
+  messageDesc(file_dhole_v1_api, 23);
 
 /**
  * ApproveRevisionRequest promotes a revision to active. The approver is the
@@ -720,7 +786,7 @@ export type ApproveRevisionRequest =
  */
 export const ApproveRevisionRequestSchema: GenMessage<ApproveRevisionRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 22);
+  messageDesc(file_dhole_v1_api, 24);
 
 /**
  * ApproveRevisionResponse is the revision as it now stands.
@@ -741,7 +807,7 @@ export type ApproveRevisionResponse =
  */
 export const ApproveRevisionResponseSchema: GenMessage<ApproveRevisionResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 23);
+  messageDesc(file_dhole_v1_api, 25);
 
 /**
  * StartRunRequest starts a run. An empty revision_id means the pipeline's
@@ -767,7 +833,7 @@ export type StartRunRequest = Message<"dhole.v1.StartRunRequest"> & {
  */
 export const StartRunRequestSchema: GenMessage<StartRunRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 24);
+  messageDesc(file_dhole_v1_api, 26);
 
 /**
  * StartRunResponse names the new run and the revision it pinned.
@@ -792,7 +858,7 @@ export type StartRunResponse = Message<"dhole.v1.StartRunResponse"> & {
  */
 export const StartRunResponseSchema: GenMessage<StartRunResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 25);
+  messageDesc(file_dhole_v1_api, 27);
 
 /**
  * WatchRunRequest follows one run.
@@ -812,7 +878,7 @@ export type WatchRunRequest = Message<"dhole.v1.WatchRunRequest"> & {
  */
 export const WatchRunRequestSchema: GenMessage<WatchRunRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 26);
+  messageDesc(file_dhole_v1_api, 28);
 
 /**
  * WatchRunResponse is one entry of the run's event log — the run's only position
@@ -866,7 +932,7 @@ export type WatchRunResponse = Message<"dhole.v1.WatchRunResponse"> & {
  */
 export const WatchRunResponseSchema: GenMessage<WatchRunResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 27);
+  messageDesc(file_dhole_v1_api, 29);
 
 /**
  * ChangeKind is what happened to one element of the pipeline.
@@ -911,6 +977,19 @@ export const ChangeKindSchema: GenEnum<ChangeKind> =
  * @generated from service dhole.v1.PipelineService
  */
 export const PipelineService: GenService<{
+  /**
+   * CreatePipeline creates a pipeline and its first revision. Nothing else
+   * in this service can write a first revision, so without it the GUI could
+   * not create a pipeline at all and every client had to reach around the
+   * API to seed one.
+   *
+   * @generated from rpc dhole.v1.PipelineService.CreatePipeline
+   */
+  createPipeline: {
+    methodKind: "unary";
+    input: typeof CreatePipelineRequestSchema;
+    output: typeof CreatePipelineResponseSchema;
+  };
   /**
    * GetPipeline reads one revision of one pipeline.
    *

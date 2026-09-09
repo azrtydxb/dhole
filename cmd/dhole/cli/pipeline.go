@@ -15,6 +15,56 @@ import (
 	"github.com/azrtydxb/dhole/internal/mirror"
 )
 
+// pipelineCreateCmd creates a pipeline and its first revision.
+//
+// It is the entry point every other pipeline command needs and nothing used to
+// provide: an edit is applied against a base_revision, and until this RPC
+// existed no call in the contract wrote a first one — so a pipeline could only
+// be brought into being by writing to the definition store behind the API's
+// back, which the GUI cannot do.
+func pipelineCreateCmd(o *options) *cobra.Command {
+	var definition string
+	cmd := &cobra.Command{
+		Use:   "create <pipeline-id>",
+		Short: "create a pipeline and write its first revision",
+		Long: "--definition takes a dhole.v1.Pipeline as JSON, or @file, or @- for\n" +
+			"stdin; without it the pipeline starts empty, which is the normal case\n" +
+			"because everything after the first revision is an operation.\n" +
+			"The tenant is the credential's and is never taken from the definition.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.checkOutput(cmd); err != nil {
+				return err
+			}
+			msg := &dholev1.CreatePipelineRequest{PipelineId: args[0]}
+			if definition != "" {
+				raw, err := readArgument(definition, cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				msg.Pipeline = &dholev1.Pipeline{}
+				if err := protojson.Unmarshal(raw, msg.GetPipeline()); err != nil {
+					return fmt.Errorf("--definition is not a dhole.v1.Pipeline: %w", err)
+				}
+			}
+
+			ctx, cancel := o.context(cmd)
+			defer cancel()
+
+			res, err := o.client().CreatePipeline(ctx, connect.NewRequest(msg))
+			if err != nil {
+				return o.fail("create pipeline", err)
+			}
+			return o.emit(res.Msg, func(w io.Writer) {
+				printRevision(w, res.Msg.GetRevision())
+			})
+		},
+	}
+	cmd.Flags().StringVar(&definition, "definition", "",
+		"a dhole.v1.Pipeline as JSON, @file or @- ; default is an empty pipeline")
+	return cmd
+}
+
 // pipelineGetCmd reads one revision of one pipeline.
 func pipelineGetCmd(o *options) *cobra.Command {
 	var revision string

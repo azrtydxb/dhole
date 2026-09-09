@@ -219,6 +219,7 @@ func serverCommands() []struct {
 		args     []string
 		succeeds bool
 	}{
+		{"pipeline create", []string{"pipeline", "create", "p2"}, true},
 		{"pipeline get", []string{"pipeline", "get", "p1"}, true},
 		{"pipeline apply", []string{"pipeline", "apply", "p1", "--base", "rev_1", "--operation", operation}, false},
 		{"pipeline validate", []string{"pipeline", "validate", "p1"}, false},

@@ -857,6 +857,125 @@ func (x *GetPipelineResponse) GetRevision() *Revision {
 	return nil
 }
 
+// CreatePipelineRequest creates a pipeline and writes its first revision.
+//
+// It is a separate RPC rather than an ApplyOperation with an empty base,
+// because an empty base_revision is a REFUSAL and has to stay one: an edit
+// that cannot conflict silently overwrites whatever someone else wrote. A
+// client that lost track of its base would then be indistinguishable from one
+// asking to start something new, which is exactly the case where the
+// difference matters most. Creation says so in its own name.
+type CreatePipelineRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PipelineId string                 `protobuf:"bytes,1,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	// The definition to start from. Optional: the empty pipeline is the normal
+	// case, because everything after it is an Operation like any other. Its own
+	// id and tenant are ignored — the id is pipeline_id and the tenant comes
+	// from the credential, never from the request.
+	Pipeline      *Pipeline `protobuf:"bytes,2,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePipelineRequest) Reset() {
+	*x = CreatePipelineRequest{}
+	mi := &file_dhole_v1_api_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePipelineRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePipelineRequest) ProtoMessage() {}
+
+func (x *CreatePipelineRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePipelineRequest.ProtoReflect.Descriptor instead.
+func (*CreatePipelineRequest) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CreatePipelineRequest) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *CreatePipelineRequest) GetPipeline() *Pipeline {
+	if x != nil {
+		return x.Pipeline
+	}
+	return nil
+}
+
+// CreatePipelineResponse is the new pipeline and the revision an edit may be
+// based on. It is the same shape GetPipeline answers with, so a client can
+// create and then edit without a second read.
+type CreatePipelineResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pipeline      *Pipeline              `protobuf:"bytes,1,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
+	Revision      *Revision              `protobuf:"bytes,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePipelineResponse) Reset() {
+	*x = CreatePipelineResponse{}
+	mi := &file_dhole_v1_api_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePipelineResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePipelineResponse) ProtoMessage() {}
+
+func (x *CreatePipelineResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePipelineResponse.ProtoReflect.Descriptor instead.
+func (*CreatePipelineResponse) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CreatePipelineResponse) GetPipeline() *Pipeline {
+	if x != nil {
+		return x.Pipeline
+	}
+	return nil
+}
+
+func (x *CreatePipelineResponse) GetRevision() *Revision {
+	if x != nil {
+		return x.Revision
+	}
+	return nil
+}
+
 // ApplyOperationRequest applies one edit to the revision the caller last saw.
 // base_revision is mandatory: an edit that cannot conflict is an edit that
 // silently overwrites someone else's.
@@ -871,7 +990,7 @@ type ApplyOperationRequest struct {
 
 func (x *ApplyOperationRequest) Reset() {
 	*x = ApplyOperationRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[12]
+	mi := &file_dhole_v1_api_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -883,7 +1002,7 @@ func (x *ApplyOperationRequest) String() string {
 func (*ApplyOperationRequest) ProtoMessage() {}
 
 func (x *ApplyOperationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[12]
+	mi := &file_dhole_v1_api_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -896,7 +1015,7 @@ func (x *ApplyOperationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyOperationRequest.ProtoReflect.Descriptor instead.
 func (*ApplyOperationRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{12}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ApplyOperationRequest) GetPipelineId() string {
@@ -936,7 +1055,7 @@ type ApplyOperationResponse struct {
 
 func (x *ApplyOperationResponse) Reset() {
 	*x = ApplyOperationResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[13]
+	mi := &file_dhole_v1_api_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +1067,7 @@ func (x *ApplyOperationResponse) String() string {
 func (*ApplyOperationResponse) ProtoMessage() {}
 
 func (x *ApplyOperationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[13]
+	mi := &file_dhole_v1_api_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +1080,7 @@ func (x *ApplyOperationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyOperationResponse.ProtoReflect.Descriptor instead.
 func (*ApplyOperationResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{13}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ApplyOperationResponse) GetRevision() *Revision {
@@ -1005,7 +1124,7 @@ type ValidateRequest struct {
 
 func (x *ValidateRequest) Reset() {
 	*x = ValidateRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[14]
+	mi := &file_dhole_v1_api_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +1136,7 @@ func (x *ValidateRequest) String() string {
 func (*ValidateRequest) ProtoMessage() {}
 
 func (x *ValidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[14]
+	mi := &file_dhole_v1_api_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +1149,7 @@ func (x *ValidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateRequest.ProtoReflect.Descriptor instead.
 func (*ValidateRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{14}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ValidateRequest) GetPipelineId() string {
@@ -1068,7 +1187,7 @@ type Diagnostic struct {
 
 func (x *Diagnostic) Reset() {
 	*x = Diagnostic{}
-	mi := &file_dhole_v1_api_proto_msgTypes[15]
+	mi := &file_dhole_v1_api_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1080,7 +1199,7 @@ func (x *Diagnostic) String() string {
 func (*Diagnostic) ProtoMessage() {}
 
 func (x *Diagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[15]
+	mi := &file_dhole_v1_api_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1093,7 +1212,7 @@ func (x *Diagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Diagnostic.ProtoReflect.Descriptor instead.
 func (*Diagnostic) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{15}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Diagnostic) GetSeverity() string {
@@ -1135,7 +1254,7 @@ type ValidateResponse struct {
 
 func (x *ValidateResponse) Reset() {
 	*x = ValidateResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[16]
+	mi := &file_dhole_v1_api_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1147,7 +1266,7 @@ func (x *ValidateResponse) String() string {
 func (*ValidateResponse) ProtoMessage() {}
 
 func (x *ValidateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[16]
+	mi := &file_dhole_v1_api_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1160,7 +1279,7 @@ func (x *ValidateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateResponse.ProtoReflect.Descriptor instead.
 func (*ValidateResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{16}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ValidateResponse) GetDiagnostics() []*Diagnostic {
@@ -1182,7 +1301,7 @@ type PlanRequest struct {
 
 func (x *PlanRequest) Reset() {
 	*x = PlanRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[17]
+	mi := &file_dhole_v1_api_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1194,7 +1313,7 @@ func (x *PlanRequest) String() string {
 func (*PlanRequest) ProtoMessage() {}
 
 func (x *PlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[17]
+	mi := &file_dhole_v1_api_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1207,7 +1326,7 @@ func (x *PlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanRequest.ProtoReflect.Descriptor instead.
 func (*PlanRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{17}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PlanRequest) GetPipelineId() string {
@@ -1239,7 +1358,7 @@ type PlannedStep struct {
 
 func (x *PlannedStep) Reset() {
 	*x = PlannedStep{}
-	mi := &file_dhole_v1_api_proto_msgTypes[18]
+	mi := &file_dhole_v1_api_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1251,7 +1370,7 @@ func (x *PlannedStep) String() string {
 func (*PlannedStep) ProtoMessage() {}
 
 func (x *PlannedStep) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[18]
+	mi := &file_dhole_v1_api_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1264,7 +1383,7 @@ func (x *PlannedStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlannedStep.ProtoReflect.Descriptor instead.
 func (*PlannedStep) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{18}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *PlannedStep) GetStepId() string {
@@ -1305,7 +1424,7 @@ type PlanResponse struct {
 
 func (x *PlanResponse) Reset() {
 	*x = PlanResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[19]
+	mi := &file_dhole_v1_api_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1317,7 +1436,7 @@ func (x *PlanResponse) String() string {
 func (*PlanResponse) ProtoMessage() {}
 
 func (x *PlanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[19]
+	mi := &file_dhole_v1_api_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1330,7 +1449,7 @@ func (x *PlanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanResponse.ProtoReflect.Descriptor instead.
 func (*PlanResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{19}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PlanResponse) GetSteps() []*PlannedStep {
@@ -1350,7 +1469,7 @@ type ListRevisionsRequest struct {
 
 func (x *ListRevisionsRequest) Reset() {
 	*x = ListRevisionsRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[20]
+	mi := &file_dhole_v1_api_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1362,7 +1481,7 @@ func (x *ListRevisionsRequest) String() string {
 func (*ListRevisionsRequest) ProtoMessage() {}
 
 func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[20]
+	mi := &file_dhole_v1_api_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1375,7 +1494,7 @@ func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRevisionsRequest.ProtoReflect.Descriptor instead.
 func (*ListRevisionsRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{20}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListRevisionsRequest) GetPipelineId() string {
@@ -1395,7 +1514,7 @@ type ListRevisionsResponse struct {
 
 func (x *ListRevisionsResponse) Reset() {
 	*x = ListRevisionsResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[21]
+	mi := &file_dhole_v1_api_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1407,7 +1526,7 @@ func (x *ListRevisionsResponse) String() string {
 func (*ListRevisionsResponse) ProtoMessage() {}
 
 func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[21]
+	mi := &file_dhole_v1_api_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1420,7 +1539,7 @@ func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRevisionsResponse.ProtoReflect.Descriptor instead.
 func (*ListRevisionsResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{21}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListRevisionsResponse) GetRevisions() []*Revision {
@@ -1441,7 +1560,7 @@ type ApproveRevisionRequest struct {
 
 func (x *ApproveRevisionRequest) Reset() {
 	*x = ApproveRevisionRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[22]
+	mi := &file_dhole_v1_api_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1453,7 +1572,7 @@ func (x *ApproveRevisionRequest) String() string {
 func (*ApproveRevisionRequest) ProtoMessage() {}
 
 func (x *ApproveRevisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[22]
+	mi := &file_dhole_v1_api_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1466,7 +1585,7 @@ func (x *ApproveRevisionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveRevisionRequest.ProtoReflect.Descriptor instead.
 func (*ApproveRevisionRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{22}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ApproveRevisionRequest) GetRevisionId() string {
@@ -1486,7 +1605,7 @@ type ApproveRevisionResponse struct {
 
 func (x *ApproveRevisionResponse) Reset() {
 	*x = ApproveRevisionResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[23]
+	mi := &file_dhole_v1_api_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1498,7 +1617,7 @@ func (x *ApproveRevisionResponse) String() string {
 func (*ApproveRevisionResponse) ProtoMessage() {}
 
 func (x *ApproveRevisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[23]
+	mi := &file_dhole_v1_api_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1511,7 +1630,7 @@ func (x *ApproveRevisionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveRevisionResponse.ProtoReflect.Descriptor instead.
 func (*ApproveRevisionResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{23}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ApproveRevisionResponse) GetRevision() *Revision {
@@ -1533,7 +1652,7 @@ type StartRunRequest struct {
 
 func (x *StartRunRequest) Reset() {
 	*x = StartRunRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[24]
+	mi := &file_dhole_v1_api_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1545,7 +1664,7 @@ func (x *StartRunRequest) String() string {
 func (*StartRunRequest) ProtoMessage() {}
 
 func (x *StartRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[24]
+	mi := &file_dhole_v1_api_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1558,7 +1677,7 @@ func (x *StartRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRunRequest.ProtoReflect.Descriptor instead.
 func (*StartRunRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{24}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *StartRunRequest) GetPipelineId() string {
@@ -1586,7 +1705,7 @@ type StartRunResponse struct {
 
 func (x *StartRunResponse) Reset() {
 	*x = StartRunResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[25]
+	mi := &file_dhole_v1_api_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1598,7 +1717,7 @@ func (x *StartRunResponse) String() string {
 func (*StartRunResponse) ProtoMessage() {}
 
 func (x *StartRunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[25]
+	mi := &file_dhole_v1_api_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1611,7 +1730,7 @@ func (x *StartRunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRunResponse.ProtoReflect.Descriptor instead.
 func (*StartRunResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{25}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *StartRunResponse) GetRunId() string {
@@ -1638,7 +1757,7 @@ type WatchRunRequest struct {
 
 func (x *WatchRunRequest) Reset() {
 	*x = WatchRunRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[26]
+	mi := &file_dhole_v1_api_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1650,7 +1769,7 @@ func (x *WatchRunRequest) String() string {
 func (*WatchRunRequest) ProtoMessage() {}
 
 func (x *WatchRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[26]
+	mi := &file_dhole_v1_api_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1663,7 +1782,7 @@ func (x *WatchRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRunRequest.ProtoReflect.Descriptor instead.
 func (*WatchRunRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{26}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *WatchRunRequest) GetRunId() string {
@@ -1692,7 +1811,7 @@ type WatchRunResponse struct {
 
 func (x *WatchRunResponse) Reset() {
 	*x = WatchRunResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[27]
+	mi := &file_dhole_v1_api_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1704,7 +1823,7 @@ func (x *WatchRunResponse) String() string {
 func (*WatchRunResponse) ProtoMessage() {}
 
 func (x *WatchRunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[27]
+	mi := &file_dhole_v1_api_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1717,7 +1836,7 @@ func (x *WatchRunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRunResponse.ProtoReflect.Descriptor instead.
 func (*WatchRunResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{27}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *WatchRunResponse) GetRunId() string {
@@ -1827,6 +1946,13 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"revisionId\"u\n" +
 	"\x13GetPipelineResponse\x12.\n" +
 	"\bpipeline\x18\x01 \x01(\v2\x12.dhole.v1.PipelineR\bpipeline\x12.\n" +
+	"\brevision\x18\x02 \x01(\v2\x12.dhole.v1.RevisionR\brevision\"h\n" +
+	"\x15CreatePipelineRequest\x12\x1f\n" +
+	"\vpipeline_id\x18\x01 \x01(\tR\n" +
+	"pipelineId\x12.\n" +
+	"\bpipeline\x18\x02 \x01(\v2\x12.dhole.v1.PipelineR\bpipeline\"x\n" +
+	"\x16CreatePipelineResponse\x12.\n" +
+	"\bpipeline\x18\x01 \x01(\v2\x12.dhole.v1.PipelineR\bpipeline\x12.\n" +
 	"\brevision\x18\x02 \x01(\v2\x12.dhole.v1.RevisionR\brevision\"\x90\x01\n" +
 	"\x15ApplyOperationRequest\x12\x1f\n" +
 	"\vpipeline_id\x18\x01 \x01(\tR\n" +
@@ -1900,8 +2026,9 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x17CHANGE_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11CHANGE_KIND_ADDED\x10\x01\x12\x17\n" +
 	"\x13CHANGE_KIND_REMOVED\x10\x02\x12\x17\n" +
-	"\x13CHANGE_KIND_CHANGED\x10\x032\xde\x04\n" +
-	"\x0fPipelineService\x12J\n" +
+	"\x13CHANGE_KIND_CHANGED\x10\x032\xb3\x05\n" +
+	"\x0fPipelineService\x12S\n" +
+	"\x0eCreatePipeline\x12\x1f.dhole.v1.CreatePipelineRequest\x1a .dhole.v1.CreatePipelineResponse\x12J\n" +
 	"\vGetPipeline\x12\x1c.dhole.v1.GetPipelineRequest\x1a\x1d.dhole.v1.GetPipelineResponse\x12S\n" +
 	"\x0eApplyOperation\x12\x1f.dhole.v1.ApplyOperationRequest\x1a .dhole.v1.ApplyOperationResponse\x12A\n" +
 	"\bValidate\x12\x19.dhole.v1.ValidateRequest\x1a\x1a.dhole.v1.ValidateResponse\x125\n" +
@@ -1925,7 +2052,7 @@ func file_dhole_v1_api_proto_rawDescGZIP() []byte {
 }
 
 var file_dhole_v1_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_dhole_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_dhole_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_dhole_v1_api_proto_goTypes = []any{
 	(ChangeKind)(0),                 // 0: dhole.v1.ChangeKind
 	(*AddStep)(nil),                 // 1: dhole.v1.AddStep
@@ -1940,31 +2067,33 @@ var file_dhole_v1_api_proto_goTypes = []any{
 	(*Revision)(nil),                // 10: dhole.v1.Revision
 	(*GetPipelineRequest)(nil),      // 11: dhole.v1.GetPipelineRequest
 	(*GetPipelineResponse)(nil),     // 12: dhole.v1.GetPipelineResponse
-	(*ApplyOperationRequest)(nil),   // 13: dhole.v1.ApplyOperationRequest
-	(*ApplyOperationResponse)(nil),  // 14: dhole.v1.ApplyOperationResponse
-	(*ValidateRequest)(nil),         // 15: dhole.v1.ValidateRequest
-	(*Diagnostic)(nil),              // 16: dhole.v1.Diagnostic
-	(*ValidateResponse)(nil),        // 17: dhole.v1.ValidateResponse
-	(*PlanRequest)(nil),             // 18: dhole.v1.PlanRequest
-	(*PlannedStep)(nil),             // 19: dhole.v1.PlannedStep
-	(*PlanResponse)(nil),            // 20: dhole.v1.PlanResponse
-	(*ListRevisionsRequest)(nil),    // 21: dhole.v1.ListRevisionsRequest
-	(*ListRevisionsResponse)(nil),   // 22: dhole.v1.ListRevisionsResponse
-	(*ApproveRevisionRequest)(nil),  // 23: dhole.v1.ApproveRevisionRequest
-	(*ApproveRevisionResponse)(nil), // 24: dhole.v1.ApproveRevisionResponse
-	(*StartRunRequest)(nil),         // 25: dhole.v1.StartRunRequest
-	(*StartRunResponse)(nil),        // 26: dhole.v1.StartRunResponse
-	(*WatchRunRequest)(nil),         // 27: dhole.v1.WatchRunRequest
-	(*WatchRunResponse)(nil),        // 28: dhole.v1.WatchRunResponse
-	nil,                             // 29: dhole.v1.Revision.LockfileEntry
-	(*Step)(nil),                    // 30: dhole.v1.Step
-	(*Edge)(nil),                    // 31: dhole.v1.Edge
-	(*Pipeline)(nil),                // 32: dhole.v1.Pipeline
+	(*CreatePipelineRequest)(nil),   // 13: dhole.v1.CreatePipelineRequest
+	(*CreatePipelineResponse)(nil),  // 14: dhole.v1.CreatePipelineResponse
+	(*ApplyOperationRequest)(nil),   // 15: dhole.v1.ApplyOperationRequest
+	(*ApplyOperationResponse)(nil),  // 16: dhole.v1.ApplyOperationResponse
+	(*ValidateRequest)(nil),         // 17: dhole.v1.ValidateRequest
+	(*Diagnostic)(nil),              // 18: dhole.v1.Diagnostic
+	(*ValidateResponse)(nil),        // 19: dhole.v1.ValidateResponse
+	(*PlanRequest)(nil),             // 20: dhole.v1.PlanRequest
+	(*PlannedStep)(nil),             // 21: dhole.v1.PlannedStep
+	(*PlanResponse)(nil),            // 22: dhole.v1.PlanResponse
+	(*ListRevisionsRequest)(nil),    // 23: dhole.v1.ListRevisionsRequest
+	(*ListRevisionsResponse)(nil),   // 24: dhole.v1.ListRevisionsResponse
+	(*ApproveRevisionRequest)(nil),  // 25: dhole.v1.ApproveRevisionRequest
+	(*ApproveRevisionResponse)(nil), // 26: dhole.v1.ApproveRevisionResponse
+	(*StartRunRequest)(nil),         // 27: dhole.v1.StartRunRequest
+	(*StartRunResponse)(nil),        // 28: dhole.v1.StartRunResponse
+	(*WatchRunRequest)(nil),         // 29: dhole.v1.WatchRunRequest
+	(*WatchRunResponse)(nil),        // 30: dhole.v1.WatchRunResponse
+	nil,                             // 31: dhole.v1.Revision.LockfileEntry
+	(*Step)(nil),                    // 32: dhole.v1.Step
+	(*Edge)(nil),                    // 33: dhole.v1.Edge
+	(*Pipeline)(nil),                // 34: dhole.v1.Pipeline
 }
 var file_dhole_v1_api_proto_depIdxs = []int32{
-	30, // 0: dhole.v1.AddStep.step:type_name -> dhole.v1.Step
-	31, // 1: dhole.v1.Connect.edge:type_name -> dhole.v1.Edge
-	31, // 2: dhole.v1.RemoveEdge.edge:type_name -> dhole.v1.Edge
+	32, // 0: dhole.v1.AddStep.step:type_name -> dhole.v1.Step
+	33, // 1: dhole.v1.Connect.edge:type_name -> dhole.v1.Edge
+	33, // 2: dhole.v1.RemoveEdge.edge:type_name -> dhole.v1.Edge
 	1,  // 3: dhole.v1.Operation.add_step:type_name -> dhole.v1.AddStep
 	3,  // 4: dhole.v1.Operation.connect:type_name -> dhole.v1.Connect
 	5,  // 5: dhole.v1.Operation.set_property:type_name -> dhole.v1.SetProperty
@@ -1972,42 +2101,47 @@ var file_dhole_v1_api_proto_depIdxs = []int32{
 	6,  // 7: dhole.v1.Operation.rename:type_name -> dhole.v1.Rename
 	2,  // 8: dhole.v1.Operation.remove_step:type_name -> dhole.v1.RemoveStep
 	0,  // 9: dhole.v1.Change.kind:type_name -> dhole.v1.ChangeKind
-	31, // 10: dhole.v1.Change.edge:type_name -> dhole.v1.Edge
+	33, // 10: dhole.v1.Change.edge:type_name -> dhole.v1.Edge
 	8,  // 11: dhole.v1.Diff.changes:type_name -> dhole.v1.Change
-	29, // 12: dhole.v1.Revision.lockfile:type_name -> dhole.v1.Revision.LockfileEntry
-	32, // 13: dhole.v1.GetPipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
+	31, // 12: dhole.v1.Revision.lockfile:type_name -> dhole.v1.Revision.LockfileEntry
+	34, // 13: dhole.v1.GetPipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
 	10, // 14: dhole.v1.GetPipelineResponse.revision:type_name -> dhole.v1.Revision
-	7,  // 15: dhole.v1.ApplyOperationRequest.operation:type_name -> dhole.v1.Operation
-	10, // 16: dhole.v1.ApplyOperationResponse.revision:type_name -> dhole.v1.Revision
-	9,  // 17: dhole.v1.ApplyOperationResponse.diff:type_name -> dhole.v1.Diff
-	7,  // 18: dhole.v1.ApplyOperationResponse.inverse:type_name -> dhole.v1.Operation
-	32, // 19: dhole.v1.ApplyOperationResponse.pipeline:type_name -> dhole.v1.Pipeline
-	32, // 20: dhole.v1.ValidateRequest.pipeline:type_name -> dhole.v1.Pipeline
-	16, // 21: dhole.v1.ValidateResponse.diagnostics:type_name -> dhole.v1.Diagnostic
-	19, // 22: dhole.v1.PlanResponse.steps:type_name -> dhole.v1.PlannedStep
-	10, // 23: dhole.v1.ListRevisionsResponse.revisions:type_name -> dhole.v1.Revision
-	10, // 24: dhole.v1.ApproveRevisionResponse.revision:type_name -> dhole.v1.Revision
-	11, // 25: dhole.v1.PipelineService.GetPipeline:input_type -> dhole.v1.GetPipelineRequest
-	13, // 26: dhole.v1.PipelineService.ApplyOperation:input_type -> dhole.v1.ApplyOperationRequest
-	15, // 27: dhole.v1.PipelineService.Validate:input_type -> dhole.v1.ValidateRequest
-	18, // 28: dhole.v1.PipelineService.Plan:input_type -> dhole.v1.PlanRequest
-	21, // 29: dhole.v1.PipelineService.ListRevisions:input_type -> dhole.v1.ListRevisionsRequest
-	23, // 30: dhole.v1.PipelineService.ApproveRevision:input_type -> dhole.v1.ApproveRevisionRequest
-	25, // 31: dhole.v1.PipelineService.StartRun:input_type -> dhole.v1.StartRunRequest
-	27, // 32: dhole.v1.PipelineService.WatchRun:input_type -> dhole.v1.WatchRunRequest
-	12, // 33: dhole.v1.PipelineService.GetPipeline:output_type -> dhole.v1.GetPipelineResponse
-	14, // 34: dhole.v1.PipelineService.ApplyOperation:output_type -> dhole.v1.ApplyOperationResponse
-	17, // 35: dhole.v1.PipelineService.Validate:output_type -> dhole.v1.ValidateResponse
-	20, // 36: dhole.v1.PipelineService.Plan:output_type -> dhole.v1.PlanResponse
-	22, // 37: dhole.v1.PipelineService.ListRevisions:output_type -> dhole.v1.ListRevisionsResponse
-	24, // 38: dhole.v1.PipelineService.ApproveRevision:output_type -> dhole.v1.ApproveRevisionResponse
-	26, // 39: dhole.v1.PipelineService.StartRun:output_type -> dhole.v1.StartRunResponse
-	28, // 40: dhole.v1.PipelineService.WatchRun:output_type -> dhole.v1.WatchRunResponse
-	33, // [33:41] is the sub-list for method output_type
-	25, // [25:33] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	34, // 15: dhole.v1.CreatePipelineRequest.pipeline:type_name -> dhole.v1.Pipeline
+	34, // 16: dhole.v1.CreatePipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
+	10, // 17: dhole.v1.CreatePipelineResponse.revision:type_name -> dhole.v1.Revision
+	7,  // 18: dhole.v1.ApplyOperationRequest.operation:type_name -> dhole.v1.Operation
+	10, // 19: dhole.v1.ApplyOperationResponse.revision:type_name -> dhole.v1.Revision
+	9,  // 20: dhole.v1.ApplyOperationResponse.diff:type_name -> dhole.v1.Diff
+	7,  // 21: dhole.v1.ApplyOperationResponse.inverse:type_name -> dhole.v1.Operation
+	34, // 22: dhole.v1.ApplyOperationResponse.pipeline:type_name -> dhole.v1.Pipeline
+	34, // 23: dhole.v1.ValidateRequest.pipeline:type_name -> dhole.v1.Pipeline
+	18, // 24: dhole.v1.ValidateResponse.diagnostics:type_name -> dhole.v1.Diagnostic
+	21, // 25: dhole.v1.PlanResponse.steps:type_name -> dhole.v1.PlannedStep
+	10, // 26: dhole.v1.ListRevisionsResponse.revisions:type_name -> dhole.v1.Revision
+	10, // 27: dhole.v1.ApproveRevisionResponse.revision:type_name -> dhole.v1.Revision
+	13, // 28: dhole.v1.PipelineService.CreatePipeline:input_type -> dhole.v1.CreatePipelineRequest
+	11, // 29: dhole.v1.PipelineService.GetPipeline:input_type -> dhole.v1.GetPipelineRequest
+	15, // 30: dhole.v1.PipelineService.ApplyOperation:input_type -> dhole.v1.ApplyOperationRequest
+	17, // 31: dhole.v1.PipelineService.Validate:input_type -> dhole.v1.ValidateRequest
+	20, // 32: dhole.v1.PipelineService.Plan:input_type -> dhole.v1.PlanRequest
+	23, // 33: dhole.v1.PipelineService.ListRevisions:input_type -> dhole.v1.ListRevisionsRequest
+	25, // 34: dhole.v1.PipelineService.ApproveRevision:input_type -> dhole.v1.ApproveRevisionRequest
+	27, // 35: dhole.v1.PipelineService.StartRun:input_type -> dhole.v1.StartRunRequest
+	29, // 36: dhole.v1.PipelineService.WatchRun:input_type -> dhole.v1.WatchRunRequest
+	14, // 37: dhole.v1.PipelineService.CreatePipeline:output_type -> dhole.v1.CreatePipelineResponse
+	12, // 38: dhole.v1.PipelineService.GetPipeline:output_type -> dhole.v1.GetPipelineResponse
+	16, // 39: dhole.v1.PipelineService.ApplyOperation:output_type -> dhole.v1.ApplyOperationResponse
+	19, // 40: dhole.v1.PipelineService.Validate:output_type -> dhole.v1.ValidateResponse
+	22, // 41: dhole.v1.PipelineService.Plan:output_type -> dhole.v1.PlanResponse
+	24, // 42: dhole.v1.PipelineService.ListRevisions:output_type -> dhole.v1.ListRevisionsResponse
+	26, // 43: dhole.v1.PipelineService.ApproveRevision:output_type -> dhole.v1.ApproveRevisionResponse
+	28, // 44: dhole.v1.PipelineService.StartRun:output_type -> dhole.v1.StartRunResponse
+	30, // 45: dhole.v1.PipelineService.WatchRun:output_type -> dhole.v1.WatchRunResponse
+	37, // [37:46] is the sub-list for method output_type
+	28, // [28:37] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_api_proto_init() }
@@ -2030,7 +2164,7 @@ func file_dhole_v1_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_api_proto_rawDesc), len(file_dhole_v1_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   29,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
