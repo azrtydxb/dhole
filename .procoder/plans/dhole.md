@@ -37,6 +37,11 @@ decide what may be cached and what may be retried.
   supported for development and homelab and must remain functional.
 - Tests are Go standard `testing` with `testify/require`. Web tests are Playwright.
 - Every task ends gate-clean: `make check` (gofmt, go vet, golangci-lint, buf lint) passes.
+- Generated protobuf messages are always passed and returned by POINTER
+  (`*dholev1.Digest`, never `dholev1.Digest`). Every generated message embeds
+  `protoimpl.MessageState`, which contains a `sync.Mutex` via `DoNotCopy`, so
+  a value copy trips `go vet`'s copylocks check — which has no inline
+  suppression and is part of the gate. Discovered building Task 6.
 
 ## Task 1: Repository scaffold and quality gate
 
@@ -66,24 +71,24 @@ Interfaces: produces messages `Pipeline`, `Step`, `Port`, `PortType`, `Edge`, `T
 Files: `internal/dag/dag.go`, `internal/dag/typecheck.go`, `internal/dag/dag_test.go`, `internal/dag/typecheck_test.go`
 Interfaces: produces `dag.Build(p *dholev1.Pipeline) (*dag.Graph, error)`, `Graph.TopoLevels() [][]string`, `Graph.Dependents(stepID string) []string`, `dag.TypeCheck(p *dholev1.Pipeline) []dag.Diagnostic`, `Diagnostic{StepID, PortName, Message string; Line, Col int}`.
 
-- [ ] Write `internal/dag/dag_test.go` asserting `TestDAGDerivedFromPortsRunsIndependentStepsConcurrently`: a four-step pipeline where B and C both depend on A and D depends on both yields `TopoLevels()` of `[["a"],["b","c"],["d"]]`. Run `go test ./internal/dag` — expect FAIL with "undefined: dag.Build".
-- [ ] Write `internal/dag/dag_test.go` case `TestDAGRejectsCycle` asserting `dag.Build` on a pipeline whose edges form a cycle returns an error containing "cycle: a -> b -> a".
-- [ ] Implement `internal/dag/dag.go`: build adjacency from `Edge`, detect cycles by DFS colouring, compute levels by Kahn's algorithm with deterministic ordering (sort step ids within a level).
-- [ ] Write `internal/dag/typecheck_test.go` asserting `TestValidateRejectsIncompatiblePortTypes`: connecting a `blob` output to a `structured` input yields exactly one `Diagnostic` whose `Message` contains both `"a.out"` and `"b.in"`. Run — expect FAIL with "undefined: dag.TypeCheck".
-- [ ] Implement `internal/dag/typecheck.go` comparing `PortType` oneof arms and, for `structured`, comparing JSON Schema `$id`; return one diagnostic per bad edge, plus one per edge referencing a missing step or port.
-- [ ] Run `go test ./internal/dag` — expect PASS. Commit.
+- [x] Write `internal/dag/dag_test.go` asserting `TestDAGDerivedFromPortsRunsIndependentStepsConcurrently`: a four-step pipeline where B and C both depend on A and D depends on both yields `TopoLevels()` of `[["a"],["b","c"],["d"]]`. Run `go test ./internal/dag` — expect FAIL with "undefined: dag.Build".
+- [x] Write `internal/dag/dag_test.go` case `TestDAGRejectsCycle` asserting `dag.Build` on a pipeline whose edges form a cycle returns an error containing "cycle: a -> b -> a".
+- [x] Implement `internal/dag/dag.go`: build adjacency from `Edge`, detect cycles by DFS colouring, compute levels by Kahn's algorithm with deterministic ordering (sort step ids within a level).
+- [x] Write `internal/dag/typecheck_test.go` asserting `TestValidateRejectsIncompatiblePortTypes`: connecting a `blob` output to a `structured` input yields exactly one `Diagnostic` whose `Message` contains both `"a.out"` and `"b.in"`. Run — expect FAIL with "undefined: dag.TypeCheck".
+- [x] Implement `internal/dag/typecheck.go` comparing `PortType` oneof arms and, for `structured`, comparing JSON Schema `$id`; return one diagnostic per bad edge, plus one per edge referencing a missing step or port.
+- [x] Run `go test ./internal/dag` — expect PASS. Commit.
 
 ## Task 4: Event-sourced run store with SQLite
 
 Files: `internal/runstore/store.go`, `internal/runstore/sqlite.go`, `internal/runstore/migrations/0001_init.sql`, `internal/runstore/sqlite_test.go`
-Interfaces: produces `runstore.Store` interface with `Append(ctx, tenantID string, e Event) error`, `Replay(ctx, tenantID, runID string) ([]Event, error)`, `LastSequence(ctx, tenantID string) (uint64, error)`; `Event{RunID, StepID string; Attempt uint32; Sequence uint64; Type EventType; Payload []byte; At time.Time}`.
+Interfaces: produces `runstore.Store` interface with `Append(ctx, tenantID string, e Event) error`, `Replay(ctx, tenantID, runID string) ([]Event, error)`, `LastSequence(ctx, tenantID string) (uint64, error)`, `Close() error`; `Event{RunID, StepID string; Attempt uint32; Sequence uint64; Type EventType; Payload []byte; At time.Time}`.
 
-- [ ] Write `internal/runstore/sqlite_test.go` asserting `TestControlPlaneRestartMidRunReplaysWithoutDuplication`: append five events, close the store, reopen it, replay, and `require.Len(t, events, 5)` in sequence order. Run — expect FAIL with "undefined: runstore.NewSQLite".
-- [ ] Add `TestAppendIsIdempotentOnDuplicateSequence`: appending the same `(RunID, StepID, Attempt, Sequence)` twice returns nil both times and `Replay` still yields one event.
-- [ ] Write `internal/runstore/migrations/0001_init.sql` creating `run_events(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)` with `PRIMARY KEY (tenant_id, run_id, step_id, attempt, sequence)` and index on `(tenant_id, sequence)`.
-- [ ] Implement `internal/runstore/store.go` (interface, `Event`, `EventType` constants `RUN_CREATED`, `STEP_READY`, `STEP_DISPATCHED`, `STEP_SUCCEEDED`, `STEP_FAILED`, `RUN_COMPLETED`) and `internal/runstore/sqlite.go` using `modernc.org/sqlite`, with `INSERT ... ON CONFLICT DO NOTHING` for idempotency.
-- [ ] Add `TestQueryWithoutTenantIsRejected` asserting `Replay(ctx, "", runID)` returns an error containing "tenant scope required".
-- [ ] Run `go test ./internal/runstore` — expect PASS. Commit.
+- [x] Write `internal/runstore/sqlite_test.go` asserting `TestControlPlaneRestartMidRunReplaysWithoutDuplication`: append five events, close the store, reopen it, replay, and `require.Len(t, events, 5)` in sequence order. Run — expect FAIL with "undefined: runstore.NewSQLite".
+- [x] Add `TestAppendIsIdempotentOnDuplicateSequence`: appending the same `(RunID, StepID, Attempt, Sequence)` twice returns nil both times and `Replay` still yields one event.
+- [x] Write `internal/runstore/migrations/0001_init.sql` creating `run_events(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)` with `PRIMARY KEY (tenant_id, run_id, step_id, attempt, sequence)` and index on `(tenant_id, sequence)`.
+- [x] Implement `internal/runstore/store.go` (interface, `Event`, `EventType` constants `RUN_CREATED`, `STEP_READY`, `STEP_DISPATCHED`, `STEP_SUCCEEDED`, `STEP_FAILED`, `RUN_COMPLETED`) and `internal/runstore/sqlite.go` using `modernc.org/sqlite`, with `INSERT ... ON CONFLICT DO NOTHING` for idempotency.
+- [x] Add `TestQueryWithoutTenantIsRejected` asserting `Replay(ctx, "", runID)` returns an error containing "tenant scope required".
+- [x] Run `go test ./internal/runstore` — expect PASS. Commit.
 
 ## Task 5: Postgres run store
 
@@ -100,13 +105,13 @@ Interfaces: produces `runstore.NewPostgres(ctx, dsn string) (runstore.Store, err
 ## Task 6: Content-addressed store
 
 Files: `internal/cas/cas.go`, `internal/cas/filesystem.go`, `internal/cas/cas_test.go`
-Interfaces: produces `cas.Store` interface with `Put(ctx, tenantID string, r io.Reader) (dholev1.Digest, error)`, `Get(ctx, tenantID string, d dholev1.Digest) (io.ReadCloser, error)`, `Has(ctx, tenantID string, d dholev1.Digest) (bool, error)`; `cas.NewFilesystem(root string) cas.Store`.
+Interfaces: produces `cas.Store` interface with `Put(ctx, tenantID string, r io.Reader) (*dholev1.Digest, error)`, `Get(ctx, tenantID string, d *dholev1.Digest) (io.ReadCloser, error)`, `Has(ctx, tenantID string, d *dholev1.Digest) (bool, error)`; `cas.NewFilesystem(root string) cas.Store`.
 
-- [ ] Write `internal/cas/cas_test.go` asserting `TestPutIsContentAddressedAndStable`: putting the same bytes twice yields an identical digest and `Has` reports true; putting different bytes yields a different digest. Run — expect FAIL with "undefined: cas.NewFilesystem".
-- [ ] Add `TestGetMissingDigestReturnsNotFound` asserting `Get` on an absent digest returns an error satisfying `errors.Is(err, cas.ErrNotFound)`.
-- [ ] Add `TestTenantsCannotReadEachOthersBlobs`: put bytes as tenant `a`, then `Has(ctx, "b", digest)` returns false.
-- [ ] Implement `internal/cas/cas.go` (interface, `ErrNotFound`) and `internal/cas/filesystem.go` writing to `<root>/<tenant>/<algo>/<hex[:2]>/<hex>` via a temp file plus atomic rename, computing SHA-256 while streaming.
-- [ ] Run `go test ./internal/cas` — expect PASS. Commit.
+- [x] Write `internal/cas/cas_test.go` asserting `TestPutIsContentAddressedAndStable`: putting the same bytes twice yields an identical digest and `Has` reports true; putting different bytes yields a different digest. Run — expect FAIL with "undefined: cas.NewFilesystem".
+- [x] Add `TestGetMissingDigestReturnsNotFound` asserting `Get` on an absent digest returns an error satisfying `errors.Is(err, cas.ErrNotFound)`.
+- [x] Add `TestTenantsCannotReadEachOthersBlobs`: put bytes as tenant `a`, then `Has(ctx, "b", digest)` returns false.
+- [x] Implement `internal/cas/cas.go` (interface, `ErrNotFound`) and `internal/cas/filesystem.go` writing to `<root>/<tenant>/<algo>/<hex[:2]>/<hex>` via a temp file plus atomic rename, computing SHA-256 while streaming.
+- [x] Run `go test ./internal/cas` — expect PASS. Commit.
 
 ## Task 7: Object storage for logs and artifacts
 
@@ -204,7 +209,7 @@ Interfaces: produces `scheduler.Scheduler` with `Advance(ctx, tenantID, runID st
 ## Task 15: Cache keys and skip-on-hit
 
 Files: `internal/cache/key.go`, `internal/cache/cache.go`, `internal/cache/key_test.go`, `internal/cache/cache_test.go`
-Interfaces: produces `cache.Key(step *dholev1.Step, envIdentity string, inputs []dholev1.Digest, lockfile map[string]string) (dholev1.Digest, error)`, `cache.Lookup(ctx, tenantID string, k dholev1.Digest) ([]dholev1.OutputRef, bool, error)`, `cache.Record(ctx, tenantID string, k dholev1.Digest, outs []dholev1.OutputRef) error`.
+Interfaces: produces `cache.Key(step *dholev1.Step, envIdentity string, inputs []*dholev1.Digest, lockfile map[string]string) (*dholev1.Digest, error)`, `cache.Lookup(ctx, tenantID string, k *dholev1.Digest) ([]*dholev1.OutputRef, bool, error)`, `cache.Record(ctx, tenantID string, k *dholev1.Digest, outs []*dholev1.OutputRef) error`.
 
 - [ ] Write `internal/cache/key_test.go` asserting `TestKeyIsStableAcrossOrderingAndUnstableOnInputChange`: reordering the `inputs` slice yields the same key; changing one input digest changes it; changing `envIdentity` changes it; changing a lockfile entry changes it. Run — expect FAIL with "undefined: cache.Key".
 - [ ] Add `TestKeyRefusesNonPureStep` asserting `cache.Key` on a step whose `EffectClass` is `AT_MOST_ONCE` returns an error containing "only pure steps are cacheable".
@@ -381,7 +386,7 @@ Interfaces: produces commands `dhole pipeline get|apply|validate|plan|revisions|
 ## Task 30: Catalog of step, plugin, engine and trigger types
 
 Files: `internal/catalog/catalog.go`, `internal/catalog/manifest.go`, `internal/catalog/catalog_test.go`, `internal/runstore/migrations/0006_catalog.sql`
-Interfaces: produces `catalog.Store` with `Publish(ctx, tenantID string, m catalog.Manifest) error`, `Resolve(ctx, tenantID, ref string) (catalog.Entry, error)`, `List(ctx, tenantID string) ([]catalog.Entry, error)`; `Manifest{Namespace, Name, Version string; Digest dholev1.Digest; Kind step|trigger|engine; EffectClass dholev1.EffectClass; Capabilities []dholev1.Capability; InputSchema, OutputSchema []byte; EngineTypes []string}`.
+Interfaces: produces `catalog.Store` with `Publish(ctx, tenantID string, m catalog.Manifest) error`, `Resolve(ctx, tenantID, ref string) (catalog.Entry, error)`, `List(ctx, tenantID string) ([]catalog.Entry, error)`; `Manifest{Namespace, Name, Version string; Digest *dholev1.Digest; Kind step|trigger|engine; EffectClass dholev1.EffectClass; Capabilities []dholev1.Capability; InputSchema, OutputSchema []byte; EngineTypes []string}`.
 
 - [ ] Write `internal/catalog/catalog_test.go` asserting `TestManifestDeclaresEffectClassAndCapabilities`: publishing a manifest and resolving it returns the declared effect class and capability set unchanged. Run — expect FAIL with "undefined: catalog.New".
 - [ ] Add `TestStepInheritsEffectClassFromManifest` asserting a step with no explicit effect class resolves to its plugin's, and that an explicit widening override is flagged in the returned `Entry.OverrideWarnings`.
@@ -406,7 +411,7 @@ Interfaces: produces `registry.Registry` with `Register(ctx, r *dholev1.EngineRe
 ## Task 32: Plugin resolver for oci:// and cas://
 
 Files: `internal/plugins/resolver.go`, `internal/plugins/oci.go`, `internal/plugins/casref.go`, `internal/plugins/resolver_test.go`
-Interfaces: produces `plugins.Resolver` with `Resolve(ctx, tenantID, ref string) (plugins.Artifact, error)`, `Fetch(ctx, tenantID string, a plugins.Artifact) (io.ReadCloser, error)`; `Artifact{Ref string; Digest dholev1.Digest; Scheme oci|cas; MediaType string}`.
+Interfaces: produces `plugins.Resolver` with `Resolve(ctx, tenantID, ref string) (plugins.Artifact, error)`, `Fetch(ctx, tenantID string, a plugins.Artifact) (io.ReadCloser, error)`; `Artifact{Ref string; Digest *dholev1.Digest; Scheme oci|cas; MediaType string}`.
 
 - [ ] Write `internal/plugins/resolver_test.go` asserting `TestResolverHandlesBothSchemesUniformly`: an `oci://` reference against a local registry and a `cas://` reference against the filesystem CAS both resolve to an `Artifact` with a populated digest and both `Fetch` successfully. Run — expect FAIL with "undefined: plugins.NewResolver".
 - [ ] Add `TestTagIsResolvedToDigestAtSaveAndNeverAtDispatch` asserting `Resolve` on `oci://reg/img:v1` returns a digest, and that dispatch with a tag-only reference returns an error containing "unresolved tag".
@@ -418,7 +423,7 @@ Interfaces: produces `plugins.Resolver` with `Resolve(ctx, tenantID, ref string)
 ## Task 33: Detached signature records and verification
 
 Files: `internal/plugins/signature.go`, `internal/plugins/cosign.go`, `internal/plugins/signature_test.go`, `internal/runstore/migrations/0007_signatures.sql`
-Interfaces: produces `plugins.Signatures` with `Record(ctx, tenantID string, d dholev1.Digest, sig plugins.Signature) error`, `Verify(ctx, tenantID string, d dholev1.Digest, allowed []string) error`; `Signature{Identity, Issuer string; Payload []byte; Source cosign|manual}`.
+Interfaces: produces `plugins.Signatures` with `Record(ctx, tenantID string, d *dholev1.Digest, sig plugins.Signature) error`, `Verify(ctx, tenantID string, d *dholev1.Digest, allowed []string) error`; `Signature{Identity, Issuer string; Payload []byte; Source cosign|manual}`.
 
 - [ ] Write `internal/plugins/signature_test.go` asserting `TestVerificationIsUniformAcrossSchemes`: the same signature record verifies for an `oci://` and a `cas://` artifact with identical code paths. Run — expect FAIL with "undefined: plugins.NewSignatures".
 - [ ] Add `TestUnsignedPluginIsNotDispatchedRegardlessOfCachedResolution` asserting that after a successful resolve, removing the signature record causes dispatch to fail with "signature verification failed" and marks the catalog entry untrusted.
@@ -632,7 +637,7 @@ Interfaces: produces `loop.Node{Subgraph *dholev1.Pipeline; MaxIterations int; E
 ## Task 51: Taint tracking
 
 Files: `internal/taint/taint.go`, `internal/taint/propagate.go`, `internal/taint/taint_test.go`
-Interfaces: produces `taint.Mark(v *structpb.Value, source string) *structpb.Value`, `taint.IsTainted(v *structpb.Value) bool`, `taint.Propagate(in []dholev1.OutputRef, out []dholev1.OutputRef)`, `taint.Gate` step type clearing marks after explicit sanitisation.
+Interfaces: produces `taint.Mark(v *structpb.Value, source string) *structpb.Value`, `taint.IsTainted(v *structpb.Value) bool`, `taint.Propagate(in []*dholev1.OutputRef, out []*dholev1.OutputRef)`, `taint.Gate` step type clearing marks after explicit sanitisation.
 
 - [ ] Write `internal/taint/taint_test.go` asserting `TestTaintBlocksEffectfulStepUntilSanitised`: data from an untrusted git webhook reaching an `AT_MOST_ONCE` step is refused with an error naming the trigger source; inserting a `taint.Gate` step allows it. Run — expect FAIL with "undefined: taint.Mark".
 - [ ] Add `TestTaintPropagatesThroughPureSteps` asserting a `pure` step consuming tainted input produces tainted output.
