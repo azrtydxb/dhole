@@ -917,9 +917,9 @@ Interfaces: produces `tenancy.Provision(ctx, name string) (Tenant, error)`, `ten
 Files: `docs/`, `.goreleaser.yaml`, `.github/workflows/release.yml`, `charts/dhole/`, `docs/docs_test.go`
 Interfaces: produces `dhole` and `dhole-engine` binaries for linux/darwin/windows on amd64/arm64, multi-arch container images, and a Helm chart.
 
-- [ ] Write `docs/docs_test.go` asserting `TestEveryStepTypeAndTriggerIsDocumented`: enumerate registered step types, trigger kinds and executor kinds and require a matching page under `docs/`, failing with the undocumented names. Run — expect FAIL with "no such file or directory: docs/steps".
-- [ ] Add `TestQuickstartCommandsRunAsWritten` extracting fenced `bash` blocks from `docs/quickstart.md` and executing them against a scratch directory, requiring exit 0.
-- [ ] Write `docs/` covering quickstart, the wire contract, writing an engine, writing a plugin, policy authoring in CEL, deployment topologies, and the upgrade and version-skew policy.
-- [ ] Write `.goreleaser.yaml` producing both binaries for all platform pairs and multi-arch images, `charts/dhole/` deploying control plane, Postgres, NATS and engines, and `.github/workflows/release.yml` publishing on `v*` tags with cosign signing and SBOM attachment.
-- [ ] Add `TestReleaseArtifactsAreSignedAndHaveSBOM` verifying the published image with `cosign verify` and requiring an SPDX attestation.
-- [ ] Run `goreleaser release --snapshot --clean && go test ./docs` — expect PASS. Commit.
+- [x] Write `docs/docs_test.go` asserting `TestEveryStepTypeAndTriggerIsDocumented`: enumerate registered step types, trigger kinds and executor kinds and require a matching page under `docs/`, failing with the undocumented names. Run — expect FAIL with "no such file or directory: docs/steps".
+- [x] Add `TestQuickstartCommandsRunAsWritten` extracting fenced `bash` blocks from `docs/quickstart.md` and executing them against a scratch directory, requiring exit 0.
+- [x] Write `docs/` covering quickstart, the wire contract, writing an engine, writing a plugin, policy authoring in CEL, deployment topologies, and the upgrade and version-skew policy.
+- [x] Write `.goreleaser.yaml` producing both binaries for all platform pairs and multi-arch images, `charts/dhole/` deploying control plane, Postgres, NATS and engines, and `.github/workflows/release.yml` publishing on `v*` tags with cosign signing and SBOM attachment.
+- [x] Add `TestReleaseArtifactsAreSignedAndHaveSBOM` verifying the published image with `cosign verify` and requiring an SPDX attestation.
+- [x] Run `goreleaser release --snapshot --clean && go test ./docs` — expect PASS. Commit.

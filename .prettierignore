@@ -1,0 +1,8 @@
+# Helm templates are Go templates, not YAML: they only become YAML once helm
+# renders them, so a YAML parser reads `{{- if .Values.x }}` as a syntax error.
+# `helm lint` and `helm template` are what check these, and CI runs them.
+charts/*/templates/
+
+# Generated: protobuf and Connect stubs are the generator's output, and
+# reformatting them makes the next `npm run gen` a diff.
+web/src/gen/

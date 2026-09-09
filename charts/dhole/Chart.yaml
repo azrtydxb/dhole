@@ -1,0 +1,17 @@
+apiVersion: v2
+name: dhole
+description: Dhole — durable, typed workflows that run anywhere, driven by anything
+type: application
+# version is the chart's own; appVersion is the Dhole release it defaults to.
+# The release workflow rewrites both on a v* tag, so a chart published from a
+# tag can never point at a build that does not exist.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/azrtydxb/dhole
+sources:
+  - https://github.com/azrtydxb/dhole
+keywords:
+  - workflow
+  - pipeline
+  - ci
+  - orchestration

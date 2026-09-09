@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dhole.fullname" . }}
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dhole.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        {{- include "dhole.labels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "dhole.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # SIGTERM stops the plane rather than killing it: unacknowledged
+      # dispatches go back to the queue and unsent outbox rows are still owed.
+      # The default 30s grace period is short for a plane draining an outbox.
+      terminationGracePeriodSeconds: 90
+      containers:
+        - name: dhole
+          image: {{ include "dhole.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - serve
+            - --mode=distributed
+            - --bus-url=$(DHOLE_BUS_URL)
+            - --store-dsn=$(DHOLE_STORE_DSN)
+            - --blob-root=/var/lib/dhole
+            - --api-addr=0.0.0.0:{{ .Values.controlPlane.apiPort }}
+            {{- with .Values.controlPlane.deploymentID }}
+            - --deployment-id={{ . }}
+            {{- end }}
+            {{- range .Values.controlPlane.allowedOrigins }}
+            - --api-allowed-origin={{ . }}
+            {{- end }}
+            {{- with .Values.controlPlane.otlpEndpoint }}
+            - --otlp-endpoint={{ . }}
+            {{- end }}
+            {{- if .Values.controlPlane.otlpInsecure }}
+            - --otlp-insecure
+            {{- end }}
+          env:
+            - name: DHOLE_BUS_URL
+              value: {{ include "dhole.busURL" . | quote }}
+            - name: DHOLE_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dhole.storeSecretName" . }}
+                  key: dsn
+          ports:
+            - name: api
+              containerPort: {{ .Values.controlPlane.apiPort }}
+          # The API has no unauthenticated call, so a probe cannot ask it a
+          # question. A TCP probe is what is honestly available: it says the
+          # listener is up, and nothing more.
+          readinessProbe:
+            tcpSocket:
+              port: api
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: api
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/dhole
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: state
+        {{- if .Values.controlPlane.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "dhole.fullname" . }}-state
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.controlPlane.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "dhole.fullname" . }}-state
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.controlPlane.persistence.size }}
+  {{- with .Values.controlPlane.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dhole.fullname" . }}
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: api
+      port: {{ .Values.service.port }}
+      targetPort: api
+  selector:
+    app.kubernetes.io/name: {{ include "dhole.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: control-plane

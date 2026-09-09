@@ -3,13 +3,26 @@
 An everything-pipeline engine: durable, typed workflows that run anywhere, driven by
 anything, editable by humans and agents alike.
 
-> **Status: early build.** A two-step pipeline runs end to end from a single
-> binary, and the same definition produces identical results against Postgres,
-> an out-of-process NATS and S3. The control plane, the engine protocol, the
-> executor interface, the content-addressed cache and store, policy, identity,
-> the plugin registry and the definition store are in place. The API, the web
-> editor and most engine backends are not. See `.procoder/plans/dhole.md` for
-> exactly what is done and what is next.
+> **Status: usable, not finished.** Pipelines run end to end from a single
+> binary and from a distributed control plane, and the same definition produces
+> identical results against SQLite or Postgres, embedded or out-of-process NATS,
+> and filesystem or S3 object stores.
+>
+> In place: the event-sourced run store, the scheduler, the outbox, durable
+> waits and human approval, leases and fencing, the content-addressed store and
+> the cache, the engine wire protocol with a conformance suite an engine in any
+> language is held to, the executor interface with host-process and Kubernetes
+> backends, CEL policy with trust tiers and audit, taint tracking, identity and
+> OIDC federation, the plugin catalog with `oci://` and `cas://` resolution,
+> signature verification, federated upstreams and lockfile resolution at save,
+> the definition store with revisions and a one-way git mirror, four triggers
+> (schedule, HTTP, git webhook, pipeline completion), the LLM, bounded-loop and
+> agent step types, the ConnectRPC API with a CLI derived from its descriptors,
+> the React Flow editor, importers for four other CI formats, and OpenTelemetry
+> throughout.
+>
+> Several things are deliberately unfinished — see **Still open** below, and
+> `.procoder/plans/dhole.md` for the task-by-task truth.
 
 ## What it is
 
@@ -139,10 +152,72 @@ queue and unsent outbox rows are still owed.
 
 ## Still open
 
-An identity service on the contract; a way to PUBLISH a plugin, which today has no caller
-outside tests in the API, the CLI or the git mirror; the YAML surface for effect classes and
-taint; and wiring the scheduler's fair queue and per-pipeline budgets, which are built and
-tested but not yet called.
+Named rather than glossed. Each of these is a real gap, and the plan carries the
+task that closes it.
+
+- **The containerd/OCI executor is not built** (Task 36). There is no container
+  runtime on the machine this was developed on, and a backend nobody can run is
+  a backend nobody has tested. `internal/executor/containerd` holds only the
+  lazy-pull decision; the executors that exist are host-process and Kubernetes,
+  and both pass the same shared contract.
+- **The lazy-pull byte assertion is unwritten**, and honestly so: proving an
+  eStargz image transfers fewer bytes needs a containerd with the stargz
+  snapshotter _and_ the executor above. No mock-registry byte count was written,
+  because that number would mean nothing.
+- **Environment identity belongs to the executor, not the sandbox** (Task 37b).
+  One Kubernetes executor running steps with different images reports one
+  identity for several environments, so run one executor per image where cache
+  correctness matters.
+- **Three subsystems are built, tested, and not wired to a caller.** The fair
+  queue and per-pipeline budgets (`scheduler.Queue`, `scheduler.Budgets`), and
+  the tenant quota enforcer and CAS guard (`tenancy.Enforcer`, `GuardCAS`).
+  Each was finished while the file that would call it belonged to another
+  change. This shape — everything built, one end unconnected — is the single
+  most common defect this project has produced, and it is why each is named
+  here rather than assumed done.
+- **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside
+  tests, so a plugin's declaration can be read through `GetPlugin` and there is
+  no supported way to put one there.
+- **Four run-view end-to-end cases still fail**, and a fifth is skipped saying
+  why: no operation builds a loop node, so there is no loop pipeline to look at.
+- **Not started:** the three acceptance pipelines, the VM executor with snapshot
+  restore, and multiplayer editing.
+
+## Documentation
+
+[`docs/`](docs/) — start with the [quickstart](docs/quickstart.md), whose every
+command is executed by the test suite.
+
+| Page                                              | For                                          |
+| ------------------------------------------------- | -------------------------------------------- |
+| [Quickstart](docs/quickstart.md)                  | a pipeline running in fifteen minutes        |
+| [The engine wire contract](docs/wire-contract.md) | the protocol every engine is written against |
+| [Writing an engine](docs/writing-an-engine.md)    | contract, engine, `make conformance`         |
+| [Writing a plugin](docs/writing-a-plugin.md)      | manifests, capabilities, effect classes      |
+| [Policy authoring](docs/policy.md)                | CEL rules and how to test them               |
+| [Deployment topologies](docs/deployment.md)       | laptop, homelab, cluster, Helm               |
+| [Upgrades and version skew](docs/upgrades.md)     | what N and N-1 obliges                       |
+
+There is a reference page for every step type, trigger kind and executor kind,
+and `docs/docs_test.go` enumerates them from the source tree — so a backend
+added next month fails the gate until it is documented.
+
+## Installing a release
+
+Releases publish `dhole` and `dhole-engine` for Linux, macOS and Windows on
+amd64 and arm64, multi-arch images on `ghcr.io`, and a Helm chart. Every image
+is signed keylessly by the workflow that built it and carries an SPDX SBOM
+attestation:
+
+```
+cosign verify ghcr.io/azrtydxb/dhole:<version> \
+  --certificate-identity-regexp '^https://github.com/azrtydxb/dhole/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`helm install dhole charts/dhole` deploys the control plane, engines, and — for
+a deployment that has not brought its own — NATS and Postgres. See
+[deployment topologies](docs/deployment.md) for what to set before it matters.
 
 ## Stack
 
