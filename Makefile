@@ -4,9 +4,15 @@ BINARY      := dhole
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT      ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/azrtydxb/dhole/internal/version
+
+# Endpoints for `make test-integration`, matching docker-compose.test.yml.
+# Overridable so the suite can be pointed at services running elsewhere.
+DHOLE_TEST_S3_ENDPOINT    ?= http://127.0.0.1:59000
+DHOLE_TEST_S3_ACCESS_KEY  ?= dholetest
+DHOLE_TEST_S3_SECRET_KEY  ?= dholetestsecret
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
-.PHONY: check test build clean
+.PHONY: check test test-integration build clean
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
 check:
@@ -26,6 +32,16 @@ check:
 ## test: the whole suite.
 test:
 	go test ./...
+
+## test-integration: the suite with the services in docker-compose.test.yml
+## reachable. Start them first with `docker compose -f docker-compose.test.yml
+## up -d`. Every integration test skips itself when its endpoint variable is
+## unset, so plain `make test` stays green with nothing running.
+test-integration:
+	DHOLE_TEST_S3_ENDPOINT=$(DHOLE_TEST_S3_ENDPOINT) \
+	DHOLE_TEST_S3_ACCESS_KEY=$(DHOLE_TEST_S3_ACCESS_KEY) \
+	DHOLE_TEST_S3_SECRET_KEY=$(DHOLE_TEST_S3_SECRET_KEY) \
+	go test ./... -tags=integration
 
 ## build: the single binary, stamped with its version and commit.
 build:
