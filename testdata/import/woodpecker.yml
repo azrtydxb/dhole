@@ -1,0 +1,36 @@
+# A Woodpecker pipeline. Every step here runs in the same /woodpecker/src
+# volume and reads whatever the previous step left there — the shared mutable
+# workspace ADR 0001 refuses. The steps declare no dependencies at all: the
+# order is the file order, and losing it loses the pipeline.
+when:
+  - event: push
+    branch: main
+
+steps:
+  - name: restore-deps
+    image: golang:1.26
+    commands:
+      - go mod download
+
+  - name: build
+    image: golang:1.26
+    commands:
+      - go build -o dhole ./cmd/dhole
+
+  - name: test
+    image: golang:1.26
+    commands:
+      - go test ./...
+
+  - name: publish
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      repo: example/dhole
+      tags: latest
+    secrets: [docker_password]
+    when:
+      branch: main
+
+services:
+  - name: database
+    image: postgres:17

@@ -1,0 +1,65 @@
+# A realistic .gitlab-ci.yml: three stages, explicit `needs` for the fast
+# feedback jobs, one job that falls back to stage ordering, and two deploy
+# jobs whose scripts an importer must NOT assume are safe to repeat.
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  GO_VERSION: "1.26"
+  CGO_ENABLED: "0"
+
+default:
+  image: golang:1.26-bookworm
+  before_script:
+    - go version
+
+cache:
+  key: $CI_COMMIT_REF_SLUG
+  paths:
+    - .cache/go-build
+
+build:binary:
+  stage: build
+  script:
+    - go mod download
+    - go build -o dhole ./cmd/dhole
+  artifacts:
+    paths:
+      - dhole
+    expire_in: 1 week
+
+unit-tests:
+  stage: test
+  needs: ["build:binary"]
+  script:
+    - go test ./...
+
+lint:
+  stage: test
+  needs: ["build:binary"]
+  script:
+    - golangci-lint run ./...
+
+integration-tests:
+  stage: test
+  services:
+    - name: postgres:17
+      alias: db
+  script:
+    - go test -tags=integration ./...
+
+deploy:staging:
+  stage: deploy
+  environment:
+    name: staging
+    url: https://staging.example.test
+  script:
+    - 'curl -sSf -X POST "https://deploy.example.test/api/release" -H "Authorization: Bearer $DEPLOY_TOKEN"'
+
+release:publish:
+  stage: deploy
+  when: manual
+  script:
+    - make deploy
