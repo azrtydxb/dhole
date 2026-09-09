@@ -47,7 +47,7 @@ decide what may be cached and what may be retried.
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
-  0011 policy_audit (21), 0012 upstreams (34). A task
+  0011 policy_audit (21), 0012 upstreams (34), 0013 timers (20). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -321,12 +321,12 @@ Interfaces: produces `effects.RetryPolicy(step *dholev1.Step) effects.Policy`; `
 Files: `internal/wait/wait.go`, `internal/wait/timer.go`, `internal/wait/wait_test.go`, `internal/steps/approval/approval.go`, `internal/steps/approval/approval_test.go`
 Interfaces: produces `wait.Timers` with `Schedule(ctx, tenantID, runID, stepID string, at time.Time) error`, `Due(ctx, now time.Time) ([]wait.Due, error)`; `approval.Step` with `Request(ctx, runID, stepID string, prompt string) error`, `Decide(ctx, runID, stepID string, approver string, approved bool) error`.
 
-- [ ] Write `internal/wait/wait_test.go` asserting `TestDurableWaitSurvivesRestart`: schedule a timer 200ms out, stop and restart the server, and require the run resumes and completes. Run — expect FAIL with "undefined: wait.Timers".
-- [ ] Add `TestMissedScheduleWindowFiresOnceOnRecovery` asserting a timer whose due time passed entirely while the server was down fires exactly once, not once per missed interval.
-- [ ] Write `internal/steps/approval/approval_test.go` asserting `TestApprovalGateBlocksUntilDecided`: a run containing an approval step does not proceed until `Decide(approved: true)`, and the approver identity is recorded in the event log.
-- [ ] Add `TestApprovalDenialFailsRunWithReason` asserting `Decide(approved: false)` produces `RUN_COMPLETED` with a failure whose payload names the approver.
-- [ ] Implement `internal/wait/timer.go` persisting timers in the run store (so they survive restart) with a 1s poll for due entries, and `internal/steps/approval/approval.go` as a step type that emits `STEP_AWAITING_APPROVAL` and resumes on decision.
-- [ ] Run `go test ./internal/wait ./internal/steps/approval` — expect PASS. Commit.
+- [x] Write `internal/wait/wait_test.go` asserting `TestDurableWaitSurvivesRestart`: schedule a timer 200ms out, stop and restart the server, and require the run resumes and completes. Run — expect FAIL with "undefined: wait.Timers".
+- [x] Add `TestMissedScheduleWindowFiresOnceOnRecovery` asserting a timer whose due time passed entirely while the server was down fires exactly once, not once per missed interval.
+- [x] Write `internal/steps/approval/approval_test.go` asserting `TestApprovalGateBlocksUntilDecided`: a run containing an approval step does not proceed until `Decide(approved: true)`, and the approver identity is recorded in the event log.
+- [x] Add `TestApprovalDenialFailsRunWithReason` asserting `Decide(approved: false)` produces `RUN_COMPLETED` with a failure whose payload names the approver.
+- [x] Implement `internal/wait/timer.go` persisting timers in the run store (so they survive restart) with a 1s poll for due entries, and `internal/steps/approval/approval.go` as a step type that emits `STEP_AWAITING_APPROVAL` and resumes on decision.
+- [x] Run `go test ./internal/wait ./internal/steps/approval` — expect PASS. Commit.
 
 ## Task 21: CEL policy engine, tiers and audit
 
