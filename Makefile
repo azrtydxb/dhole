@@ -12,6 +12,9 @@ DHOLE_TEST_S3_ACCESS_KEY  ?= dholetest
 DHOLE_TEST_S3_SECRET_KEY  ?= dholetestsecret
 DHOLE_TEST_POSTGRES_DSN   ?= postgres://dhole:dholetestsecret@127.0.0.1:55432/dhole?sslmode=disable
 DHOLE_TEST_OCI_REGISTRY   ?= 127.0.0.1:55000
+# A kubeconfig for a cluster the Kubernetes executor may create and delete pods
+# in. It creates and destroys its own namespace; unset, its tests skip.
+DHOLE_TEST_KUBECONFIG     ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
 .PHONY: check test test-integration build clean
@@ -45,6 +48,7 @@ test-integration:
 	DHOLE_TEST_S3_SECRET_KEY=$(DHOLE_TEST_S3_SECRET_KEY) \
 	DHOLE_TEST_POSTGRES_DSN='$(DHOLE_TEST_POSTGRES_DSN)' \
 	DHOLE_TEST_OCI_REGISTRY=$(DHOLE_TEST_OCI_REGISTRY) \
+	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
 	go test ./... -tags=integration
 
 ## build: the single binary, stamped with its version and commit.
