@@ -254,8 +254,12 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 	started := time.Now()
 	status := a.run(ctx, &d)
 	outcome, stepErr = outcomeOf(status)
-	// cache_hit is false because this step really executed: a step served from
-	// the cache is never dispatched to an engine at all.
+	// cache_hit is false here and can only be false here: a step served from
+	// the cache is never dispatched to an engine at all, so every step this
+	// process sees really executed. The true side of the label is recorded by
+	// the scheduler, which is where a hit is served (ADR 0009) — until it was,
+	// the label had one value in the whole system and could not tell a cold
+	// build from a slow one, which is the comparison it exists to make.
 	obs.RecordStepDuration(ctx, d.GetTenant().GetId(), time.Since(started), false, outcome)
 
 	// The ordering rule, and the reason this function is not shorter: the
