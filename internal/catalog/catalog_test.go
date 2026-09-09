@@ -24,7 +24,7 @@ func openCatalog(t *testing.T) catalog.Store {
 // same one.
 func openCatalogAt(t *testing.T, path string) catalog.Store {
 	t.Helper()
-	c, err := catalog.New(path)
+	c, err := catalog.NewSQLite(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, c.Close()) })
 	return c

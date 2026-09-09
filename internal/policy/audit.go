@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
 // timeFormat matches the run store: SQLite has no time type, and RFC3339 with
@@ -44,15 +46,26 @@ func (DiscardAudit) Record(context.Context, AuditRecord) error { return nil }
 // database as the run event log and the definitions — one decision, one row,
 // one place to read the history back from.
 type SQLAudit struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect runstore.Dialect
 }
 
 // Compile-time proof the SQL auditor is the Auditor the engine consumes.
 var _ Auditor = (*SQLAudit)(nil)
 
-// NewSQLAudit returns an auditor over db, whose schema is expected to carry the
-// migrations the run store applies.
-func NewSQLAudit(db *sql.DB) *SQLAudit { return &SQLAudit{db: db} }
+// NewSQLAudit returns an auditor over a SQLite handle. It is the convenience
+// form of NewSQLAuditWithDialect and nothing more: a Postgres deployment calls
+// NewSQLAuditWithDialect, because pgx rejects the `?` placeholders these
+// statements are written with.
+func NewSQLAudit(db *sql.DB) *SQLAudit {
+	return NewSQLAuditWithDialect(db, runstore.DialectSQLite)
+}
+
+// NewSQLAuditWithDialect returns an auditor over db, which speaks dialect and
+// whose schema is expected to carry the migrations the run store applies.
+func NewSQLAuditWithDialect(db *sql.DB, dialect runstore.Dialect) *SQLAudit {
+	return &SQLAudit{db: db, dialect: dialect}
+}
 
 // Record appends one decision. An empty tenant is refused: there is no
 // unscoped record, even while only one tenant exists.
@@ -77,7 +90,7 @@ func (a *SQLAudit) Record(ctx context.Context, r AuditRecord) error {
 	if r.Allow {
 		allow = 1
 	}
-	if _, err := a.db.ExecContext(ctx, q,
+	if _, err := a.db.ExecContext(ctx, a.dialect.Rebind(q),
 		r.TenantID, id, r.At.UTC().Format(timeFormat),
 		r.Tier, r.Subject, r.Rule, r.Reason, r.PluginRef, allow,
 	); err != nil {
@@ -98,7 +111,7 @@ func (a *SQLAudit) Records(ctx context.Context, tenantID string, limit int) ([]A
 	}
 	const q = `SELECT tenant_id, at, tier, subject, rule, reason, plugin_ref, allow
 		FROM policy_audit WHERE tenant_id = ? ORDER BY at ASC, id ASC LIMIT ?`
-	rows, err := a.db.QueryContext(ctx, q, tenantID, limit)
+	rows, err := a.db.QueryContext(ctx, a.dialect.Rebind(q), tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("policy: read audit rows: %w", err)
 	}

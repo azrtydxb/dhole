@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
 // The errors this package returns.
@@ -91,17 +92,26 @@ type Store interface {
 // as the run store: definitions and run history are one transactional unit,
 // so a run can never be recorded against a revision the store does not hold.
 type SQLStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect runstore.Dialect
 }
 
 // Compile-time proof that the SQL implementation satisfies the interface later
 // tasks consume.
 var _ Store = (*SQLStore)(nil)
 
-// New returns a definition store over db, whose schema is expected to carry
-// the migrations the run store applies.
+// New returns a definition store over a SQLite handle. It is the convenience
+// form of NewWithDialect and nothing more: a Postgres deployment calls
+// NewWithDialect, because pgx rejects the `?` placeholders these statements
+// are written with.
 func New(db *sql.DB) *SQLStore {
-	return &SQLStore{db: db}
+	return NewWithDialect(db, runstore.DialectSQLite)
+}
+
+// NewWithDialect returns a definition store over db, which speaks dialect and
+// whose schema is expected to carry the migrations the run store applies.
+func NewWithDialect(db *sql.DB, dialect runstore.Dialect) *SQLStore {
+	return &SQLStore{db: db, dialect: dialect}
 }
 
 // Save records a revision of p, as a draft.
@@ -132,7 +142,7 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	now := time.Now().UTC().Format(timeFormat)
 	const upsertPipeline = `INSERT INTO pipelines (tenant_id, id, created_at)
 		VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
-	if _, err := tx.ExecContext(ctx, upsertPipeline, tenantID, rev.PipelineID, now); err != nil {
+	if _, err := tx.ExecContext(ctx, s.dialect.Rebind(upsertPipeline), tenantID, rev.PipelineID, now); err != nil {
 		return Revision{}, fmt.Errorf("save definition: %w", err)
 	}
 
@@ -148,7 +158,7 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 		 author, approver, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)
 		ON CONFLICT DO NOTHING`
-	if _, err := tx.ExecContext(ctx, insertRevision,
+	if _, err := tx.ExecContext(ctx, s.dialect.Rebind(insertRevision),
 		tenantID, rev.ID, rev.PipelineID, rev.ContentHash, string(rev.State),
 		string(lockfile), definition, author, now); err != nil {
 		return Revision{}, fmt.Errorf("save definition: %w", err)
@@ -157,7 +167,7 @@ func (s *SQLStore) Save(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	// Read the row back rather than returning what was offered: an identical
 	// save is the revision that already exists, with the state and the author
 	// it already had.
-	stored, err := revisionRow(ctx, tx, tenantID, rev.ID)
+	stored, err := revisionRow(ctx, tx, s.dialect, tenantID, rev.ID)
 	if err != nil {
 		return Revision{}, fmt.Errorf("save definition: %w", err)
 	}
@@ -175,7 +185,7 @@ func (s *SQLStore) Get(ctx context.Context, tenantID, pipelineID, revisionID str
 	const q = `SELECT definition FROM revisions
 		WHERE tenant_id = ? AND pipeline_id = ? AND id = ?`
 	var definition []byte
-	switch err := s.db.QueryRowContext(ctx, q, tenantID, pipelineID, revisionID).Scan(&definition); {
+	switch err := s.db.QueryRowContext(ctx, s.dialect.Rebind(q), tenantID, pipelineID, revisionID).Scan(&definition); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
 	case err != nil:
@@ -199,7 +209,7 @@ func (s *SQLStore) Active(ctx context.Context, tenantID, pipelineID string) (Rev
 	const q = `SELECT id, pipeline_id, content_hash, state, lockfile, author, approver
 		FROM revisions
 		WHERE tenant_id = ? AND pipeline_id = ? AND state = ?`
-	row := s.db.QueryRowContext(ctx, q, tenantID, pipelineID, string(StateActive))
+	row := s.db.QueryRowContext(ctx, s.dialect.Rebind(q), tenantID, pipelineID, string(StateActive))
 	rev, err := scanRevision(row)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -215,7 +225,7 @@ func (s *SQLStore) Revision(ctx context.Context, tenantID, revisionID string) (R
 	if tenantID == "" {
 		return Revision{}, ErrTenantRequired
 	}
-	rev, err := revisionRow(ctx, s.db, tenantID, revisionID)
+	rev, err := revisionRow(ctx, s.db, s.dialect, tenantID, revisionID)
 	if err != nil {
 		return Revision{}, err
 	}
@@ -234,7 +244,7 @@ func (s *SQLStore) Approve(ctx context.Context, tenantID, revisionID, approver s
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rev, err := revisionRow(ctx, tx, tenantID, revisionID)
+	rev, err := revisionRow(ctx, tx, s.dialect, tenantID, revisionID)
 	if err != nil {
 		return err
 	}
@@ -252,13 +262,13 @@ func (s *SQLStore) Approve(ctx context.Context, tenantID, revisionID, approver s
 	// history is what makes an approval auditable.
 	const demote = `UPDATE revisions SET state = ?
 		WHERE tenant_id = ? AND pipeline_id = ? AND state = ?`
-	if _, err := tx.ExecContext(ctx, demote,
+	if _, err := tx.ExecContext(ctx, s.dialect.Rebind(demote),
 		string(StateReviewed), tenantID, rev.PipelineID, string(StateActive)); err != nil {
 		return fmt.Errorf("approve revision: %w", err)
 	}
 	const promote = `UPDATE revisions SET state = ?, approver = ?
 		WHERE tenant_id = ? AND id = ?`
-	if _, err := tx.ExecContext(ctx, promote,
+	if _, err := tx.ExecContext(ctx, s.dialect.Rebind(promote),
 		string(StateActive), approver, tenantID, revisionID); err != nil {
 		return fmt.Errorf("approve revision: %w", err)
 	}
@@ -275,10 +285,12 @@ type querier interface {
 }
 
 // revisionRow reads one revision, scoped to its tenant.
-func revisionRow(ctx context.Context, q querier, tenantID, revisionID string) (Revision, error) {
+func revisionRow(
+	ctx context.Context, q querier, dialect runstore.Dialect, tenantID, revisionID string,
+) (Revision, error) {
 	const query = `SELECT id, pipeline_id, content_hash, state, lockfile, author, approver
 		FROM revisions WHERE tenant_id = ? AND id = ?`
-	rev, err := scanRevision(q.QueryRowContext(ctx, query, tenantID, revisionID))
+	rev, err := scanRevision(q.QueryRowContext(ctx, dialect.Rebind(query), tenantID, revisionID))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Revision{}, ErrNotFound

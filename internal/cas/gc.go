@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -14,10 +13,6 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/runstore"
-
-	// The pure-Go SQLite driver, as the run store uses. The reference index
-	// lives in the run store's own file.
-	_ "modernc.org/sqlite"
 )
 
 // Deleter is the removal half of a Store. It is deliberately not part of
@@ -43,33 +38,35 @@ type Deleter interface {
 // a run with no events at all is treated as live, because a collector must
 // never guess in the direction that deletes.
 //
-// DB is the run store's SQLite handle — blob_refs and cache_entries live
-// beside the run event log precisely so a reclamation that spans both can be
-// one transaction. Open it with OpenIndex.
+// DB is the run store's own handle — blob_refs and cache_entries live beside
+// the run event log precisely so a reclamation that spans both can be one
+// transaction. Open it with runstore.OpenSQLite or runstore.OpenPostgres, or
+// with OpenIndex for the SQLite case.
+//
+// Dialect is the SQL that handle speaks, and it must match: pgx rejects the
+// `?` placeholders these statements are written with, so a Postgres handle
+// left on the zero value collects nothing at all. The zero value is
+// DialectSQLite, which is what the single-binary deployment runs.
 type GC struct {
-	Store Store
-	Runs  runstore.Store
-	DB    *sql.DB
+	Store   Store
+	Runs    runstore.Store
+	DB      *sql.DB
+	Dialect runstore.Dialect
 }
 
-// OpenIndex opens the reference index over the SQLite database at path. The
-// database must already carry the migrations — open it through
-// runstore.NewSQLite first.
+// OpenIndex opens the reference index over the SQLite database at path,
+// applying the embedded migrations. It is the single-file convenience; a
+// Postgres deployment opens its handle with runstore.OpenPostgres and sets
+// GC.Dialect to match.
 //
-// The transactions are IMMEDIATE: the collector takes SQLite's write lock the
-// moment it starts, which is what serialises it against a concurrent
+// The transactions it opens are IMMEDIATE: the collector takes SQLite's write
+// lock the moment it starts, which is what serialises it against a concurrent
 // GC.Reference rather than letting both read a snapshot and act on it.
 func OpenIndex(path string) (*sql.DB, error) {
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)" +
-		"&_pragma=foreign_keys(1)&_txlock=immediate"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := runstore.OpenSQLite(path)
 	if err != nil {
 		return nil, fmt.Errorf("cas: open reference index: %w", err)
 	}
-	// One writer, as the run store does: SQLite serialises writes anyway, so a
-	// single connection turns lock contention into ordinary queueing.
-	db.SetMaxOpenConns(1)
 	return db, nil
 }
 
@@ -114,7 +111,7 @@ func (g *GC) Reference(ctx context.Context, tenantID string, d *dholev1.Digest, 
 
 	const q = `INSERT INTO blob_refs (tenant_id, digest, run_id)
 		VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
-	if _, err := tx.ExecContext(ctx, q, tenantID, text, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, g.Dialect.Rebind(q), tenantID, text, runID); err != nil {
 		return fmt.Errorf("cas: record blob reference: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -167,13 +164,13 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 	// between step 1 and here is unknown to the expired set and therefore
 	// counts as retained — the conservative direction is the only one that
 	// cannot delete live bytes.
-	collectable, err := unreferencedDigests(ctx, tx, tenantID, expired)
+	collectable, err := unreferencedDigests(ctx, tx, g.Dialect, tenantID, expired)
 	if err != nil {
 		return 0, err
 	}
 	const dropRefs = `DELETE FROM blob_refs WHERE tenant_id = ? AND run_id = ?`
 	for _, runID := range expired {
-		if _, err := tx.ExecContext(ctx, dropRefs, tenantID, runID); err != nil {
+		if _, err := tx.ExecContext(ctx, g.Dialect.Rebind(dropRefs), tenantID, runID); err != nil {
 			return 0, fmt.Errorf("cas: drop expired references: %w", err)
 		}
 	}
@@ -184,7 +181,7 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 	// survives is a cache HIT handing back a digest nobody can read, which
 	// does not rerun the step, it fails whatever consumes the output. So if
 	// only one of the two lands, it must be this one.
-	if err := dropCacheEntries(ctx, tx, tenantID, collectable); err != nil {
+	if err := dropCacheEntries(ctx, tx, g.Dialect, tenantID, collectable); err != nil {
 		return 0, err
 	}
 
@@ -228,7 +225,7 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 // omitted — unknown age means retained, never collectable.
 func (g *GC) expiredRuns(ctx context.Context, tenantID string, retain time.Duration) ([]string, error) {
 	rows, err := g.DB.QueryContext(ctx,
-		`SELECT DISTINCT run_id FROM blob_refs WHERE tenant_id = ?`, tenantID)
+		g.Dialect.Rebind(`SELECT DISTINCT run_id FROM blob_refs WHERE tenant_id = ?`), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("cas: list referencing runs: %w", err)
 	}
@@ -271,13 +268,13 @@ func (g *GC) expiredRuns(ctx context.Context, tenantID string, retain time.Durat
 // unreferencedDigests returns the tenant's digests whose every remaining
 // reference belongs to an expired run — the only blobs that may be deleted.
 func unreferencedDigests(
-	ctx context.Context, tx *sql.Tx, tenantID string, expired []string,
+	ctx context.Context, tx *sql.Tx, dialect runstore.Dialect, tenantID string, expired []string,
 ) ([]string, error) {
 	if len(expired) == 0 {
 		return nil, nil
 	}
 	rows, err := tx.QueryContext(ctx,
-		`SELECT digest, run_id FROM blob_refs WHERE tenant_id = ?`, tenantID)
+		dialect.Rebind(`SELECT digest, run_id FROM blob_refs WHERE tenant_id = ?`), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("cas: read blob references: %w", err)
 	}
@@ -330,7 +327,9 @@ func unreferencedDigests(
 // store, or its encoding changes without this decoder changing with it, the
 // sweep silently stops dropping stale entries. Revisit when internal/cache
 // grows a DropEntries/iteration API, and delete this function's SQL then.
-func dropCacheEntries(ctx context.Context, tx *sql.Tx, tenantID string, collectable []string) error {
+func dropCacheEntries(
+	ctx context.Context, tx *sql.Tx, dialect runstore.Dialect, tenantID string, collectable []string,
+) error {
 	if len(collectable) == 0 {
 		return nil
 	}
@@ -340,7 +339,7 @@ func dropCacheEntries(ctx context.Context, tx *sql.Tx, tenantID string, collecta
 	}
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT key, outputs FROM cache_entries WHERE tenant_id = ?`, tenantID)
+		dialect.Rebind(`SELECT key, outputs FROM cache_entries WHERE tenant_id = ?`), tenantID)
 	if err != nil {
 		return fmt.Errorf("cas: read cache entries: %w", err)
 	}
@@ -367,7 +366,8 @@ func dropCacheEntries(ctx context.Context, tx *sql.Tx, tenantID string, collecta
 
 	for _, key := range stale {
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM cache_entries WHERE tenant_id = ? AND key = ?`, tenantID, key); err != nil {
+			dialect.Rebind(`DELETE FROM cache_entries WHERE tenant_id = ? AND key = ?`),
+			tenantID, key); err != nil {
 			return fmt.Errorf("cas: drop cache entry: %w", err)
 		}
 	}
