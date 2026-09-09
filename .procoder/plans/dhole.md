@@ -719,13 +719,13 @@ Interfaces: produces `GET /v1/runs/{id}/events` as SSE emitting run and step tra
 Files: `internal/steps/llm/llm.go`, `internal/steps/llm/fingerprint.go`, `internal/steps/llm/record.go`, `internal/steps/llm/llm_test.go`, `internal/runstore/migrations/0008_llm_calls.sql`
 Interfaces: produces `llm.Step` implementing the step-type interface; `llm.Config{Provider, Model string; Temperature float32; OutputSchema []byte; MaxTokens int}`; `llm.Fingerprint(resp ai.Response) string`.
 
-- [ ] Write `internal/steps/llm/llm_test.go` asserting `TestLLMStepSchemaFingerprintAndBudgetCeiling` against a stub `ai.LanguageModel`: the step returns an object validated against `OutputSchema`, records model fingerprint, prompt, response, tokens and latency, and halts the run when the token ceiling is exceeded. Run — expect FAIL with "undefined: llm.New".
-- [ ] Add `TestMalformedObjectIsRetriedThenFailsWithProviderError` asserting a model returning unparseable JSON three times fails the step with the provider error recorded and never returns a partial object.
-- [ ] Add `TestFingerprintIncludesResolvedModelNotAlias` asserting two responses from the same alias but different underlying model ids produce different fingerprints, and that the Task 15 cache key changes accordingly.
-- [ ] Add `TestLLMStepIsPureOnlyWithPinnedModelAndZeroTemperature` asserting `EffectClass` resolves to `PURE` only when temperature is 0 and the model is digest-pinned, otherwise `IDEMPOTENT`.
-- [ ] Write `0008_llm_calls.sql` creating `llm_calls(tenant_id, run_id, step_id, attempt, model_fingerprint, prompt, response, prompt_tokens, completion_tokens, latency_ms)` with its own retention setting.
-- [ ] Implement `llm.go` using `ai.GenerateObject` from `github.com/azrtydxb/go-ai-sdk`, `fingerprint.go`, and `record.go`.
-- [ ] Run `go test ./internal/steps/llm` — expect PASS. Commit.
+- [x] Write `internal/steps/llm/llm_test.go` asserting `TestLLMStepSchemaFingerprintAndBudgetCeiling` against a stub `ai.LanguageModel`: the step returns an object validated against `OutputSchema`, records model fingerprint, prompt, response, tokens and latency, and halts the run when the token ceiling is exceeded. Run — expect FAIL with "undefined: llm.New".
+- [x] Add `TestMalformedObjectIsRetriedThenFailsWithProviderError` asserting a model returning unparseable JSON three times fails the step with the provider error recorded and never returns a partial object.
+- [x] Add `TestFingerprintIncludesResolvedModelNotAlias` asserting two responses from the same alias but different underlying model ids produce different fingerprints, and that the Task 15 cache key changes accordingly.
+- [x] Add `TestLLMStepIsPureOnlyWithPinnedModelAndZeroTemperature` asserting `EffectClass` resolves to `PURE` only when temperature is 0 and the model is digest-pinned, otherwise `IDEMPOTENT`.
+- [x] Write `0008_llm_calls.sql` creating `llm_calls(tenant_id, run_id, step_id, attempt, model_fingerprint, prompt, response, prompt_tokens, completion_tokens, latency_ms)` with its own retention setting.
+- [x] Implement `llm.go` using `ai.GenerateObject` from `github.com/azrtydxb/go-ai-sdk`, `fingerprint.go`, and `record.go`.
+- [x] Run `go test ./internal/steps/llm` — expect PASS. Commit.
 
 ## Task 50: Bounded loops and agent steps
 
