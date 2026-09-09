@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_api: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIkwKDVNldFN0ZXBDb25maWcSDwoHc3RlcF9pZBgBIAEoCRILCgNrZXkYAiABKAkSDQoFdmFsdWUYAyABKAkSDgoGcmVtb3ZlGAQgASgIIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkiwQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSAASMgoPc2V0X3N0ZXBfY29uZmlnGAcgASgLMhcuZGhvbGUudjEuU2V0U3RlcENvbmZpZ0gAQgYKBGtpbmQibAoGQ2hhbmdlEiIKBGtpbmQYASABKA4yFC5kaG9sZS52MS5DaGFuZ2VLaW5kEg8KB3N0ZXBfaWQYAiABKAkSHAoEZWRnZRgDIAEoCzIOLmRob2xlLnYxLkVkZ2USDwoHc3VtbWFyeRgEIAEoCSIpCgREaWZmEiEKB2NoYW5nZXMYASADKAsyEC5kaG9sZS52MS5DaGFuZ2Ui1wEKCFJldmlzaW9uEgoKAmlkGAEgASgJEhMKC3BpcGVsaW5lX2lkGAIgASgJEhQKDGNvbnRlbnRfaGFzaBgDIAEoCRINCgVzdGF0ZRgEIAEoCRIyCghsb2NrZmlsZRgFIAMoCzIgLmRob2xlLnYxLlJldmlzaW9uLkxvY2tmaWxlRW50cnkSDgoGYXV0aG9yGAYgASgJEhAKCGFwcHJvdmVyGAcgASgJGi8KDUxvY2tmaWxlRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASI+ChJHZXRQaXBlbGluZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiYQoTR2V0UGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iUgoVQ3JlYXRlUGlwZWxpbmVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEiQKCHBpcGVsaW5lGAIgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiZAoWQ3JlYXRlUGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iawoVQXBwbHlPcGVyYXRpb25SZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhUKDWJhc2VfcmV2aXNpb24YAiABKAkSJgoJb3BlcmF0aW9uGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uIqgBChZBcHBseU9wZXJhdGlvblJlc3BvbnNlEiQKCHJldmlzaW9uGAEgASgLMhIuZGhvbGUudjEuUmV2aXNpb24SHAoEZGlmZhgCIAEoCzIOLmRob2xlLnYxLkRpZmYSJAoHaW52ZXJzZRgDIAEoCzITLmRob2xlLnYxLk9wZXJhdGlvbhIkCghwaXBlbGluZRgEIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lImEKD1ZhbGlkYXRlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCRIkCghwaXBlbGluZRgDIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lIk4KCkRpYWdub3N0aWMSEAoIc2V2ZXJpdHkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIPCgdzdGVwX2lkGAMgASgJEgwKBHBvcnQYBCABKAkiPQoQVmFsaWRhdGVSZXNwb25zZRIpCgtkaWFnbm9zdGljcxgBIAMoCzIULmRob2xlLnYxLkRpYWdub3N0aWMiNwoLUGxhblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiZAoLUGxhbm5lZFN0ZXASDwoHc3RlcF9pZBgBIAEoCRIRCgljYWNoZV9oaXQYAiABKAgSEwoLZW5naW5lX2tpbmQYAyABKAkSHAoUbm9uX2NhY2hlYWJsZV9yZWFzb24YBCABKAkiNAoMUGxhblJlc3BvbnNlEiQKBXN0ZXBzGAEgAygLMhUuZGhvbGUudjEuUGxhbm5lZFN0ZXAiKwoUTGlzdFJldmlzaW9uc1JlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkiPgoVTGlzdFJldmlzaW9uc1Jlc3BvbnNlEiUKCXJldmlzaW9ucxgBIAMoCzISLmRob2xlLnYxLlJldmlzaW9uIi0KFkFwcHJvdmVSZXZpc2lvblJlcXVlc3QSEwoLcmV2aXNpb25faWQYASABKAkiPwoXQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiI7Cg9TdGFydFJ1blJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiNwoQU3RhcnRSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiIQoPV2F0Y2hSdW5SZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCSKLAQoQV2F0Y2hSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhAKCHNlcXVlbmNlGAQgASgEEgwKBHR5cGUYBSABKAkSDwoHcGF5bG9hZBgGIAEoDBIUCgxhdF91bml4X25hbm8YByABKAMiJgoQR2V0UGx1Z2luUmVxdWVzdBISCgpwbHVnaW5fcmVmGAEgASgJIpMCCgZQbHVnaW4SCwoDcmVmGAEgASgJEhEKCW5hbWVzcGFjZRgCIAEoCRIMCgRuYW1lGAMgASgJEg8KB3ZlcnNpb24YBCABKAkSIAoGZGlnZXN0GAUgASgLMhAuZGhvbGUudjEuRGlnZXN0EgwKBGtpbmQYBiABKAkSKwoMZWZmZWN0X2NsYXNzGAcgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSKgoMY2FwYWJpbGl0aWVzGAggAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIUCgxpbnB1dF9zY2hlbWEYCSABKAkSFQoNb3V0cHV0X3NjaGVtYRgKIAEoCRIUCgxlbmdpbmVfdHlwZXMYCyADKAkiNQoRR2V0UGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIjIKEENhbmNlbFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSJECg1DYW5jZWxsZWRTdGVwEg8KB3N0ZXBfaWQYASABKAkSDwoHYXR0ZW1wdBgCIAEoDRIRCgllbmdpbmVfaWQYAyABKAkiSwoRQ2FuY2VsUnVuUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEiYKBXN0ZXBzGAIgAygLMhcuZGhvbGUudjEuQ2FuY2VsbGVkU3RlcCK6AQoGRW5naW5lEgoKAmlkGAEgASgJEg0KBXN0YXRlGAIgASgJEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIZChFwcm90b2NvbF92ZXJzaW9ucxgHIAMoDRIlCglpbl9mbGlnaHQYCCADKAsyEi5kaG9sZS52MS5JbkZsaWdodCIUChJMaXN0RW5naW5lc1JlcXVlc3QiOAoTTGlzdEVuZ2luZXNSZXNwb25zZRIhCgdlbmdpbmVzGAEgAygLMhAuZGhvbGUudjEuRW5naW5lIicKEkRyYWluRW5naW5lUmVxdWVzdBIRCgllbmdpbmVfaWQYASABKAkiNwoTRHJhaW5FbmdpbmVSZXNwb25zZRIgCgZlbmdpbmUYASABKAsyEC5kaG9sZS52MS5FbmdpbmUqcgoKQ2hhbmdlS2luZBIbChdDSEFOR0VfS0lORF9VTlNQRUNJRklFRBAAEhUKEUNIQU5HRV9LSU5EX0FEREVEEAESFwoTQ0hBTkdFX0tJTkRfUkVNT1ZFRBACEhcKE0NIQU5HRV9LSU5EX0NIQU5HRUQQAzKnAQoNRW5naW5lU2VydmljZRJKCgtMaXN0RW5naW5lcxIcLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVxdWVzdBodLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVzcG9uc2USSgoLRHJhaW5FbmdpbmUSHC5kaG9sZS52MS5EcmFpbkVuZ2luZVJlcXVlc3QaHS5kaG9sZS52MS5EcmFpbkVuZ2luZVJlc3BvbnNlMr8GCg9QaXBlbGluZVNlcnZpY2USUwoOQ3JlYXRlUGlwZWxpbmUSHy5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlcXVlc3QaIC5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlc3BvbnNlEkoKC0dldFBpcGVsaW5lEhwuZGhvbGUudjEuR2V0UGlwZWxpbmVSZXF1ZXN0Gh0uZGhvbGUudjEuR2V0UGlwZWxpbmVSZXNwb25zZRJTCg5BcHBseU9wZXJhdGlvbhIfLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVxdWVzdBogLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USQQoIVmFsaWRhdGUSGS5kaG9sZS52MS5WYWxpZGF0ZVJlcXVlc3QaGi5kaG9sZS52MS5WYWxpZGF0ZVJlc3BvbnNlEjUKBFBsYW4SFS5kaG9sZS52MS5QbGFuUmVxdWVzdBoWLmRob2xlLnYxLlBsYW5SZXNwb25zZRJECglHZXRQbHVnaW4SGi5kaG9sZS52MS5HZXRQbHVnaW5SZXF1ZXN0GhsuZGhvbGUudjEuR2V0UGx1Z2luUmVzcG9uc2USUAoNTGlzdFJldmlzaW9ucxIeLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXF1ZXN0Gh8uZGhvbGUudjEuTGlzdFJldmlzaW9uc1Jlc3BvbnNlElYKD0FwcHJvdmVSZXZpc2lvbhIgLmRob2xlLnYxLkFwcHJvdmVSZXZpc2lvblJlcXVlc3QaIS5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXNwb25zZRJBCghTdGFydFJ1bhIZLmRob2xlLnYxLlN0YXJ0UnVuUmVxdWVzdBoaLmRob2xlLnYxLlN0YXJ0UnVuUmVzcG9uc2USQwoIV2F0Y2hSdW4SGS5kaG9sZS52MS5XYXRjaFJ1blJlcXVlc3QaGi5kaG9sZS52MS5XYXRjaFJ1blJlc3BvbnNlMAESRAoJQ2FuY2VsUnVuEhouZGhvbGUudjEuQ2FuY2VsUnVuUmVxdWVzdBobLmRob2xlLnYxLkNhbmNlbFJ1blJlc3BvbnNlQokBCgxjb20uZGhvbGUudjFCCEFwaVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIkwKDVNldFN0ZXBDb25maWcSDwoHc3RlcF9pZBgBIAEoCRILCgNrZXkYAiABKAkSDQoFdmFsdWUYAyABKAkSDgoGcmVtb3ZlGAQgASgIIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkiwQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSAASMgoPc2V0X3N0ZXBfY29uZmlnGAcgASgLMhcuZGhvbGUudjEuU2V0U3RlcENvbmZpZ0gAQgYKBGtpbmQibAoGQ2hhbmdlEiIKBGtpbmQYASABKA4yFC5kaG9sZS52MS5DaGFuZ2VLaW5kEg8KB3N0ZXBfaWQYAiABKAkSHAoEZWRnZRgDIAEoCzIOLmRob2xlLnYxLkVkZ2USDwoHc3VtbWFyeRgEIAEoCSIpCgREaWZmEiEKB2NoYW5nZXMYASADKAsyEC5kaG9sZS52MS5DaGFuZ2Ui1wEKCFJldmlzaW9uEgoKAmlkGAEgASgJEhMKC3BpcGVsaW5lX2lkGAIgASgJEhQKDGNvbnRlbnRfaGFzaBgDIAEoCRINCgVzdGF0ZRgEIAEoCRIyCghsb2NrZmlsZRgFIAMoCzIgLmRob2xlLnYxLlJldmlzaW9uLkxvY2tmaWxlRW50cnkSDgoGYXV0aG9yGAYgASgJEhAKCGFwcHJvdmVyGAcgASgJGi8KDUxvY2tmaWxlRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASI+ChJHZXRQaXBlbGluZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiYQoTR2V0UGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iUgoVQ3JlYXRlUGlwZWxpbmVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEiQKCHBpcGVsaW5lGAIgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiZAoWQ3JlYXRlUGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iawoVQXBwbHlPcGVyYXRpb25SZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhUKDWJhc2VfcmV2aXNpb24YAiABKAkSJgoJb3BlcmF0aW9uGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uIqgBChZBcHBseU9wZXJhdGlvblJlc3BvbnNlEiQKCHJldmlzaW9uGAEgASgLMhIuZGhvbGUudjEuUmV2aXNpb24SHAoEZGlmZhgCIAEoCzIOLmRob2xlLnYxLkRpZmYSJAoHaW52ZXJzZRgDIAEoCzITLmRob2xlLnYxLk9wZXJhdGlvbhIkCghwaXBlbGluZRgEIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lImEKD1ZhbGlkYXRlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCRIkCghwaXBlbGluZRgDIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lIk4KCkRpYWdub3N0aWMSEAoIc2V2ZXJpdHkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIPCgdzdGVwX2lkGAMgASgJEgwKBHBvcnQYBCABKAkiPQoQVmFsaWRhdGVSZXNwb25zZRIpCgtkaWFnbm9zdGljcxgBIAMoCzIULmRob2xlLnYxLkRpYWdub3N0aWMiNwoLUGxhblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiZAoLUGxhbm5lZFN0ZXASDwoHc3RlcF9pZBgBIAEoCRIRCgljYWNoZV9oaXQYAiABKAgSEwoLZW5naW5lX2tpbmQYAyABKAkSHAoUbm9uX2NhY2hlYWJsZV9yZWFzb24YBCABKAkiNAoMUGxhblJlc3BvbnNlEiQKBXN0ZXBzGAEgAygLMhUuZGhvbGUudjEuUGxhbm5lZFN0ZXAiKwoUTGlzdFJldmlzaW9uc1JlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkiPgoVTGlzdFJldmlzaW9uc1Jlc3BvbnNlEiUKCXJldmlzaW9ucxgBIAMoCzISLmRob2xlLnYxLlJldmlzaW9uIi0KFkFwcHJvdmVSZXZpc2lvblJlcXVlc3QSEwoLcmV2aXNpb25faWQYASABKAkiPwoXQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiI7Cg9TdGFydFJ1blJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiNwoQU3RhcnRSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiIQoPV2F0Y2hSdW5SZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCSKLAQoQV2F0Y2hSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhAKCHNlcXVlbmNlGAQgASgEEgwKBHR5cGUYBSABKAkSDwoHcGF5bG9hZBgGIAEoDBIUCgxhdF91bml4X25hbm8YByABKAMiJgoQR2V0UGx1Z2luUmVxdWVzdBISCgpwbHVnaW5fcmVmGAEgASgJIpMCCgZQbHVnaW4SCwoDcmVmGAEgASgJEhEKCW5hbWVzcGFjZRgCIAEoCRIMCgRuYW1lGAMgASgJEg8KB3ZlcnNpb24YBCABKAkSIAoGZGlnZXN0GAUgASgLMhAuZGhvbGUudjEuRGlnZXN0EgwKBGtpbmQYBiABKAkSKwoMZWZmZWN0X2NsYXNzGAcgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSKgoMY2FwYWJpbGl0aWVzGAggAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIUCgxpbnB1dF9zY2hlbWEYCSABKAkSFQoNb3V0cHV0X3NjaGVtYRgKIAEoCRIUCgxlbmdpbmVfdHlwZXMYCyADKAkiNQoRR2V0UGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIjIKEENhbmNlbFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSJECg1DYW5jZWxsZWRTdGVwEg8KB3N0ZXBfaWQYASABKAkSDwoHYXR0ZW1wdBgCIAEoDRIRCgllbmdpbmVfaWQYAyABKAkiSwoRQ2FuY2VsUnVuUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEiYKBXN0ZXBzGAIgAygLMhcuZGhvbGUudjEuQ2FuY2VsbGVkU3RlcCK6AQoGRW5naW5lEgoKAmlkGAEgASgJEg0KBXN0YXRlGAIgASgJEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIZChFwcm90b2NvbF92ZXJzaW9ucxgHIAMoDRIlCglpbl9mbGlnaHQYCCADKAsyEi5kaG9sZS52MS5JbkZsaWdodCIUChJMaXN0RW5naW5lc1JlcXVlc3QiOAoTTGlzdEVuZ2luZXNSZXNwb25zZRIhCgdlbmdpbmVzGAEgAygLMhAuZGhvbGUudjEuRW5naW5lIicKEkRyYWluRW5naW5lUmVxdWVzdBIRCgllbmdpbmVfaWQYASABKAkiNwoTRHJhaW5FbmdpbmVSZXNwb25zZRIgCgZlbmdpbmUYASABKAsyEC5kaG9sZS52MS5FbmdpbmUiHgoGQ3Vyc29yEgkKAXgYASABKAESCQoBeRgCIAEoASJ5Cg1QcmVzZW5jZUV2ZW50EhEKCXByaW5jaXBhbBgBIAEoCRIRCglzZWxlY3Rpb24YAiABKAkSIAoGY3Vyc29yGAMgASgLMhAuZGhvbGUudjEuQ3Vyc29yEhIKCnNlc3Npb25faWQYBCABKAkSDAoEZ29uZRgFIAEoCCJ0ChRXYXRjaFByZXNlbmNlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEhEKCXNlbGVjdGlvbhgDIAEoCRIgCgZjdXJzb3IYBCABKAsyEC5kaG9sZS52MS5DdXJzb3IiPwoVV2F0Y2hQcmVzZW5jZVJlc3BvbnNlEiYKBWV2ZW50GAEgASgLMhcuZGhvbGUudjEuUHJlc2VuY2VFdmVudCKDAQoVVXBkYXRlUHJlc2VuY2VSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSEQoJc2VsZWN0aW9uGAMgASgJEiAKBmN1cnNvchgEIAEoCzIQLmRob2xlLnYxLkN1cnNvchIMCgRnb25lGAUgASgIIhgKFlVwZGF0ZVByZXNlbmNlUmVzcG9uc2UqcgoKQ2hhbmdlS2luZBIbChdDSEFOR0VfS0lORF9VTlNQRUNJRklFRBAAEhUKEUNIQU5HRV9LSU5EX0FEREVEEAESFwoTQ0hBTkdFX0tJTkRfUkVNT1ZFRBACEhcKE0NIQU5HRV9LSU5EX0NIQU5HRUQQAzKnAQoNRW5naW5lU2VydmljZRJKCgtMaXN0RW5naW5lcxIcLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVxdWVzdBodLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVzcG9uc2USSgoLRHJhaW5FbmdpbmUSHC5kaG9sZS52MS5EcmFpbkVuZ2luZVJlcXVlc3QaHS5kaG9sZS52MS5EcmFpbkVuZ2luZVJlc3BvbnNlMugHCg9QaXBlbGluZVNlcnZpY2USUwoOQ3JlYXRlUGlwZWxpbmUSHy5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlcXVlc3QaIC5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlc3BvbnNlEkoKC0dldFBpcGVsaW5lEhwuZGhvbGUudjEuR2V0UGlwZWxpbmVSZXF1ZXN0Gh0uZGhvbGUudjEuR2V0UGlwZWxpbmVSZXNwb25zZRJTCg5BcHBseU9wZXJhdGlvbhIfLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVxdWVzdBogLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USQQoIVmFsaWRhdGUSGS5kaG9sZS52MS5WYWxpZGF0ZVJlcXVlc3QaGi5kaG9sZS52MS5WYWxpZGF0ZVJlc3BvbnNlEjUKBFBsYW4SFS5kaG9sZS52MS5QbGFuUmVxdWVzdBoWLmRob2xlLnYxLlBsYW5SZXNwb25zZRJECglHZXRQbHVnaW4SGi5kaG9sZS52MS5HZXRQbHVnaW5SZXF1ZXN0GhsuZGhvbGUudjEuR2V0UGx1Z2luUmVzcG9uc2USUAoNTGlzdFJldmlzaW9ucxIeLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXF1ZXN0Gh8uZGhvbGUudjEuTGlzdFJldmlzaW9uc1Jlc3BvbnNlElYKD0FwcHJvdmVSZXZpc2lvbhIgLmRob2xlLnYxLkFwcHJvdmVSZXZpc2lvblJlcXVlc3QaIS5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXNwb25zZRJBCghTdGFydFJ1bhIZLmRob2xlLnYxLlN0YXJ0UnVuUmVxdWVzdBoaLmRob2xlLnYxLlN0YXJ0UnVuUmVzcG9uc2USQwoIV2F0Y2hSdW4SGS5kaG9sZS52MS5XYXRjaFJ1blJlcXVlc3QaGi5kaG9sZS52MS5XYXRjaFJ1blJlc3BvbnNlMAESRAoJQ2FuY2VsUnVuEhouZGhvbGUudjEuQ2FuY2VsUnVuUmVxdWVzdBobLmRob2xlLnYxLkNhbmNlbFJ1blJlc3BvbnNlElIKDVdhdGNoUHJlc2VuY2USHi5kaG9sZS52MS5XYXRjaFByZXNlbmNlUmVxdWVzdBofLmRob2xlLnYxLldhdGNoUHJlc2VuY2VSZXNwb25zZTABElMKDlVwZGF0ZVByZXNlbmNlEh8uZGhvbGUudjEuVXBkYXRlUHJlc2VuY2VSZXF1ZXN0GiAuZGhvbGUudjEuVXBkYXRlUHJlc2VuY2VSZXNwb25zZUKJAQoMY29tLmRob2xlLnYxQghBcGlQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
     [file_dhole_v1_common, file_dhole_v1_engine, file_dhole_v1_pipeline],
   );
 
@@ -1354,6 +1354,227 @@ export const DrainEngineResponseSchema: GenMessage<DrainEngineResponse> =
   messageDesc(file_dhole_v1_api, 41);
 
 /**
+ * Cursor is where an editor's pointer is on the canvas, in the canvas's own
+ * coordinates. It is a hint for drawing and nothing else: no operation is
+ * expressed in these numbers, and no position ever reaches a definition.
+ *
+ * @generated from message dhole.v1.Cursor
+ */
+export type Cursor = Message<"dhole.v1.Cursor"> & {
+  /**
+   * @generated from field: double x = 1;
+   */
+  x: number;
+
+  /**
+   * @generated from field: double y = 2;
+   */
+  y: number;
+};
+
+/**
+ * Describes the message dhole.v1.Cursor.
+ * Use `create(CursorSchema)` to create a new message.
+ */
+export const CursorSchema: GenMessage<Cursor> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 42);
+
+/**
+ * PresenceEvent is one OTHER editor of a pipeline, as the editors watching it
+ * may draw them.
+ *
+ * It carries a handle and no more of the person than that. Everything else the
+ * control plane knows about a caller — the tenant, the kind of credential, the
+ * credential itself — stays on the control plane: drawing a cursor needs a
+ * label to put beside it, an opaque id to keep one person's two tabs apart,
+ * and what that editor has selected. The selection is a step id in a pipeline
+ * the recipient can already read, which is why it is not a disclosure; a field
+ * naming anything outside that pipeline would be.
+ *
+ * @generated from message dhole.v1.PresenceEvent
+ */
+export type PresenceEvent = Message<"dhole.v1.PresenceEvent"> & {
+  /**
+   * The editor's display handle: the principal's subject, and nothing else.
+   *
+   * @generated from field: string principal = 1;
+   */
+  principal: string;
+
+  /**
+   * The step this editor has selected, empty when they have selected none.
+   *
+   * @generated from field: string selection = 2;
+   */
+  selection: string;
+
+  /**
+   * @generated from field: dhole.v1.Cursor cursor = 3;
+   */
+  cursor?: Cursor | undefined;
+
+  /**
+   * Opaque, and per editing session rather than per person: one person in two
+   * tabs is two sessions with two cursors.
+   *
+   * @generated from field: string session_id = 4;
+   */
+  sessionId: string;
+
+  /**
+   * This session has left; stop drawing it. A session that vanishes WITHOUT
+   * saying so — a killed browser, a dropped connection — is reported gone by
+   * everyone watching once its announcement stops being refreshed.
+   *
+   * @generated from field: bool gone = 5;
+   */
+  gone: boolean;
+};
+
+/**
+ * Describes the message dhole.v1.PresenceEvent.
+ * Use `create(PresenceEventSchema)` to create a new message.
+ */
+export const PresenceEventSchema: GenMessage<PresenceEvent> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 43);
+
+/**
+ * WatchPresenceRequest follows who else is editing one pipeline.
+ *
+ * session_id is the caller's own session, and it ties this stream's lifetime
+ * to that session: when the stream ends, the session is announced gone. It is
+ * optional — a caller that only watches, and announces nothing, leaves it
+ * empty and is invisible to the others.
+ *
+ * @generated from message dhole.v1.WatchPresenceRequest
+ */
+export type WatchPresenceRequest = Message<"dhole.v1.WatchPresenceRequest"> & {
+  /**
+   * @generated from field: string pipeline_id = 1;
+   */
+  pipelineId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * What this session has selected as it joins, and where its pointer is.
+   *
+   * They are here rather than left to a first UpdatePresence because the
+   * subject is ephemeral: an announcement published before this stream has
+   * subscribed is simply not there, and nothing would ever refresh it. Opening
+   * the stream and announcing on it is one act, in one order, on one server.
+   *
+   * @generated from field: string selection = 3;
+   */
+  selection: string;
+
+  /**
+   * @generated from field: dhole.v1.Cursor cursor = 4;
+   */
+  cursor?: Cursor | undefined;
+};
+
+/**
+ * Describes the message dhole.v1.WatchPresenceRequest.
+ * Use `create(WatchPresenceRequestSchema)` to create a new message.
+ */
+export const WatchPresenceRequestSchema: GenMessage<WatchPresenceRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 44);
+
+/**
+ * WatchPresenceResponse is one presence event. It wraps rather than repeats
+ * PresenceEvent, because the same message is what travels on the ephemeral
+ * subject between control planes: one shape, one meaning, wherever it is read.
+ *
+ * @generated from message dhole.v1.WatchPresenceResponse
+ */
+export type WatchPresenceResponse =
+  Message<"dhole.v1.WatchPresenceResponse"> & {
+    /**
+     * @generated from field: dhole.v1.PresenceEvent event = 1;
+     */
+    event?: PresenceEvent | undefined;
+  };
+
+/**
+ * Describes the message dhole.v1.WatchPresenceResponse.
+ * Use `create(WatchPresenceResponseSchema)` to create a new message.
+ */
+export const WatchPresenceResponseSchema: GenMessage<WatchPresenceResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 45);
+
+/**
+ * UpdatePresenceRequest is one editor saying what it is doing now.
+ *
+ * The principal is NEVER taken from here: it comes from the credential, like
+ * everywhere else in this contract. A caller can say where its cursor is; it
+ * cannot say who it is.
+ *
+ * @generated from message dhole.v1.UpdatePresenceRequest
+ */
+export type UpdatePresenceRequest =
+  Message<"dhole.v1.UpdatePresenceRequest"> & {
+    /**
+     * @generated from field: string pipeline_id = 1;
+     */
+    pipelineId: string;
+
+    /**
+     * @generated from field: string session_id = 2;
+     */
+    sessionId: string;
+
+    /**
+     * @generated from field: string selection = 3;
+     */
+    selection: string;
+
+    /**
+     * @generated from field: dhole.v1.Cursor cursor = 4;
+     */
+    cursor?: Cursor | undefined;
+
+    /**
+     * Leave, without waiting for the announcement to expire.
+     *
+     * @generated from field: bool gone = 5;
+     */
+    gone: boolean;
+  };
+
+/**
+ * Describes the message dhole.v1.UpdatePresenceRequest.
+ * Use `create(UpdatePresenceRequestSchema)` to create a new message.
+ */
+export const UpdatePresenceRequestSchema: GenMessage<UpdatePresenceRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 46);
+
+/**
+ * UpdatePresenceResponse is empty: presence is fire-and-forget, and a field
+ * here would be state this call had accumulated somewhere.
+ *
+ * @generated from message dhole.v1.UpdatePresenceResponse
+ */
+export type UpdatePresenceResponse =
+  Message<"dhole.v1.UpdatePresenceResponse"> & {};
+
+/**
+ * Describes the message dhole.v1.UpdatePresenceResponse.
+ * Use `create(UpdatePresenceResponseSchema)` to create a new message.
+ */
+export const UpdatePresenceResponseSchema: GenMessage<UpdatePresenceResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 47);
+
+/**
  * ChangeKind is what happened to one element of the pipeline.
  *
  * @generated from enum dhole.v1.ChangeKind
@@ -1550,5 +1771,27 @@ export const PipelineService: GenService<{
     methodKind: "unary";
     input: typeof CancelRunRequestSchema;
     output: typeof CancelRunResponseSchema;
+  };
+  /**
+   * WatchPresence streams who else is editing this pipeline. It is ephemeral
+   * in both directions: nothing about presence is stored, and an editor that
+   * stops refreshing its announcement is reported gone rather than remembered.
+   *
+   * @generated from rpc dhole.v1.PipelineService.WatchPresence
+   */
+  watchPresence: {
+    methodKind: "server_streaming";
+    input: typeof WatchPresenceRequestSchema;
+    output: typeof WatchPresenceResponseSchema;
+  };
+  /**
+   * UpdatePresence announces this editor's selection and cursor to the others.
+   *
+   * @generated from rpc dhole.v1.PipelineService.UpdatePresence
+   */
+  updatePresence: {
+    methodKind: "unary";
+    input: typeof UpdatePresenceRequestSchema;
+    output: typeof UpdatePresenceResponseSchema;
   };
 }> = /*@__PURE__*/ serviceDesc(file_dhole_v1_api, 1);

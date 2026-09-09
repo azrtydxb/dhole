@@ -38,7 +38,7 @@ import { useCallback, useMemo, useState } from "react";
 import "@xyflow/react/dist/style.css";
 
 import { pipelineClient } from "../api/client.js";
-import type { Operation } from "../gen/dhole/v1/api_pb.js";
+import type { Operation, Revision } from "../gen/dhole/v1/api_pb.js";
 import {
   EdgeSchema,
   type Edge,
@@ -46,6 +46,7 @@ import {
   type Port,
 } from "../gen/dhole/v1/pipeline_pb.js";
 import { refusalFor } from "./edges.js";
+import { Presence, RebasePrompt, rebaseNotice } from "./Presence.js";
 import { autoLayout } from "./layout.js";
 import { StepNode, type StepNodeType } from "./StepNode.js";
 
@@ -147,6 +148,10 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
   const [head, setHead] = useState(revisionId);
   const [edited, setEdited] = useState<Pipeline | undefined>(undefined);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // The revision somebody else moved this pipeline to while this editor was
+  // making a change. Holding it is NOT a queued retry: the refused operation
+  // is gone, and rebasing is a read (Presence.tsx).
+  const [movedTo, setMovedTo] = useState<Revision | null>(null);
 
   const [newStepId, setNewStepId] = useState("");
   const [newStepKind, setNewStepKind] = useState("blob-source");
@@ -179,8 +184,19 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
         setHead(response.revision.id);
       }
       setRefusal(null);
+      setMovedTo(null);
     },
-    onError: (error: Error) => setRefusal(error.message),
+    onError: (error: Error) => {
+      // A conflict is not a failure to be retried. The edit did not happen,
+      // and re-sending it against the new head would overwrite the change
+      // that beat it to the head — silently, and looking identical on screen.
+      const moved = rebaseNotice(error);
+      if (moved !== null) {
+        setMovedTo(moved);
+        return;
+      }
+      setRefusal(error.message);
+    },
   });
 
   const steps = pipeline?.steps ?? [];
@@ -384,6 +400,29 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
             </li>
           ))}
         </ul>
+
+        <Presence pipelineId={pipelineId} selection={propertyStep} />
+
+        {movedTo !== null && (
+          <RebasePrompt
+            revision={movedTo}
+            onRebase={(revisionId) => {
+              // A read, and only a read. The canvas moves onto the revision
+              // the pipeline is actually at and shows it; whether the refused
+              // edit is worth making again is its author's decision.
+              void pipelineClient
+                .getPipeline({ pipelineId, revisionId })
+                .then((response) => {
+                  if (response.pipeline !== undefined) {
+                    setEdited(response.pipeline);
+                  }
+                  setHead(response.revision?.id ?? revisionId);
+                  setMovedTo(null);
+                })
+                .catch((error: Error) => setRefusal(error.message));
+            }}
+          />
+        )}
 
         {refusal !== null && (
           <p data-testid="edge-error" role="alert" style={{ color: "#c53030" }}>

@@ -881,11 +881,11 @@ Interfaces: produces `dynamic.Generator` step type emitting a `*dholev1.Pipeline
 Files: `internal/api/presence.go`, `web/src/canvas/Presence.tsx`, `internal/api/presence_test.go`, `web/e2e/multiplayer.spec.ts`
 Interfaces: produces `WatchPresence` streaming RPC emitting `PresenceEvent{principal, selection, cursor}`; operations already carry `base_revision` from Task 27.
 
-- [ ] Write `internal/api/presence_test.go` asserting `TestConcurrentOperationsOnDifferentStepsBothApply`: two clients applying `SetProperty` to different steps from the same base revision both succeed and the final revision contains both changes. Run — expect FAIL with "undefined: api.WatchPresence".
-- [ ] Add `TestConcurrentOperationsOnSameStepConflict` asserting the second returns `CodeAborted` with the newer revision attached so the client can rebase.
-- [ ] Write `web/e2e/multiplayer.spec.ts` asserting two browser contexts see each other's selections and that a conflicting edit surfaces a rebase prompt rather than silently overwriting.
-- [ ] Implement `presence.go` over an ephemeral bus subject per pipeline, and `Presence.tsx` rendering remote cursors and selections.
-- [ ] Run `go test ./internal/api && npx playwright test` — expect PASS. Commit.
+- [x] Write `internal/api/presence_test.go` asserting `TestConcurrentOperationsOnDifferentStepsBothApply`: two clients applying `SetProperty` to different steps from the same base revision both succeed and the final revision contains both changes. Run — expect FAIL with "undefined: api.WatchPresence".
+- [x] Add `TestConcurrentOperationsOnSameStepConflict` asserting the second returns `CodeAborted` with the newer revision attached so the client can rebase.
+- [x] Write `web/e2e/multiplayer.spec.ts` asserting two browser contexts see each other's selections and that a conflicting edit surfaces a rebase prompt rather than silently overwriting.
+- [x] Implement `presence.go` over an ephemeral bus subject per pipeline, and `Presence.tsx` rendering remote cursors and selections.
+- [x] Run `go test ./internal/api && npx playwright test` — expect PASS. Commit.
 
 ## Task 57: Importers for GitLab CI, GitHub Actions, Woodpecker and n8n
 

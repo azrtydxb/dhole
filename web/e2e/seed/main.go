@@ -45,12 +45,6 @@ import (
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
-// seeded is a pipeline this process created for a test to work on.
-type seeded struct {
-	PipelineID string `json:"pipelineId"`
-	RevisionID string `json:"revisionId"`
-}
-
 // issued is a credential minted for one tenant. `dhole serve` prints the
 // bootstrap credential for the default tenant only, and a suite testing that
 // one tenant cannot see another's runs needs a second one; `dhole token issue`
@@ -58,6 +52,13 @@ type seeded struct {
 // browser side of the suite does not have to shell out.
 type issued struct {
 	Token string `json:"token"`
+}
+
+// seeded is one pipeline of a named shape and the revision to base the first
+// edit on. It is what POST /shape/{name} answers with.
+type seeded struct {
+	PipelineID string `json:"pipelineId"`
+	RevisionID string `json:"revisionId"`
 }
 
 func main() {
@@ -109,9 +110,11 @@ func run(addr, dsn, waitFor string) error {
 	plugins := catalog.New(db, runstore.DialectSQLite)
 	// A definition store for the shaped pipelines below. A pipeline with no
 	// plugin references is created through CreatePipeline like any client
-	// would; a SHAPE carries steps with commands, which no operation can set.
+	// would; a SHAPE carries steps with commands, which no operation can set,
+	// and there is nothing to pin — saying so beats leaving it to chance.
 	defs := defstore.NewWithDialect(db, runstore.DialectSQLite, defstore.WithoutPinning())
-	var n atomic.Int64
+	// One counter, so two shapes of the same name are two pipelines.
+	var n atomic.Uint64
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {

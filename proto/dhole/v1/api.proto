@@ -412,6 +412,83 @@ service EngineService {
   rpc DrainEngine(DrainEngineRequest) returns (DrainEngineResponse);
 }
 
+// Cursor is where an editor's pointer is on the canvas, in the canvas's own
+// coordinates. It is a hint for drawing and nothing else: no operation is
+// expressed in these numbers, and no position ever reaches a definition.
+message Cursor {
+  double x = 1;
+  double y = 2;
+}
+
+// PresenceEvent is one OTHER editor of a pipeline, as the editors watching it
+// may draw them.
+//
+// It carries a handle and no more of the person than that. Everything else the
+// control plane knows about a caller — the tenant, the kind of credential, the
+// credential itself — stays on the control plane: drawing a cursor needs a
+// label to put beside it, an opaque id to keep one person's two tabs apart,
+// and what that editor has selected. The selection is a step id in a pipeline
+// the recipient can already read, which is why it is not a disclosure; a field
+// naming anything outside that pipeline would be.
+message PresenceEvent {
+  // The editor's display handle: the principal's subject, and nothing else.
+  string principal = 1;
+  // The step this editor has selected, empty when they have selected none.
+  string selection = 2;
+  Cursor cursor = 3;
+  // Opaque, and per editing session rather than per person: one person in two
+  // tabs is two sessions with two cursors.
+  string session_id = 4;
+  // This session has left; stop drawing it. A session that vanishes WITHOUT
+  // saying so — a killed browser, a dropped connection — is reported gone by
+  // everyone watching once its announcement stops being refreshed.
+  bool gone = 5;
+}
+
+// WatchPresenceRequest follows who else is editing one pipeline.
+//
+// session_id is the caller's own session, and it ties this stream's lifetime
+// to that session: when the stream ends, the session is announced gone. It is
+// optional — a caller that only watches, and announces nothing, leaves it
+// empty and is invisible to the others.
+message WatchPresenceRequest {
+  string pipeline_id = 1;
+  string session_id = 2;
+  // What this session has selected as it joins, and where its pointer is.
+  //
+  // They are here rather than left to a first UpdatePresence because the
+  // subject is ephemeral: an announcement published before this stream has
+  // subscribed is simply not there, and nothing would ever refresh it. Opening
+  // the stream and announcing on it is one act, in one order, on one server.
+  string selection = 3;
+  Cursor cursor = 4;
+}
+
+// WatchPresenceResponse is one presence event. It wraps rather than repeats
+// PresenceEvent, because the same message is what travels on the ephemeral
+// subject between control planes: one shape, one meaning, wherever it is read.
+message WatchPresenceResponse {
+  PresenceEvent event = 1;
+}
+
+// UpdatePresenceRequest is one editor saying what it is doing now.
+//
+// The principal is NEVER taken from here: it comes from the credential, like
+// everywhere else in this contract. A caller can say where its cursor is; it
+// cannot say who it is.
+message UpdatePresenceRequest {
+  string pipeline_id = 1;
+  string session_id = 2;
+  string selection = 3;
+  Cursor cursor = 4;
+  // Leave, without waiting for the announcement to expire.
+  bool gone = 5;
+}
+
+// UpdatePresenceResponse is empty: presence is fire-and-forget, and a field
+// here would be state this call had accumulated somewhere.
+message UpdatePresenceResponse {}
+
 // PipelineService is the one API contract. The GUI has no privileged
 // endpoints: it is one client of this service among the CLI and agents
 // (ADR 0013). Every RPC is authenticated and tenant-scoped — the tenant comes
@@ -446,4 +523,10 @@ service PipelineService {
   // CancelRun stops a run and tells every engine holding one of its steps to
   // stop too.
   rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+  // WatchPresence streams who else is editing this pipeline. It is ephemeral
+  // in both directions: nothing about presence is stored, and an editor that
+  // stops refreshing its announcement is reported gone rather than remembered.
+  rpc WatchPresence(WatchPresenceRequest) returns (stream WatchPresenceResponse);
+  // UpdatePresence announces this editor's selection and cursor to the others.
+  rpc UpdatePresence(UpdatePresenceRequest) returns (UpdatePresenceResponse);
 }

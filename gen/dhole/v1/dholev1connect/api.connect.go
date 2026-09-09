@@ -73,6 +73,12 @@ const (
 	// PipelineServiceCancelRunProcedure is the fully-qualified name of the PipelineService's CancelRun
 	// RPC.
 	PipelineServiceCancelRunProcedure = "/dhole.v1.PipelineService/CancelRun"
+	// PipelineServiceWatchPresenceProcedure is the fully-qualified name of the PipelineService's
+	// WatchPresence RPC.
+	PipelineServiceWatchPresenceProcedure = "/dhole.v1.PipelineService/WatchPresence"
+	// PipelineServiceUpdatePresenceProcedure is the fully-qualified name of the PipelineService's
+	// UpdatePresence RPC.
+	PipelineServiceUpdatePresenceProcedure = "/dhole.v1.PipelineService/UpdatePresence"
 )
 
 // EngineServiceClient is a client for the dhole.v1.EngineService service.
@@ -210,6 +216,12 @@ type PipelineServiceClient interface {
 	// CancelRun stops a run and tells every engine holding one of its steps to
 	// stop too.
 	CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error)
+	// WatchPresence streams who else is editing this pipeline. It is ephemeral
+	// in both directions: nothing about presence is stored, and an editor that
+	// stops refreshing its announcement is reported gone rather than remembered.
+	WatchPresence(context.Context, *connect.Request[v1.WatchPresenceRequest]) (*connect.ServerStreamForClient[v1.WatchPresenceResponse], error)
+	// UpdatePresence announces this editor's selection and cursor to the others.
+	UpdatePresence(context.Context, *connect.Request[v1.UpdatePresenceRequest]) (*connect.Response[v1.UpdatePresenceResponse], error)
 }
 
 // NewPipelineServiceClient constructs a client for the dhole.v1.PipelineService service. By
@@ -289,6 +301,18 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("CancelRun")),
 			connect.WithClientOptions(opts...),
 		),
+		watchPresence: connect.NewClient[v1.WatchPresenceRequest, v1.WatchPresenceResponse](
+			httpClient,
+			baseURL+PipelineServiceWatchPresenceProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("WatchPresence")),
+			connect.WithClientOptions(opts...),
+		),
+		updatePresence: connect.NewClient[v1.UpdatePresenceRequest, v1.UpdatePresenceResponse](
+			httpClient,
+			baseURL+PipelineServiceUpdatePresenceProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("UpdatePresence")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -305,6 +329,8 @@ type pipelineServiceClient struct {
 	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
 	watchRun        *connect.Client[v1.WatchRunRequest, v1.WatchRunResponse]
 	cancelRun       *connect.Client[v1.CancelRunRequest, v1.CancelRunResponse]
+	watchPresence   *connect.Client[v1.WatchPresenceRequest, v1.WatchPresenceResponse]
+	updatePresence  *connect.Client[v1.UpdatePresenceRequest, v1.UpdatePresenceResponse]
 }
 
 // CreatePipeline calls dhole.v1.PipelineService.CreatePipeline.
@@ -362,6 +388,16 @@ func (c *pipelineServiceClient) CancelRun(ctx context.Context, req *connect.Requ
 	return c.cancelRun.CallUnary(ctx, req)
 }
 
+// WatchPresence calls dhole.v1.PipelineService.WatchPresence.
+func (c *pipelineServiceClient) WatchPresence(ctx context.Context, req *connect.Request[v1.WatchPresenceRequest]) (*connect.ServerStreamForClient[v1.WatchPresenceResponse], error) {
+	return c.watchPresence.CallServerStream(ctx, req)
+}
+
+// UpdatePresence calls dhole.v1.PipelineService.UpdatePresence.
+func (c *pipelineServiceClient) UpdatePresence(ctx context.Context, req *connect.Request[v1.UpdatePresenceRequest]) (*connect.Response[v1.UpdatePresenceResponse], error) {
+	return c.updatePresence.CallUnary(ctx, req)
+}
+
 // PipelineServiceHandler is an implementation of the dhole.v1.PipelineService service.
 type PipelineServiceHandler interface {
 	// CreatePipeline creates a pipeline and its first revision. Nothing else
@@ -393,6 +429,12 @@ type PipelineServiceHandler interface {
 	// CancelRun stops a run and tells every engine holding one of its steps to
 	// stop too.
 	CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error)
+	// WatchPresence streams who else is editing this pipeline. It is ephemeral
+	// in both directions: nothing about presence is stored, and an editor that
+	// stops refreshing its announcement is reported gone rather than remembered.
+	WatchPresence(context.Context, *connect.Request[v1.WatchPresenceRequest], *connect.ServerStream[v1.WatchPresenceResponse]) error
+	// UpdatePresence announces this editor's selection and cursor to the others.
+	UpdatePresence(context.Context, *connect.Request[v1.UpdatePresenceRequest]) (*connect.Response[v1.UpdatePresenceResponse], error)
 }
 
 // NewPipelineServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -468,6 +510,18 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("CancelRun")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServiceWatchPresenceHandler := connect.NewServerStreamHandler(
+		PipelineServiceWatchPresenceProcedure,
+		svc.WatchPresence,
+		connect.WithSchema(pipelineServiceMethods.ByName("WatchPresence")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServiceUpdatePresenceHandler := connect.NewUnaryHandler(
+		PipelineServiceUpdatePresenceProcedure,
+		svc.UpdatePresence,
+		connect.WithSchema(pipelineServiceMethods.ByName("UpdatePresence")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dhole.v1.PipelineService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case PipelineServiceCreatePipelineProcedure:
@@ -492,6 +546,10 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceWatchRunHandler.ServeHTTP(w, r)
 		case PipelineServiceCancelRunProcedure:
 			pipelineServiceCancelRunHandler.ServeHTTP(w, r)
+		case PipelineServiceWatchPresenceProcedure:
+			pipelineServiceWatchPresenceHandler.ServeHTTP(w, r)
+		case PipelineServiceUpdatePresenceProcedure:
+			pipelineServiceUpdatePresenceHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -543,4 +601,12 @@ func (UnimplementedPipelineServiceHandler) WatchRun(context.Context, *connect.Re
 
 func (UnimplementedPipelineServiceHandler) CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.CancelRun is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) WatchPresence(context.Context, *connect.Request[v1.WatchPresenceRequest], *connect.ServerStream[v1.WatchPresenceResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.WatchPresence is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) UpdatePresence(context.Context, *connect.Request[v1.UpdatePresenceRequest]) (*connect.Response[v1.UpdatePresenceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.UpdatePresence is not implemented"))
 }

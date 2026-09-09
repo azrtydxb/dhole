@@ -362,3 +362,95 @@ func readArgument(value string, stdin io.Reader) ([]byte, error) {
 		return []byte(value), nil
 	}
 }
+
+// pipelinePresenceCmd follows who else is editing a pipeline.
+//
+// It is here rather than only in the canvas for the reason every command in
+// this file is: an editing affordance the GUI has and the CLI does not is the
+// privileged corner ADR 0013 refuses. An agent editing a pipeline alongside a
+// person can see that person is in it, and say so, instead of discovering them
+// through a conflict.
+func pipelinePresenceCmd(o *options) *cobra.Command {
+	var session string
+	cmd := &cobra.Command{
+		Use:   "presence <pipeline-id>",
+		Short: "follow who else is editing a pipeline",
+		Long: "Presence is ephemeral: it says who is here NOW. With --session this\n" +
+			"caller is announced to the others for as long as the command runs,\n" +
+			"and reported gone when it stops or when its announcement expires.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.checkOutput(cmd); err != nil {
+				return err
+			}
+			// No o.context here: this command follows a stream until the
+			// caller stops it, and a 60-second deadline would end it.
+			ctx := cmd.Context()
+			stream, err := o.client().WatchPresence(ctx, connect.NewRequest(
+				&dholev1.WatchPresenceRequest{PipelineId: args[0], SessionId: session}))
+			if err != nil {
+				return o.fail("watch presence", err)
+			}
+			defer func() { _ = stream.Close() }()
+			for stream.Receive() {
+				event := stream.Msg().GetEvent()
+				if err := o.emit(event, func(w io.Writer) {
+					what := "selected " + event.GetSelection()
+					if event.GetGone() {
+						what = "left"
+					} else if event.GetSelection() == "" {
+						what = "is here"
+					}
+					_, _ = fmt.Fprintf(w, "%s (%s) %s\n",
+						event.GetPrincipal(), event.GetSessionId(), what)
+				}); err != nil {
+					return err
+				}
+			}
+			if err := stream.Err(); err != nil {
+				return o.fail("watch presence", err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&session, "session", "",
+		"announce this session id to the other editors while watching")
+	return cmd
+}
+
+// pipelineAnnounceCmd announces this editor's selection to the others.
+func pipelineAnnounceCmd(o *options) *cobra.Command {
+	var session, selection string
+	var gone bool
+	cmd := &cobra.Command{
+		Use:   "announce <pipeline-id>",
+		Short: "tell the other editors what this session has selected",
+		Long: "The announcement stands until it expires or is withdrawn with --gone,\n" +
+			"and it is refreshed for as long as a `pipeline presence --session`\n" +
+			"stream with the same session id is open. Who you are comes from the\n" +
+			"credential; only what you have selected comes from here.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.checkOutput(cmd); err != nil {
+				return err
+			}
+			ctx, cancel := o.context(cmd)
+			defer cancel()
+			res, err := o.client().UpdatePresence(ctx, connect.NewRequest(
+				&dholev1.UpdatePresenceRequest{
+					PipelineId: args[0], SessionId: session,
+					Selection: selection, Gone: gone,
+				}))
+			if err != nil {
+				return o.fail("update presence", err)
+			}
+			return o.emit(res.Msg, func(w io.Writer) {
+				_, _ = fmt.Fprintf(w, "announced %s on %s\n", session, args[0])
+			})
+		},
+	}
+	cmd.Flags().StringVar(&session, "session", "", "this editing session's id (required)")
+	cmd.Flags().StringVar(&selection, "selection", "", "the step this session has selected")
+	cmd.Flags().BoolVar(&gone, "gone", false, "withdraw this session's announcement")
+	return cmd
+}

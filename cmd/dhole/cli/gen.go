@@ -41,6 +41,8 @@ func surfaces() map[string]surface {
 		"Plan":            {group: groupPipeline, build: pipelinePlanCmd},
 		"ListRevisions":   {group: groupPipeline, build: pipelineRevisionsCmd},
 		"ApproveRevision": {group: groupPipeline, build: pipelineApproveCmd},
+		"WatchPresence":   {group: groupPipeline, build: pipelinePresenceCmd},
+		"UpdatePresence":  {group: groupPipeline, build: pipelineAnnounceCmd},
 		"StartRun":        {group: groupRun, build: runStartCmd},
 		"WatchRun":        {group: groupRun, build: runWatchCmd},
 		"CancelRun":       {group: groupRun, build: runCancelCmd},
