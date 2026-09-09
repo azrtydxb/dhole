@@ -564,6 +564,18 @@ Interfaces: produces `defstore.ResolveLockfile(ctx, tenantID string, p *dholev1.
 
 ## Task 36: containerd/OCI executor
 
+**Blocked on this machine, not on the design.** containerd needs a container
+runtime, and this machine's Docker daemon does not start; k3s's own containerd
+is reachable only from a privileged pod on a node. Task 37's Kubernetes
+executor already covers the container case and passes the identical shared
+contract against a real cluster, so the interface claim in ADR 0006 is tested;
+what remains untested is containerd specifically. Do NOT implement this
+against a fake client — Task 37 found two real bugs (SPDY hanging forever, a
+liveness probe adding five seconds to every signalled exec) that a fake
+clientset would have hidden, and a containerd backend written against a mock
+would carry the same class of defect into production.
+
+
 Files: `internal/executor/containerd/containerd.go`, `internal/executor/containerd/identity.go`, `internal/executor/containerd/containerd_test.go`
 Interfaces: produces `containerd.New(cfg containerd.Config) (executor.Executor, error)` satisfying Task 9's interface; `Executor.EnvironmentIdentity() (string, error)` returning the image digest.
 
