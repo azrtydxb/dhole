@@ -13,8 +13,6 @@
  *     every time it is drawn; the moment it is stored, the definition stops
  *     being a pipeline and becomes a drawing of one.
  */
-import { readFileSync } from "node:fs";
-
 import type { DescMessage } from "@bufbuild/protobuf";
 import {
   expect,
@@ -24,17 +22,7 @@ import {
 } from "@playwright/test";
 
 import { ApplyOperationRequestSchema } from "../src/gen/dhole/v1/api_pb.js";
-
-interface Handshake {
-  baseUrl: string;
-  token: string;
-  tenantId: string;
-}
-
-interface Seeded {
-  pipelineId: string;
-  revisionId: string;
-}
+import { apiUrl, bootstrapToken, seedPipeline, type Seeded } from "./plane.js";
 
 interface WirePort {
   name?: string;
@@ -60,21 +48,6 @@ interface WirePipeline {
   edges?: WireEdge[];
 }
 
-/** The fixture writes this before it starts listening. */
-function handshake(): Handshake {
-  const path = new URL("../.playwright/fixture.json", import.meta.url);
-  return JSON.parse(readFileSync(path, "utf8")) as Handshake;
-}
-
-/** A pipeline of this test's own: heads are per pipeline, so sharing one
- * would make concurrent tests conflict for a reason neither is about. */
-async function seedPipeline(request: APIRequestContext): Promise<Seeded> {
-  const { baseUrl } = handshake();
-  const response = await request.post(`${baseUrl}/fixture/pipeline`);
-  expect(response.ok()).toBe(true);
-  return (await response.json()) as Seeded;
-}
-
 /** getPipeline reads a revision back from the API — the source of truth for
  * every assertion about what was actually authored. */
 async function getPipeline(
@@ -82,13 +55,12 @@ async function getPipeline(
   pipelineId: string,
   revisionId: string,
 ): Promise<WirePipeline> {
-  const { baseUrl, token } = handshake();
   const response = await request.post(
-    `${baseUrl}/dhole.v1.PipelineService/GetPipeline`,
+    `${apiUrl}/dhole.v1.PipelineService/GetPipeline`,
     {
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${bootstrapToken()}`,
       },
       data: { pipelineId, revisionId },
     },
@@ -98,13 +70,12 @@ async function getPipeline(
   return body.pipeline ?? {};
 }
 
-/** openCanvas signs the browser in with the fixture's real service token and
+/** openCanvas signs the browser in with the plane's real bootstrap token and
  * opens the canvas on one revision of one pipeline. */
 async function openCanvas(page: Page, seed: Seeded): Promise<void> {
-  const { token } = handshake();
   await page.addInitScript((value: string) => {
     window.localStorage.setItem("dhole.token", value);
-  }, token);
+  }, bootstrapToken());
   await page.goto(
     `/?pipeline=${encodeURIComponent(seed.pipelineId)}` +
       `&revision=${encodeURIComponent(seed.revisionId)}`,

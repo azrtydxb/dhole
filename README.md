@@ -90,17 +90,48 @@ make build
 ```
 
 With no flags that is the single binary: an embedded NATS server with JetStream, a SQLite
-run store, filesystem object stores, and one engine hosted beside the control plane. The
-engine is not called in-process — it dials the embedded bus and takes its work off the
-same `job.dispatch.*` work queue an engine in another datacentre would, which is what
-makes a laptop and a cluster the same system rather than two that resemble each other.
+run store, filesystem object stores, one engine hosted beside the control plane, and the
+API on `127.0.0.1:7777`. The engine is not called in-process — it dials the embedded bus
+and takes its work off the same `job.dispatch.*` work queue an engine in another
+datacentre would, which is what makes a laptop and a cluster the same system rather than
+two that resemble each other.
 
-| Flag          | Default                            | What it selects                                         |
-| ------------- | ---------------------------------- | ------------------------------------------------------- |
-| `--mode`      | `embedded`                         | `embedded` or `distributed` (control plane only)        |
-| `--store-dsn` | `<user config dir>/dhole/dhole.db` | a Postgres DSN, or any other value as a SQLite path     |
-| `--bus-url`   | —                                  | the NATS server to dial; ignored in embedded mode       |
-| `--blob-root` | `<user config dir>/dhole`          | where the CAS, the blob store and the embedded bus live |
+| Flag                   | Default                            | What it selects                                         |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------- |
+| `--mode`               | `embedded`                         | `embedded` or `distributed` (control plane only)        |
+| `--store-dsn`          | `<user config dir>/dhole/dhole.db` | a Postgres DSN, or any other value as a SQLite path     |
+| `--bus-url`            | —                                  | the NATS server to dial; ignored in embedded mode       |
+| `--blob-root`          | `<user config dir>/dhole`          | where the CAS, the blob store and the embedded bus live |
+| `--api-addr`           | `127.0.0.1:7777`                   | where the one contract is served (`DHOLE_API_ADDR`)     |
+| `--no-api`             | off                                | serve no contract at all; nothing can then talk to it   |
+| `--api-allowed-origin` | none                               | a browser origin allowed to make cross-origin API calls |
+
+### The first credential
+
+The API has no unauthenticated call — one contract serves the GUI, the CLI and agents, and
+all three authenticate ([ADR 0013](.procoder/adr/0013-one-api-contract-serves-gui-cli-and-agents-equally.md)).
+So a plane that had no way to hand out a first credential would be a plane nobody can
+reach, and that pressure is how control planes end up with an anonymous mode. `dhole serve`
+therefore mints a bootstrap service token at start-up, prints it once, and writes it mode
+0600 to `<blob-root>/bootstrap.token`:
+
+```
+dhole v0.1.0 (abc1234): embedded control plane, bus nats://127.0.0.1:4222, API http://127.0.0.1:7777
+bootstrap credential (valid 24h0m0s, also written to ~/.config/dhole/bootstrap.token):
+  export DHOLE_TOKEN=dht_default_…
+```
+
+It is an ordinary service token: the store keeps only its SHA-256, it expires, and it is
+authenticated by exactly the code path every other credential is. For a second tenant, a CI
+account or a replacement for one that leaked, mint another beside the plane's database:
+
+```
+dhole token issue --tenant default --subject ci --ttl 720h
+```
+
+That is a local administrative command — it takes `--store-dsn` rather than `--server` —
+because the contract has no identity service yet, and inventing one that only the CLI could
+reach would be the ADR 0013 mistake with the CLI in the privileged seat.
 
 `dhole version` prints the version and commit the binary was built from. SIGINT and
 SIGTERM stop the plane rather than killing it: unacknowledged dispatches go back to the
@@ -108,8 +139,10 @@ queue and unsent outbox rows are still owed.
 
 ## Still open
 
-API identity and auth, the YAML surface for effect classes and taint, and the scheduler's
-fairness algorithm.
+An RPC that creates a pipeline from nothing — `ApplyOperation` needs a `base_revision`, so
+today the GUI cannot author a new pipeline without a back door — an identity service on the
+contract, the YAML surface for effect classes and taint, and wiring the scheduler's fair
+queue and per-pipeline budgets, which are built and tested but not yet called.
 
 ## Stack
 

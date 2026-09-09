@@ -42,6 +42,9 @@ func (stableEnv) EnvironmentIdentity() (string, error) { return "sha256:test-env
 func startCachingServer(ctx context.Context, t *testing.T, dir string) *server.Server {
 	t.Helper()
 	srv, err := server.New(server.Config{
+		// Port zero: these tests run beside each other, and a plane
+		// bound to the well-known port would fight for a socket.
+		APIAddr:  "127.0.0.1:0",
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),

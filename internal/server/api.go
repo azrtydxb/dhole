@@ -1,0 +1,249 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/azrtydxb/dhole/internal/api"
+	"github.com/azrtydxb/dhole/internal/catalog"
+	"github.com/azrtydxb/dhole/internal/identity"
+)
+
+// DefaultAPIAddr is where a plane that was not told otherwise serves its
+// contract. It is the address `dhole --server` dials by default: the binary
+// and its CLI disagreeing about the port is the first thing anyone would hit,
+// and it would look like the API is not served at all — which is exactly the
+// bug this file exists to close.
+const DefaultAPIAddr = "127.0.0.1:7777"
+
+// The bootstrap credential a fresh plane mints for its operator.
+//
+// The API has no unauthenticated call (ADR 0013 and internal/api/auth.go), so
+// a plane with no way to issue a first credential is a plane nobody can use —
+// and the pressure that creates is exactly how control planes end up
+// accepting anonymous calls "just until it is configured". So the plane mints
+// one itself, at every start, and prints it once.
+//
+// It is a REAL service token: identity.Local issues it, the store keeps only
+// its SHA-256, and it is authenticated by the same code path as any other
+// token. Nothing about it is special-cased in api/auth.go, which is what
+// makes "the printed credential actually works" a testable property rather
+// than a claim.
+//
+// It is minted rather than configured because the alternatives are worse. A
+// --token flag or a DHOLE_TOKEN environment variable is a static shared
+// secret that lands in shell history, `ps`, a unit file and CI logs, and it
+// never rotates; a `dhole bootstrap` subcommand would have to open the plane's
+// own database while the plane holds it, and leaves a window in which the
+// operator has a plane they cannot talk to — which is when somebody reaches
+// for an anonymous mode.
+const (
+	bootstrapSubject = "bootstrap"
+	bootstrapTTL     = 24 * time.Hour
+	// BootstrapTokenFile is the name, under the plane's state directory, of
+	// the file the bootstrap credential is also written to. Mode 0600: a
+	// supervised process's stdout goes to a journal many people can read, so
+	// the file is what a script should use.
+	BootstrapTokenFile = "bootstrap.token"
+)
+
+// BootstrapTTL is how long the bootstrap credential lives. It is a function
+// rather than an exported constant so that the value the binary prints and the
+// value the token is issued with cannot drift apart.
+func BootstrapTTL() time.Duration { return bootstrapTTL }
+
+// apiReadHeaderTimeout bounds how long a connection may take to send its
+// request headers. It is the ONLY timeout set on this server: a read or write
+// deadline would cut WatchRun, which follows a run for as long as the run
+// lasts, and a client watching a three-day wait is not a slow client.
+const apiReadHeaderTimeout = 15 * time.Second
+
+// startAPI mounts internal/api on a listener and serves it.
+//
+// This is the wiring whose absence made `dhole serve` a control plane with no
+// contract on it: everything below was built, tested and imported by nobody.
+// The collaborators are the ones this server already assembles — there is no
+// second definition store, no second run log and no second registry, because
+// an API answering out of its own copies would be a different system from the
+// one the scheduler is running.
+func (s *Server) startAPI(runCtx context.Context) (err error) {
+	if s.cfg.NoAPI {
+		return nil
+	}
+	addr := s.cfg.APIAddr
+	if addr == "" {
+		addr = DefaultAPIAddr
+	}
+
+	// The credential store shares the run log's database and its dialect: a
+	// Postgres deployment whose identity tables were addressed with SQLite
+	// placeholders would refuse every login.
+	local := identity.NewLocal(identity.NewSQLStoreWithDialect(s.infra.db, s.infra.dialect))
+
+	token, err := local.IssueToken(runCtx, identity.Principal{
+		TenantID: DefaultTenant,
+		Subject:  bootstrapSubject,
+		Kind:     identity.PrincipalService,
+	}, bootstrapTTL)
+	if err != nil {
+		return fmt.Errorf("server: minting the bootstrap credential: %w", err)
+	}
+	if err := s.writeBootstrapToken(token); err != nil {
+		return err
+	}
+
+	cfg := api.Config{
+		Definitions: s.defs,
+		Auth:        local,
+		Runs:        s.infra.store,
+		Advancer:    s.sched,
+		Cache:       s.infra.cache,
+		Fleet:       s.fleet,
+		Catalog:     catalog.New(s.infra.db, s.infra.dialect),
+		OS:          runtime.GOOS,
+		Arch:        runtime.GOARCH,
+	}
+	// Assigned only when there is one. A nil executor.Executor stored in the
+	// interface field would be a non-nil interface holding nil, and Plan's
+	// "this server was built without an execution environment" check — which
+	// exists so a plan cannot silently lie — would never fire.
+	if s.infra.exec != nil {
+		cfg.Environment = s.infra.exec
+	}
+
+	apiSrv, err := api.NewServer(cfg)
+	if err != nil {
+		return err
+	}
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("server: listening for API calls on %s: %w", addr, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = listener.Close()
+		}
+	}()
+
+	s.apiHTTP = &http.Server{
+		Handler:           allowOrigins(apiSrv.Handler(), s.cfg.APIAllowedOrigins),
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		BaseContext:       func(net.Listener) context.Context { return runCtx },
+	}
+	s.apiAddr = listener.Addr().String()
+	s.bootstrap = token
+
+	s.spawn(func() {
+		if serveErr := s.apiHTTP.Serve(listener); serveErr != nil &&
+			!errors.Is(serveErr, http.ErrServerClosed) {
+			s.log.Error("API server stopped", "error", serveErr)
+		}
+	})
+	return nil
+}
+
+// writeBootstrapToken records the credential where a script can read it,
+// readable by nobody else. It is written under the state directory this plane
+// owns alone, beside the database whose principals it authenticates against.
+func (s *Server) writeBootstrapToken(token string) error {
+	if err := os.MkdirAll(s.cfg.BlobRoot, 0o750); err != nil {
+		return fmt.Errorf("server: creating the state directory: %w", err)
+	}
+	path := filepath.Join(s.cfg.BlobRoot, BootstrapTokenFile)
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		return fmt.Errorf("server: writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// stopAPI closes the listener and ends the goroutine serving it.
+//
+// Shutdown first so a call already in flight finishes, and Close immediately
+// after so a WatchRun that is following a run it may follow for days cannot
+// hold the plane open. Both are bounded by ctx, which is the caller's stop
+// deadline: a Stop that could wait forever is not a Stop.
+func (s *Server) stopAPI(ctx context.Context) {
+	if s.apiHTTP == nil {
+		return
+	}
+	grace, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_ = s.apiHTTP.Shutdown(grace)
+	cancel()
+	_ = s.apiHTTP.Close()
+	s.apiHTTP = nil
+	s.apiAddr = ""
+	s.bootstrap = ""
+}
+
+// APIAddr is the address the contract is being served on, and empty when it is
+// not being served. It is the resolved address rather than the configured one:
+// a deployment that asked for port zero gets the port it actually got.
+func (s *Server) APIAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.apiAddr
+}
+
+// BootstrapToken is the credential this plane minted at start-up, and the only
+// copy that will ever exist in memory — the store holds its hash. It is empty
+// when the plane serves no API, because a credential nothing can be presented
+// to is a secret with no purpose and a needless row in the token table.
+func (s *Server) BootstrapToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bootstrap
+}
+
+// allowOrigins answers CORS preflights for the origins a deployment named, and
+// for nobody else.
+//
+// The default is NO origin, which is the only safe one: a browser page on any
+// site could otherwise make credentialed calls to a plane on the developer's
+// own loopback address. A deployment that serves its web app from a different
+// origin — `vite` on :5173 in development — says so explicitly.
+//
+// Credentials travel in an Authorization header rather than a cookie, so this
+// never sets Allow-Credentials: the browser attaches nothing on its own, and
+// a wildcard-with-credentials mistake is impossible here by construction.
+func allowOrigins(next http.Handler, origins []string) http.Handler {
+	if len(origins) == 0 {
+		return next
+	}
+	allowed := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		if trimmed := strings.TrimSpace(origin); trimmed != "" {
+			allowed[trimmed] = struct{}{}
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if _, ok := allowed[origin]; ok {
+			header := w.Header()
+			// Vary, or a cache serves one origin the answer given to another.
+			header.Add("Vary", "Origin")
+			header.Set("Access-Control-Allow-Origin", origin)
+			header.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			header.Set("Access-Control-Allow-Headers",
+				"Authorization, Content-Type, Connect-Protocol-Version, Connect-Timeout-Ms")
+			// Connect reports a unary error's details in headers a browser
+			// can only read when they are exposed.
+			header.Set("Access-Control-Expose-Headers",
+				"Content-Type, Connect-Content-Encoding, Connect-Accept-Encoding")
+			header.Set("Access-Control-Max-Age", "86400")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -153,6 +154,25 @@ type Config struct {
 	// the compilers and libraries the host happens to carry. A deployment
 	// running steps somewhere reproducible supplies that backend here.
 	Executor executor.Executor
+	// APIAddr is where the control plane serves its one contract — the
+	// contract the GUI, the CLI and agents all use (ADR 0013). Empty means
+	// DefaultAPIAddr; "127.0.0.1:0" asks the operating system for a free
+	// port, which is what a test wants and what a second plane on one machine
+	// needs.
+	APIAddr string
+	// NoAPI serves no contract at all. It is for an embedding that runs a
+	// pipeline and exits — `dhole local run` — where a well-known port would
+	// only collide with the `dhole serve` the developer already has up.
+	//
+	// It is an opt-OUT, not an opt-in. A plane that serves nothing is a plane
+	// whose CLI, web client and agents have nothing to talk to, and that was
+	// the state of this binary for four tasks precisely because serving the
+	// API was something somebody had to remember to switch on.
+	NoAPI bool
+	// APIAllowedOrigins are the browser origins allowed to make cross-origin
+	// calls. Empty — the default — allows none, so a page on any site cannot
+	// reach a plane on the developer's own loopback address.
+	APIAllowedOrigins []string
 }
 
 // Server is one control plane.
@@ -173,6 +193,12 @@ type Server struct {
 	// partitions is this process's share of the run-id ring. Nil means the
 	// plane owns every run — see ownsRun.
 	partitions *planePartitions
+
+	// apiHTTP serves internal/api; apiAddr is the address it resolved to and
+	// bootstrap the credential minted for it. All three are guarded by mu.
+	apiHTTP   *http.Server
+	apiAddr   string
+	bootstrap string
 
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -311,6 +337,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	if err := s.serve(ctx, runCtx); err != nil {
 		cancel()
+		s.stopAPI(ctx)
 		s.wg.Wait()
 		s.closeSubscriptions()
 		in.close()
@@ -352,9 +379,16 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	// subject, so an engine that announces itself before anyone is listening
 	// is invisible until it restarts — see the note in consumeRegistrations.
 	if s.cfg.Mode == ModeEmbedded {
-		return s.startEngine(runCtx)
+		if err := s.startEngine(runCtx); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	// And the contract itself, last: everything it answers about — the
+	// definition store, the run log, the scheduler it hands a new run to, the
+	// fleet a plan matches against — is already running by the time the first
+	// call can arrive.
+	return s.startAPI(runCtx)
 }
 
 func (s *Server) spawn(fn func()) {
@@ -667,6 +701,10 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.running = false
 
 	s.cancel()
+
+	// The listener before anything else: a call accepted after this point
+	// would be served by stores that are about to close under it.
+	s.stopAPI(ctx)
 
 	// Closing the subscriptions unblocks whatever is parked in Next: a pull
 	// consumer's fetch does not notice a cancelled context until its wait

@@ -20,6 +20,7 @@ func attachExtras(root *cobra.Command, o *options) {
 		policyCmd(o),
 		localCmd(o),
 		serveCmd(o),
+		tokenCmd(o),
 		versionCmd(o),
 	)
 }
