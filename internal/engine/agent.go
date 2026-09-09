@@ -1,0 +1,577 @@
+// Package engine is the agent that runs steps: the outbound-only half of the
+// wire contract in docs/wire-contract.md.
+//
+// Three rules from that document shape everything here and are the reason the
+// code is not simpler than it is.
+//
+// A dispatch is acknowledged ONLY after its terminal status is published. Ack
+// first and a crash in between loses the step in silence: nothing is left on
+// the bus and no status ever arrived, so the plane has no evidence anything
+// went wrong until the lease expires.
+//
+// The fence token is echoed unchanged on every status and every in-flight
+// entry. It is what lets the plane discard a report from an attempt that has
+// already been superseded, which is what makes duplicate delivery safe.
+//
+// A step's output has two copies with different jobs. The LogChunks on
+// job.logs.* are live, ephemeral and droppable. The object under the dispatch's
+// output_prefix is the authoritative one, and it is finished BEFORE the
+// terminal status goes out — a reader that acts on the status must never find a
+// half-written log.
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"sync"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/blobstore"
+	"github.com/azrtydxb/dhole/internal/bus"
+	"github.com/azrtydxb/dhole/internal/cas"
+	"github.com/azrtydxb/dhole/internal/executor"
+	"github.com/azrtydxb/dhole/internal/wire"
+)
+
+// DispatchStream is the work-queue stream the control plane publishes
+// dispatches into. An engine only ever binds a consumer on it: engine
+// credentials cannot create a stream, and an engine that could would be able to
+// reshape the plane's queue.
+const DispatchStream = "DISPATCH"
+
+// subscribeRetry is how long Run keeps trying to bind its consumers. An engine
+// may well start before the control plane has created the stream, and exiting
+// on that would make start-up ordering load-bearing.
+const (
+	subscribeRetry   = 500 * time.Millisecond
+	subscribeTimeout = 60 * time.Second
+)
+
+// releaseTimeout bounds sandbox teardown. It runs on a context detached from
+// the job's, because a cancelled job still has to leave nothing behind.
+const releaseTimeout = 30 * time.Second
+
+// Config is everything an agent needs. There is no callback into the control
+// plane anywhere in it: a JobDispatch is self-contained, and the stores it
+// names are reached directly.
+type Config struct {
+	// EngineID is this engine's stable identity on the bus.
+	EngineID string
+	// Tier is the trust tier it runs in. Its bus credentials permit its own
+	// tier's dispatch subjects and nothing else; this field only decides which
+	// of them it asks for.
+	Tier string
+	// Bus is the transport. The engine dials it; nothing dials the engine.
+	Bus bus.Bus
+	// Executor is where steps actually run.
+	Executor executor.Executor
+	// Blobs holds the authoritative log of every attempt.
+	Blobs blobstore.Store
+	// CAS holds the inputs a step declares and the outputs it produces.
+	CAS cas.Store
+	// Slots is how many jobs this engine runs at once.
+	Slots int
+}
+
+// Agent is one running engine.
+type Agent struct {
+	cfg      Config
+	registry *registryClient
+	// slots is the concurrency bound, taken before a dispatch is fetched so
+	// the engine never holds an unacknowledged message it has no room to run.
+	slots chan struct{}
+}
+
+// New validates cfg and returns an agent that has not started.
+func New(cfg Config) (*Agent, error) {
+	switch {
+	case cfg.EngineID == "":
+		return nil, errors.New("engine: EngineID is required")
+	case cfg.Tier == "":
+		return nil, errors.New("engine: Tier is required")
+	case cfg.Bus == nil:
+		return nil, errors.New("engine: Bus is required")
+	case cfg.Executor == nil:
+		return nil, errors.New("engine: Executor is required")
+	case cfg.Blobs == nil:
+		return nil, errors.New("engine: Blobs is required")
+	case cfg.CAS == nil:
+		return nil, errors.New("engine: CAS is required")
+	}
+	if cfg.Slots <= 0 {
+		cfg.Slots = 1
+	}
+	return &Agent{
+		cfg:      cfg,
+		registry: newRegistryClient(cfg),
+		slots:    make(chan struct{}, cfg.Slots),
+	}, nil
+}
+
+// Run registers the engine, heartbeats, and works dispatches until ctx is done.
+// It returns nil on a clean shutdown; a cancelled context is how an engine is
+// asked to stop, not an error to report.
+func (a *Agent) Run(ctx context.Context) error {
+	if err := a.registry.register(ctx); err != nil {
+		return err
+	}
+
+	hashes, err := satisfiableCapsHashes(a.cfg.Executor.Capabilities())
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.registry.run(ctx)
+	}()
+
+	subs := make([]bus.Subscription, 0, len(hashes))
+	defer func() {
+		for _, sub := range subs {
+			_ = sub.Close()
+		}
+	}()
+
+	errs := make(chan error, len(hashes))
+	for _, hash := range hashes {
+		subject := bus.SubjectDispatch(a.cfg.Tier, hash)
+		sub, err := a.subscribe(ctx, hash, subject)
+		if err != nil {
+			wg.Wait()
+			return err
+		}
+		subs = append(subs, sub)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := a.pump(ctx, sub); err != nil {
+				errs <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+	if err := <-errs; err != nil {
+		return err
+	}
+	return nil
+}
+
+// subscribe binds the durable consumer for one capability set. The consumer is
+// named for the tier and the capability set rather than for this engine, which
+// is what makes the dispatch subject a work queue: every engine that can serve
+// the set pulls from the same consumer, and exactly one of them gets each
+// message.
+func (a *Agent) subscribe(ctx context.Context, hash, subject string) (bus.Subscription, error) {
+	deadline := time.Now().Add(subscribeTimeout)
+	consumer := "engines-" + a.cfg.Tier + "-" + hash
+	for {
+		sub, err := a.cfg.Bus.SubscribePull(ctx, DispatchStream, consumer, subject)
+		if err == nil {
+			return sub, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("engine: subscribe %q: %w", subject, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(subscribeRetry):
+		}
+	}
+}
+
+// pump takes one dispatch at a time, having first taken a slot. Fetching only
+// what it can run keeps the unacknowledged set as small as the work actually in
+// progress — whatever this engine holds when it dies is what has to be
+// redelivered.
+func (a *Agent) pump(ctx context.Context, sub bus.Subscription) error {
+	var running sync.WaitGroup
+	defer running.Wait()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case a.slots <- struct{}{}:
+		}
+
+		msg, err := sub.Next(ctx)
+		if err != nil {
+			<-a.slots
+			if ctx.Err() != nil || errors.Is(err, bus.ErrSubscriptionClosed) {
+				return nil
+			}
+			return fmt.Errorf("engine: next dispatch: %w", err)
+		}
+
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			defer func() { <-a.slots }()
+			a.handle(ctx, msg)
+		}()
+	}
+}
+
+// handle takes one dispatch from delivery to acknowledgement.
+func (a *Agent) handle(ctx context.Context, msg bus.Message) {
+	var d dholev1.JobDispatch
+	if err := proto.Unmarshal(msg.Data(), &d); err != nil {
+		// There is no run or step to report against, and redelivering bytes
+		// that will not parse would loop forever. Acknowledging drops exactly
+		// one unparseable message rather than stalling the whole queue.
+		_ = msg.Ack()
+		return
+	}
+
+	status := a.run(ctx, &d)
+
+	// The ordering rule, and the reason this function is not shorter: the
+	// terminal status goes out first, and only a successful publish earns the
+	// ack. A publish that fails leaves the dispatch outstanding, so it is
+	// redelivered rather than lost.
+	if err := a.publish(ctx, &d, status); err != nil {
+		return
+	}
+	_ = msg.Ack()
+}
+
+// run does the work and returns the terminal status for it. Every path through
+// it returns a status: silence would be indistinguishable from a dead engine,
+// and the step would hang until its lease expired.
+func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobStatus {
+	if _, err := wire.Negotiate([]uint32{d.GetProtocolVersion()}); err != nil {
+		return a.failure(d, err.Error())
+	}
+	if d.GetTenant().GetId() == "" {
+		return a.failure(d, "dispatch carries no tenant; every stored object is tenant-scoped")
+	}
+	if err := a.checkSecrets(d); err != nil {
+		return a.failure(d, err.Error())
+	}
+	if len(d.GetCommand()) == 0 {
+		return a.failure(d, "dispatch carries no command")
+	}
+
+	// From here the engine owns the step, so it says so before running it and
+	// declares it on every heartbeat until the terminal status.
+	key := a.registry.hold(d)
+	defer a.registry.release(key)
+	if err := a.publish(ctx, d, a.phase(d, dholev1.Phase_PHASE_ACCEPTED)); err != nil {
+		return a.failure(d, "publishing the accepted status: "+err.Error())
+	}
+
+	return a.execute(ctx, d)
+}
+
+// checkSecrets refuses a secret this engine could not redeem. The refusal names
+// the binding, never the handle: a status is durable and archived, and a handle
+// in one is a credential at rest in the run history.
+func (a *Agent) checkSecrets(d *dholev1.JobDispatch) error {
+	if len(d.GetSecrets()) == 0 {
+		return nil
+	}
+	for _, c := range a.cfg.Executor.Capabilities() {
+		if c == dholev1.Capability_CAPABILITY_SECRETS {
+			return nil
+		}
+	}
+	names := make([]string, 0, len(d.GetSecrets()))
+	for _, s := range d.GetSecrets() {
+		names = append(names, s.GetName())
+	}
+	return fmt.Errorf("dispatch carries secrets %v but this engine does not advertise CAPABILITY_SECRETS", names)
+}
+
+// execute acquires a sandbox, materialises the declared inputs, runs the
+// command, finishes the authoritative log, and collects the declared outputs.
+func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobStatus {
+	tenantID := d.GetTenant().GetId()
+
+	// The wire carries no lease scope, so the only honest choice is the one
+	// with no unhashable carried state: the sandbox dies with the step.
+	sandbox, err := a.cfg.Executor.Acquire(ctx, executor.Spec{
+		Env:   d.GetEnv(),
+		Lease: executor.LeaseStep,
+		Requirements: executor.Requirements{
+			Capabilities: d.GetStep().GetCapabilities(),
+		},
+	})
+	if err != nil {
+		return a.failure(d, "acquiring a sandbox: "+err.Error())
+	}
+	defer func() {
+		// Detached from ctx on purpose: a cancelled job still has to leave
+		// nothing running on the host.
+		release, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+		defer cancel()
+		_ = sandbox.Release(release)
+	}()
+
+	if err := a.materialise(ctx, tenantID, sandbox, d); err != nil {
+		return a.failure(d, err.Error())
+	}
+
+	sink, err := newLogSink(ctx, a.cfg.Bus, d)
+	if err != nil {
+		return a.failure(d, "opening the log: "+err.Error())
+	}
+	defer sink.discard()
+
+	exitCode, execErr := sandbox.Exec(ctx, executor.Cmd{
+		Args:   d.GetCommand(),
+		Env:    d.GetEnv(),
+		Stdout: sink.writer(dholev1.Stream_STREAM_STDOUT),
+		Stderr: sink.writer(dholev1.Stream_STREAM_STDERR),
+	})
+
+	// The authoritative copy is finished here, before any terminal status can
+	// be published. Anyone who reads log_key off a status finds the whole log.
+	logKey := logKeyFor(d)
+	if err := sink.flush(ctx, a.cfg.Blobs, tenantID, logKey); err != nil {
+		return a.failure(d, "writing the authoritative log: "+err.Error())
+	}
+
+	if execErr != nil {
+		status := a.failure(d, "running the step: "+execErr.Error())
+		status.LogKey = logKey
+		return status
+	}
+
+	status := a.phase(d, dholev1.Phase_PHASE_SUCCEEDED)
+	status.ExitCode = exitCode
+	status.LogKey = logKey
+	if exitCode != 0 {
+		status.Phase = dholev1.Phase_PHASE_FAILED
+		status.Error = fmt.Sprintf("step exited %d", exitCode)
+		return status
+	}
+
+	outputs, err := a.collect(ctx, tenantID, sandbox, d)
+	if err != nil {
+		status.Phase = dholev1.Phase_PHASE_FAILED
+		status.Error = err.Error()
+		return status
+	}
+	status.Outputs = outputs
+	return status
+}
+
+// materialise puts every declared input into the sandbox under its port name. A
+// step never inherits ambient filesystem state (ADR 0001): what it can read is
+// exactly what it declared.
+func (a *Agent) materialise(ctx context.Context, tenantID string, sandbox executor.Sandbox, d *dholev1.JobDispatch) error {
+	for _, in := range d.GetInputs() {
+		r, err := a.open(ctx, tenantID, in)
+		if err != nil {
+			return fmt.Errorf("fetching input %q: %w", in.GetPort(), err)
+		}
+		err = sandbox.Put(ctx, in.GetPort(), r)
+		closeErr := r.Close()
+		if err != nil {
+			return fmt.Errorf("placing input %q: %w", in.GetPort(), err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("reading input %q: %w", in.GetPort(), closeErr)
+		}
+	}
+	return nil
+}
+
+// open resolves one input reference. Content-addressed bytes come from the CAS;
+// bytes the plane named itself come from the blob store.
+func (a *Agent) open(ctx context.Context, tenantID string, in *dholev1.InputRef) (io.ReadCloser, error) {
+	if in.GetDigest().GetHex() != "" {
+		return a.cfg.CAS.Get(ctx, tenantID, in.GetDigest())
+	}
+	if in.GetKey() != "" {
+		return a.cfg.Blobs.Read(ctx, tenantID, in.GetKey())
+	}
+	return nil, errors.New("input reference names neither a digest nor a key")
+}
+
+// collect stores every declared output by content and reports its digest. An
+// output left in the sandbox would vanish with it, and the next step cannot see
+// another engine's host.
+func (a *Agent) collect(ctx context.Context, tenantID string, sandbox executor.Sandbox, d *dholev1.JobDispatch) ([]*dholev1.OutputRef, error) {
+	ports := d.GetStep().GetOutputs()
+	outputs := make([]*dholev1.OutputRef, 0, len(ports))
+	for _, port := range ports {
+		r, err := sandbox.Get(ctx, port.GetName())
+		if err != nil {
+			return nil, fmt.Errorf("reading output %q: %w", port.GetName(), err)
+		}
+		counted := &countingReader{r: r}
+		digest, putErr := a.cfg.CAS.Put(ctx, tenantID, counted)
+		closeErr := r.Close()
+		if putErr != nil {
+			return nil, fmt.Errorf("storing output %q: %w", port.GetName(), putErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("reading output %q: %w", port.GetName(), closeErr)
+		}
+		outputs = append(outputs, &dholev1.OutputRef{
+			Port:      port.GetName(),
+			Digest:    digest,
+			SizeBytes: counted.n,
+		})
+	}
+	return outputs, nil
+}
+
+// publish sends one status on the step's status subject.
+func (a *Agent) publish(ctx context.Context, d *dholev1.JobDispatch, status *dholev1.JobStatus) error {
+	// Detached from the job's context: a shutdown or a cancelled step must
+	// still be reported, or the plane learns nothing until the lease expires.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishTimeout)
+	defer cancel()
+	return a.cfg.Bus.Publish(ctx, bus.SubjectStatus(d.GetRunId(), d.GetStepId()), status)
+}
+
+// phase builds a status for this dispatch, echoing the fence token unchanged.
+// Every status in this package is built here so there is one place a fence can
+// be got wrong instead of six.
+func (a *Agent) phase(d *dholev1.JobDispatch, p dholev1.Phase) *dholev1.JobStatus {
+	return &dholev1.JobStatus{
+		RunId:      d.GetRunId(),
+		StepId:     d.GetStepId(),
+		Attempt:    d.GetAttempt(),
+		FenceToken: d.GetFenceToken(),
+		Phase:      p,
+	}
+}
+
+func (a *Agent) failure(d *dholev1.JobDispatch, message string) *dholev1.JobStatus {
+	status := a.phase(d, dholev1.Phase_PHASE_FAILED)
+	status.Error = message
+	return status
+}
+
+// logKeyFor names the authoritative log under the dispatch's output prefix, per
+// attempt: a retry must not overwrite the evidence of the attempt before it.
+func logKeyFor(d *dholev1.JobDispatch) string {
+	return path.Join(d.GetOutputPrefix(), fmt.Sprintf("attempt-%d.log", d.GetAttempt()))
+}
+
+// countingReader counts what passed through it, so an output's size is known
+// without reading the bytes twice.
+type countingReader struct {
+	r io.Reader
+	n uint64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += uint64(n) // #nosec G115 -- n is never negative.
+	return n, err
+}
+
+// logSink is both copies of a step's output. Every write lands in a spool file
+// — the authoritative copy, finished before any terminal status — and is
+// mirrored as a LogChunk on the ephemeral subject for whoever is watching.
+type logSink struct {
+	ctx     context.Context //nolint:containedctx // the sink outlives no call; it is written to from Exec's own goroutines.
+	bus     bus.Bus
+	subject string
+	runID   string
+	stepID  string
+	attempt uint32
+
+	mu   sync.Mutex
+	seq  uint64
+	file *os.File
+}
+
+func newLogSink(ctx context.Context, b bus.Bus, d *dholev1.JobDispatch) (*logSink, error) {
+	file, err := os.CreateTemp("", "dhole-log-")
+	if err != nil {
+		return nil, err
+	}
+	return &logSink{
+		ctx:     ctx,
+		bus:     b,
+		subject: bus.SubjectLogs(d.GetRunId(), d.GetStepId()),
+		runID:   d.GetRunId(),
+		stepID:  d.GetStepId(),
+		attempt: d.GetAttempt(),
+		file:    file,
+	}, nil
+}
+
+// writer returns the io.Writer for one stream. Both streams share the sink's
+// sequence and spool file, so the authoritative log is in the order the step
+// actually produced it.
+func (s *logSink) writer(stream dholev1.Stream) io.Writer {
+	return &logStream{sink: s, stream: stream}
+}
+
+func (s *logSink) write(stream dholev1.Stream, p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n, err := s.file.Write(p)
+	if err != nil {
+		return n, err
+	}
+	s.seq++
+
+	// The live copy is best-effort by contract: a viewer that misses a chunk
+	// sees the gap in seq, and the whole log is in the object either way. A
+	// failure here must never fail the step.
+	chunk := &dholev1.LogChunk{
+		RunId:   s.runID,
+		StepId:  s.stepID,
+		Seq:     s.seq,
+		Data:    append([]byte(nil), p[:n]...),
+		Stream:  stream,
+		Attempt: s.attempt,
+	}
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), publishTimeout)
+	defer cancel()
+	_ = s.bus.Publish(pubCtx, s.subject, chunk)
+	return n, nil
+}
+
+// flush finishes the authoritative copy. It returns only once the store holds
+// the whole log, which is what lets the terminal status point at it.
+func (s *logSink) flush(ctx context.Context, blobs blobstore.Store, tenantID, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	return blobs.Write(ctx, tenantID, key, s.file)
+}
+
+// discard removes the spool file. The durable copy is in the object store by
+// then; this is only the scratch space it was built in.
+func (s *logSink) discard() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name := s.file.Name()
+	_ = s.file.Close()
+	_ = os.Remove(name)
+}
+
+type logStream struct {
+	sink   *logSink
+	stream dholev1.Stream
+}
+
+func (w *logStream) Write(p []byte) (int, error) { return w.sink.write(w.stream, p) }
