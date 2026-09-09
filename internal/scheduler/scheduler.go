@@ -41,6 +41,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
+	"github.com/azrtydxb/dhole/internal/obs"
 	"github.com/azrtydxb/dhole/internal/outbox"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
@@ -603,6 +604,12 @@ func (s *Scheduler) dispatch(
 		return err
 	}
 
+	// The run's span, and the trace context that travels WITH the dispatch:
+	// the engine that runs this step is another process, and it can only join
+	// the run's trace if the message carries it (docs/wire-contract.md).
+	spanCtx, _ := obs.RunSpan(ctx, tenantID, runID)
+	obs.Inject(spanCtx, dispatchMsg)
+
 	// The key is the same on every attempt of a step, which is exactly what
 	// makes a retry safe: the far end sees the repeat and declines to act
 	// twice (ADR 0002).
@@ -796,6 +803,10 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 	if err != nil {
 		return err
 	}
+	// The run is over, so its span is closed here and on the completion path.
+	// A span left open is never exported, and the run would be missing from
+	// the trace precisely because it failed.
+	defer obs.EndRun(tenantID, runID)
 	return s.append(ctx, tenantID, runstore.Event{
 		RunID:   runID,
 		Type:    RunFailed,
@@ -807,6 +818,7 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 // returns before reaching here once the run is completed, so this is written
 // exactly once per run.
 func (s *Scheduler) complete(ctx context.Context, tenantID, runID string) error {
+	defer obs.EndRun(tenantID, runID)
 	return s.append(ctx, tenantID, runstore.Event{
 		RunID: runID,
 		Type:  runstore.RunCompleted,

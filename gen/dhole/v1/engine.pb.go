@@ -349,8 +349,14 @@ type JobDispatch struct {
 	ProtocolVersion uint32  `protobuf:"varint,9,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	Tenant          *Tenant `protobuf:"bytes,10,opt,name=tenant,proto3" json:"tenant,omitempty"`
 	// Shell command the step runs, when the plugin is a plain command.
-	Command       []string          `protobuf:"bytes,11,rep,name=command,proto3" json:"command,omitempty"`
-	Env           map[string]string `protobuf:"bytes,12,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Command []string          `protobuf:"bytes,11,rep,name=command,proto3" json:"command,omitempty"`
+	Env     map[string]string `protobuf:"bytes,12,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// W3C trace context for the RUN this step belongs to, as carrier headers:
+	// `traceparent`, and `tracestate` when one is set. The control plane writes
+	// it; an engine that wants its work to appear in the run's trace starts its
+	// step span from it rather than from a root of its own. Absent when the
+	// control plane has no tracing configured, which is not an error.
+	TraceContext  map[string]string `protobuf:"bytes,13,rep,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -465,6 +471,13 @@ func (x *JobDispatch) GetCommand() []string {
 func (x *JobDispatch) GetEnv() map[string]string {
 	if x != nil {
 		return x.Env
+	}
+	return nil
+}
+
+func (x *JobDispatch) GetTraceContext() map[string]string {
+	if x != nil {
+		return x.TraceContext
 	}
 	return nil
 }
@@ -1202,7 +1215,7 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06handle\x18\x02 \x01(\tR\x06handle\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x03 \x01(\x03R\texpiresAt\"\xf5\x03\n" +
+	"expires_at\x18\x03 \x01(\x03R\texpiresAt\"\x84\x05\n" +
 	"\vJobDispatch\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x18\n" +
@@ -1217,8 +1230,12 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"\x06tenant\x18\n" +
 	" \x01(\v2\x10.dhole.v1.TenantR\x06tenant\x12\x18\n" +
 	"\acommand\x18\v \x03(\tR\acommand\x120\n" +
-	"\x03env\x18\f \x03(\v2\x1e.dhole.v1.JobDispatch.EnvEntryR\x03env\x1a6\n" +
+	"\x03env\x18\f \x03(\v2\x1e.dhole.v1.JobDispatch.EnvEntryR\x03env\x12L\n" +
+	"\rtrace_context\x18\r \x03(\v2'.dhole.v1.JobDispatch.TraceContextEntryR\ftraceContext\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +
+	"\x11TraceContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x98\x02\n" +
 	"\tJobStatus\x12\x15\n" +
@@ -1301,7 +1318,7 @@ func file_dhole_v1_engine_proto_rawDescGZIP() []byte {
 }
 
 var file_dhole_v1_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_dhole_v1_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_dhole_v1_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_dhole_v1_engine_proto_goTypes = []any{
 	(Phase)(0),                 // 0: dhole.v1.Phase
 	(Stream)(0),                // 1: dhole.v1.Stream
@@ -1319,32 +1336,34 @@ var file_dhole_v1_engine_proto_goTypes = []any{
 	(*Attach)(nil),             // 13: dhole.v1.Attach
 	(*EngineControl)(nil),      // 14: dhole.v1.EngineControl
 	nil,                        // 15: dhole.v1.JobDispatch.EnvEntry
-	(*Digest)(nil),             // 16: dhole.v1.Digest
-	(*Step)(nil),               // 17: dhole.v1.Step
-	(*Tenant)(nil),             // 18: dhole.v1.Tenant
-	(Capability)(0),            // 19: dhole.v1.Capability
+	nil,                        // 16: dhole.v1.JobDispatch.TraceContextEntry
+	(*Digest)(nil),             // 17: dhole.v1.Digest
+	(*Step)(nil),               // 18: dhole.v1.Step
+	(*Tenant)(nil),             // 19: dhole.v1.Tenant
+	(Capability)(0),            // 20: dhole.v1.Capability
 }
 var file_dhole_v1_engine_proto_depIdxs = []int32{
-	16, // 0: dhole.v1.InputRef.digest:type_name -> dhole.v1.Digest
-	16, // 1: dhole.v1.OutputRef.digest:type_name -> dhole.v1.Digest
-	17, // 2: dhole.v1.JobDispatch.step:type_name -> dhole.v1.Step
+	17, // 0: dhole.v1.InputRef.digest:type_name -> dhole.v1.Digest
+	17, // 1: dhole.v1.OutputRef.digest:type_name -> dhole.v1.Digest
+	18, // 2: dhole.v1.JobDispatch.step:type_name -> dhole.v1.Step
 	2,  // 3: dhole.v1.JobDispatch.inputs:type_name -> dhole.v1.InputRef
 	4,  // 4: dhole.v1.JobDispatch.secrets:type_name -> dhole.v1.SecretRef
-	18, // 5: dhole.v1.JobDispatch.tenant:type_name -> dhole.v1.Tenant
+	19, // 5: dhole.v1.JobDispatch.tenant:type_name -> dhole.v1.Tenant
 	15, // 6: dhole.v1.JobDispatch.env:type_name -> dhole.v1.JobDispatch.EnvEntry
-	0,  // 7: dhole.v1.JobStatus.phase:type_name -> dhole.v1.Phase
-	3,  // 8: dhole.v1.JobStatus.outputs:type_name -> dhole.v1.OutputRef
-	1,  // 9: dhole.v1.LogChunk.stream:type_name -> dhole.v1.Stream
-	19, // 10: dhole.v1.EngineRegistration.capabilities:type_name -> dhole.v1.Capability
-	9,  // 11: dhole.v1.EngineHeartbeat.in_flight:type_name -> dhole.v1.InFlight
-	11, // 12: dhole.v1.EngineControl.cancel:type_name -> dhole.v1.Cancel
-	12, // 13: dhole.v1.EngineControl.drain:type_name -> dhole.v1.Drain
-	13, // 14: dhole.v1.EngineControl.attach:type_name -> dhole.v1.Attach
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	16, // 7: dhole.v1.JobDispatch.trace_context:type_name -> dhole.v1.JobDispatch.TraceContextEntry
+	0,  // 8: dhole.v1.JobStatus.phase:type_name -> dhole.v1.Phase
+	3,  // 9: dhole.v1.JobStatus.outputs:type_name -> dhole.v1.OutputRef
+	1,  // 10: dhole.v1.LogChunk.stream:type_name -> dhole.v1.Stream
+	20, // 11: dhole.v1.EngineRegistration.capabilities:type_name -> dhole.v1.Capability
+	9,  // 12: dhole.v1.EngineHeartbeat.in_flight:type_name -> dhole.v1.InFlight
+	11, // 13: dhole.v1.EngineControl.cancel:type_name -> dhole.v1.Cancel
+	12, // 14: dhole.v1.EngineControl.drain:type_name -> dhole.v1.Drain
+	13, // 15: dhole.v1.EngineControl.attach:type_name -> dhole.v1.Attach
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_engine_proto_init() }
@@ -1365,7 +1384,7 @@ func file_dhole_v1_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_engine_proto_rawDesc), len(file_dhole_v1_engine_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

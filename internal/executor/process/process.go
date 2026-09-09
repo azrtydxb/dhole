@@ -88,6 +88,37 @@ type sandbox struct {
 	mu       sync.Mutex
 	released bool
 	running  map[int]struct{} // process group ids of live commands
+	// usage of the most recently finished command, when the platform reports
+	// it. Kept here because it exists only on the ProcessState of a reaped
+	// process: nothing can ask for it afterwards.
+	usage    processUsage
+	hasUsage bool
+}
+
+// processUsage is what one finished command consumed.
+type processUsage struct {
+	cpuSeconds  float64
+	maxRSSBytes int64
+}
+
+// LastUsage reports the resources of the most recently finished command, and
+// false when this platform does not report them. It satisfies the optional
+// interface telemetry looks for, without this package depending on telemetry.
+func (s *sandbox) LastUsage() (cpuSeconds float64, maxRSSBytes int64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.usage.cpuSeconds, s.usage.maxRSSBytes, s.hasUsage
+}
+
+func (s *sandbox) recordUsage(state *os.ProcessState) {
+	cpuSeconds, maxRSSBytes, ok := usageOf(state)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usage = processUsage{cpuSeconds: cpuSeconds, maxRSSBytes: maxRSSBytes}
+	s.hasUsage = true
 }
 
 // Exec runs a command to completion. A non-zero exit is reported as an exit
@@ -128,6 +159,7 @@ func (s *sandbox) Exec(ctx context.Context, cmd executor.Cmd) (int32, error) {
 	s.track(c.Process.Pid)
 	err := c.Wait()
 	s.untrack(c.Process.Pid)
+	s.recordUsage(c.ProcessState)
 
 	var exitErr *exec.ExitError
 	switch {

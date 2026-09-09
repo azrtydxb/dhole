@@ -58,6 +58,12 @@ message JobDispatch {
   // Shell command the step runs, when the plugin is a plain command.
   repeated string command = 11;
   map<string, string> env = 12;
+  // W3C trace context for the RUN this step belongs to, as carrier headers:
+  // `traceparent`, and `tracestate` when one is set. The control plane writes
+  // it; an engine that wants its work to appear in the run's trace starts its
+  // step span from it rather than from a root of its own. Absent when the
+  // control plane has no tracing configured, which is not an error.
+  map<string, string> trace_context = 13;
 }
 
 // Phase is where a job stands. Only terminal phases carry an exit code.

@@ -109,6 +109,31 @@ the step would hang until its lease expired.
 Within a major version, schema changes are additive only. Fields are never
 renumbered, never removed, and never change meaning.
 
+## Trace context
+
+`JobDispatch.trace_context` carries the W3C trace context of the RUN this step
+belongs to, as carrier headers: `traceparent`, and `tracestate` when one is
+set. It is a `map<string, string>` rather than a named field precisely so that
+an engine which copies the whole map forward keeps working when the W3C spec
+grows another header.
+
+An engine that wants its work to appear in the run's trace must start its
+step span FROM this context rather than from a root of its own. A step runs in
+a different process from the scheduler that dispatched it, so this map is the
+only thing joining the two halves: an engine that ignores it still runs the
+step correctly, and still emits perfectly good spans, but they land in a
+second, disconnected trace and the run's timeline silently stops being
+answerable. Nothing fails, which is what makes it worth writing down.
+
+An engine that emits no telemetry ignores the field. It must not echo it back
+on a `JobStatus`, invent one, or treat an absent one as an error: a control
+plane with no tracing configured sends no trace context, and that is a normal
+deployment rather than a fault.
+
+The field is additive within the major version, like everything else here: an
+engine built before it existed sees an unknown field, preserves it, and is
+unaffected.
+
 ## Secrets
 
 `JobDispatch.secrets` carries `SecretRef`s, never values. A dispatch is durable,
