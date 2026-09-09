@@ -418,6 +418,7 @@ Files: `internal/defstore/`, `internal/api/`
 Interfaces: adds a revision-history query to `defstore.Store`; gives the editing head a home in the schema.
 
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
+- [ ] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
 - [ ] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
 - [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
 
@@ -438,11 +439,11 @@ Interfaces: produces `Validate(ctx, *ValidateRequest) (*ValidateResponse{repeate
 Files: `cmd/dhole/cli/`, `cmd/dhole/cli/gen.go`, `cmd/dhole/cli/coverage_test.go`, `cmd/dhole/cli/run.go`, `cmd/dhole/cli/pipeline.go`
 Interfaces: produces commands `dhole pipeline get|apply|validate|plan|revisions|approve`, `dhole run start|watch|logs|cancel`, `dhole engine list|drain`, `dhole policy test`, `dhole local run`.
 
-- [ ] Write `cmd/dhole/cli/coverage_test.go` asserting `TestCLICoversEveryRPC`: reflect over the `PipelineService` and `RunService` protobuf descriptors and require every RPC name maps to a registered cobra command, failing with the list of uncovered RPCs. Run — expect FAIL with "undefined: cli.Root".
-- [ ] Add `TestLocalRunExecutesWithoutServer` asserting `dhole local run testdata/pipelines/two-step.yaml` completes using an in-process embedded server and prints step outputs.
-- [ ] Add `TestCLIOutputIsJSONWhenRequested` asserting `--output json` emits parseable JSON for `plan`.
-- [ ] Implement `cmd/dhole/cli/gen.go` generating a command stub per RPC from the descriptors at build time, and the hand-written commands for the friendlier surfaces.
-- [ ] Run `go test ./cmd/dhole/...` — expect PASS. Commit.
+- [x] Write `cmd/dhole/cli/coverage_test.go` asserting `TestCLICoversEveryRPC`: reflect over the `PipelineService` and `RunService` protobuf descriptors and require every RPC name maps to a registered cobra command, failing with the list of uncovered RPCs. Run — expect FAIL with "undefined: cli.Root".
+- [x] Add `TestLocalRunExecutesWithoutServer` asserting `dhole local run testdata/pipelines/two-step.yaml` completes using an in-process embedded server and prints step outputs.
+- [x] Add `TestCLIOutputIsJSONWhenRequested` asserting `--output json` emits parseable JSON for `plan`.
+- [x] Implement `cmd/dhole/cli/gen.go` generating a command stub per RPC from the descriptors at build time, and the hand-written commands for the friendlier surfaces.
+- [x] Run `go test ./cmd/dhole/...` — expect PASS. Commit.
 
 ## Task 30: Catalog of step, plugin, engine and trigger types
 
