@@ -170,17 +170,16 @@ func (s *Step) Request(ctx context.Context, runID, stepID, prompt string) error 
 		if gate.awaiting {
 			return nil
 		}
-		sequence, err := nextSequence(ctx, tx, s.tenantID)
-		if err != nil {
-			return err
-		}
 		if err := tx.Append(ctx, s.tenantID, runstore.Event{
-			RunID:    runID,
-			StepID:   stepID,
-			Sequence: sequence,
-			Type:     scheduler.StepAwaitingApproval,
-			Payload:  payload,
-			At:       s.now().UTC(),
+			RunID:  runID,
+			StepID: stepID,
+			// Sequence 0: the store allocates it inside this transaction.
+			// Computing it here would read a high-water mark another
+			// caller is about to write, and the loser of that race is
+			// discarded silently by the idempotent insert.
+			Type:    scheduler.StepAwaitingApproval,
+			Payload: payload,
+			At:      s.now().UTC(),
 		}); err != nil {
 			return fmt.Errorf("approval: request %s/%s: %w", runID, stepID, err)
 		}
@@ -227,17 +226,12 @@ func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, appro
 		if !gate.awaiting {
 			return fmt.Errorf("%w for %s/%s", ErrNotAwaiting, runID, stepID)
 		}
-		sequence, err := nextSequence(ctx, tx, s.tenantID)
-		if err != nil {
-			return err
-		}
 		events, err := s.decision(runID, stepID, approver, approved)
 		if err != nil {
 			return err
 		}
 		for _, e := range events {
-			e.Sequence = sequence
-			sequence++
+			// Sequence stays 0: the store allocates inside this transaction.
 			if err := tx.Append(ctx, s.tenantID, e); err != nil {
 				return fmt.Errorf("approval: deciding %s/%s: %w", runID, stepID, err)
 			}
@@ -364,31 +358,6 @@ func (s *Step) read(ctx context.Context, tx runstore.Tx, runID, stepID string) (
 		return gateState{}, fmt.Errorf("approval: reading %s/%s: %w", runID, stepID, err)
 	}
 	return state, nil
-}
-
-// nextSequence is the tenant's next log position, read on this transaction's
-// own connection for the reason read gives.
-func nextSequence(ctx context.Context, tx runstore.Tx, tenantID string) (uint64, error) {
-	const q = `SELECT COALESCE(MAX(sequence), 0) FROM run_events WHERE tenant_id = ?`
-	rows, err := tx.Query(ctx, tx.Dialect().Rebind(q), tenantID)
-	if err != nil {
-		return 0, fmt.Errorf("approval: reading sequence for %s: %w", tenantID, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var last uint64
-	if rows.Next() {
-		if err := rows.Scan(&last); err != nil {
-			return 0, fmt.Errorf("approval: reading sequence for %s: %w", tenantID, err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("approval: reading sequence for %s: %w", tenantID, err)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("approval: reading sequence for %s: %w", tenantID, err)
-	}
-	return last + 1, nil
 }
 
 // UnmarshalRequest decodes a STEP_AWAITING_APPROVAL payload.

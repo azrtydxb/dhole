@@ -381,16 +381,15 @@ func (s *Server) StartRun(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	sequence, err := s.runs.LastSequence(ctx, p.TenantID)
-	if err != nil {
-		return nil, storeError("read run log", err)
-	}
 	if err := s.runs.Append(ctx, p.TenantID, runstore.Event{
-		RunID:    runID,
-		Sequence: sequence + 1,
-		Type:     runstore.RunCreated,
-		Payload:  payload,
-		At:       s.now().UTC(),
+		RunID: runID,
+		// Sequence 0: the store allocates it in the same transaction as the
+		// write. Reading LastSequence here reads a high-water mark another
+		// caller is about to write, and the loser of that race is discarded
+		// silently by the idempotent insert.
+		Type:    runstore.RunCreated,
+		Payload: payload,
+		At:      s.now().UTC(),
 	}); err != nil {
 		return nil, storeError("record run", err)
 	}

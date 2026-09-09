@@ -344,8 +344,8 @@ overtaking them, so nothing is broken today — but they can still collide with
 each other, and a collision is silent: the append is `ON CONFLICT DO NOTHING`
 for idempotence, so the loser is simply never written.
 
-- [ ] `internal/wait`, `internal/steps/approval` and `internal/api` append with `Sequence: 0`.
-- [ ] Add the test that two of them appending concurrently cannot lose an event — it must fail on the tree as it stands.
+- [x] `internal/wait`, `internal/steps/approval` and `internal/api` append with `Sequence: 0`.
+- [x] Add the test that two of them appending concurrently cannot lose an event — it must fail on the tree as it stands.
 
 ## Task 19: Effect classes, retry and idempotency keys
 

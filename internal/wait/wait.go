@@ -143,17 +143,16 @@ func (t *Timers) Schedule(ctx context.Context, tenantID, runID, stepID string, a
 			return nil
 		}
 
-		sequence, err := nextSequence(ctx, tx, tenantID)
-		if err != nil {
-			return err
-		}
 		if err := tx.Append(ctx, tenantID, runstore.Event{
-			RunID:    runID,
-			StepID:   stepID,
-			Sequence: sequence,
-			Type:     scheduler.StepAwaitingTimer,
-			Payload:  payload,
-			At:       time.Now().UTC(),
+			RunID:  runID,
+			StepID: stepID,
+			// Sequence 0: the store allocates it inside this transaction.
+			// Computing it here would read a high-water mark another
+			// caller is about to write, and the loser of that race is
+			// discarded silently by the idempotent insert.
+			Type:    scheduler.StepAwaitingTimer,
+			Payload: payload,
+			At:      time.Now().UTC(),
 		}); err != nil {
 			return fmt.Errorf("wait: schedule %s/%s: %w", runID, stepID, err)
 		}
@@ -243,7 +242,6 @@ func (t *Timers) Due(ctx context.Context, now time.Time) ([]Due, error) {
 		// log's own position, taken on this transaction's connection rather
 		// than through the store, which on SQLite would deadlock against the
 		// transaction already holding it.
-		sequences := map[string]uint64{}
 		for _, d := range claimed {
 			if err := markFired(ctx, tx, d, at); err != nil {
 				return err
@@ -255,14 +253,7 @@ func (t *Timers) Due(ctx context.Context, now time.Time) ([]Due, error) {
 			if orphaned {
 				continue
 			}
-			if _, ok := sequences[d.TenantID]; !ok {
-				next, err := nextSequence(ctx, tx, d.TenantID)
-				if err != nil {
-					return err
-				}
-				sequences[d.TenantID] = next
-			}
-			if err := resume(ctx, tx, d, at, sequences); err != nil {
+			if err := resume(ctx, tx, d, at); err != nil {
 				return err
 			}
 			fired = append(fired, d)
@@ -356,9 +347,7 @@ func retired(ctx context.Context, tx runstore.Tx, d Due) (bool, error) {
 
 // resume appends the two events that end the wait: the audit record, and the
 // step's own success, which is what lifts the gate the scheduler honours.
-func resume(
-	ctx context.Context, tx runstore.Tx, d Due, at time.Time, sequences map[string]uint64,
-) error {
+func resume(ctx context.Context, tx runstore.Tx, d Due, at time.Time) error {
 	payload, err := json.Marshal(Fired{DueAt: d.At, FiredAt: at})
 	if err != nil {
 		return fmt.Errorf("wait: firing %s/%s: %w", d.RunID, d.StepID, err)
@@ -379,38 +368,12 @@ func resume(
 		{RunID: d.RunID, StepID: d.StepID, Type: StepTimerFired, Payload: payload, At: at},
 		{RunID: d.RunID, StepID: d.StepID, Type: runstore.StepSucceeded, Payload: status, At: at},
 	} {
-		e.Sequence = sequences[d.TenantID]
-		sequences[d.TenantID]++
+		// Sequence stays 0 so the store allocates inside this transaction.
 		if err := tx.Append(ctx, d.TenantID, e); err != nil {
 			return fmt.Errorf("wait: firing %s/%s: %w", d.RunID, d.StepID, err)
 		}
 	}
 	return nil
-}
-
-// nextSequence is the tenant's next log position, read on this transaction's
-// own connection.
-func nextSequence(ctx context.Context, tx runstore.Tx, tenantID string) (uint64, error) {
-	const q = `SELECT COALESCE(MAX(sequence), 0) FROM run_events WHERE tenant_id = ?`
-	rows, err := tx.Query(ctx, tx.Dialect().Rebind(q), tenantID)
-	if err != nil {
-		return 0, fmt.Errorf("wait: reading sequence for %s: %w", tenantID, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var last uint64
-	if rows.Next() {
-		if err := rows.Scan(&last); err != nil {
-			return 0, fmt.Errorf("wait: reading sequence for %s: %w", tenantID, err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("wait: reading sequence for %s: %w", tenantID, err)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("wait: reading sequence for %s: %w", tenantID, err)
-	}
-	return last + 1, nil
 }
 
 // exists runs a COUNT(*) query written with `?` placeholders and says whether

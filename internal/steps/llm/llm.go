@@ -415,10 +415,6 @@ func (s *Step) halt(ctx context.Context, runID, stepID, reason string) error {
 		return fmt.Errorf("llm: halting %s: %w", runID, err)
 	}
 
-	sequence, err := s.store.LastSequence(ctx, s.tenantID)
-	if err != nil {
-		return fmt.Errorf("llm: halting %s: %w", runID, err)
-	}
 	at := s.now().UTC()
 
 	// One transaction: a step recorded as failed in a run that was never
@@ -428,8 +424,9 @@ func (s *Step) halt(ctx context.Context, runID, stepID, reason string) error {
 			{RunID: runID, StepID: stepID, Type: runstore.StepFailed, Payload: stepFailure, At: at},
 			{RunID: runID, Type: scheduler.RunFailed, Payload: failure, At: at},
 		} {
-			sequence++
-			e.Sequence = sequence
+			// Sequence stays 0: the store allocates it inside this
+			// transaction. A precomputed one can collide with another
+			// caller's, and the loser is discarded without an error.
 			if err := tx.Append(ctx, s.tenantID, e); err != nil {
 				return fmt.Errorf("llm: halting %s: %w", runID, err)
 			}
