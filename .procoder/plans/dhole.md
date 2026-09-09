@@ -362,12 +362,12 @@ Interfaces: produces `defstore.Store` with `Save(ctx, tenantID string, p *dholev
 Files: `internal/mirror/git.go`, `internal/mirror/git_test.go`, `internal/mirror/yaml.go`
 Interfaces: produces `mirror.Git` with `Push(ctx, tenantID string, rev defstore.Revision, p *dholev1.Pipeline) error`, `Status(ctx, tenantID string) (mirror.State, error)`; `mirror.ToYAML(p *dholev1.Pipeline) ([]byte, error)`, `mirror.FromYAML([]byte) (*dholev1.Pipeline, error)`.
 
-- [ ] Write `internal/mirror/git_test.go` asserting `TestGitMirrorEditsAreNotAuthoritative`: push a revision to a bare repo, commit an unrelated change directly in a clone, then push a new revision and require the authoritative YAML overwrites the manual edit and `defstore.Active` is unchanged by it. Run — expect FAIL with "undefined: mirror.NewGit".
-- [ ] Add `TestYAMLRoundTripsLosslessly` asserting `FromYAML(ToYAML(p))` equals `p` by `proto.Equal` for a pipeline exercising every field, so backend export and import stay lossless.
-- [ ] Add `TestYAMLContainsNoBackendSpecificFields` asserting the emitted YAML has no `layout`, `approver` or `state` key.
-- [ ] Add `TestMirrorPushFailureDoesNotBlockSave` asserting that with an unreachable remote, `defstore.Save` still succeeds and `mirror.Status` reports drift.
-- [ ] Implement `internal/mirror/yaml.go` with `protojson` to YAML via `sigs.k8s.io/yaml`, and `internal/mirror/git.go` with `go-git`, committing one file per pipeline under `pipelines/<id>.yaml` and retrying with backoff.
-- [ ] Run `go test ./internal/mirror` — expect PASS. Commit.
+- [x] Write `internal/mirror/git_test.go` asserting `TestGitMirrorEditsAreNotAuthoritative`: push a revision to a bare repo, commit an unrelated change directly in a clone, then push a new revision and require the authoritative YAML overwrites the manual edit and `defstore.Active` is unchanged by it. Run — expect FAIL with "undefined: mirror.NewGit".
+- [x] Add `TestYAMLRoundTripsLosslessly` asserting `FromYAML(ToYAML(p))` equals `p` by `proto.Equal` for a pipeline exercising every field, so backend export and import stay lossless.
+- [x] Add `TestYAMLContainsNoBackendSpecificFields` asserting the emitted YAML has no `layout`, `approver` or `state` key.
+- [x] Add `TestMirrorPushFailureDoesNotBlockSave` asserting that with an unreachable remote, `defstore.Save` still succeeds and `mirror.Status` reports drift.
+- [x] Implement `internal/mirror/yaml.go` with `protojson` to YAML via `sigs.k8s.io/yaml`, and `internal/mirror/git.go` with `go-git`, committing one file per pipeline under `pipelines/<id>.yaml` and retrying with backoff.
+- [x] Run `go test ./internal/mirror` — expect PASS. Commit.
 
 ## Task 27: ConnectRPC API and operation-level editing
 
