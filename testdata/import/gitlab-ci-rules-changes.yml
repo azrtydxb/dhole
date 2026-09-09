@@ -1,0 +1,28 @@
+# The construct Dhole cannot express: `rules:changes` decides at run time
+# whether a job exists at all, based on the diff. Importing it must report the
+# construct AND still emit the job — a quietly dropped job is a pipeline that
+# looks complete and does less than the original.
+stages:
+  - build
+  - test
+
+build:binary:
+  stage: build
+  script:
+    - go build -o dhole ./cmd/dhole
+
+docs:
+  stage: test
+  rules:
+    - changes:
+        - docs/**/*
+        - README.md
+      when: always
+  script:
+    - go run ./cmd/dhole docs lint
+
+unit-tests:
+  stage: test
+  needs: ["build:binary"]
+  script:
+    - go test ./...

@@ -1,0 +1,49 @@
+# A realistic GitHub Actions workflow. The steps inside a job share the
+# runner's working directory; the jobs share it only through the artifact
+# actions. Both are implicit, and both must become explicit ports.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Build
+        run: go build -o dhole ./cmd/dhole
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dhole
+          path: dhole
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: go test ./...
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        run: ./scripts/deploy.sh production
