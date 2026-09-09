@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dhole-test
+  labels:
+    app.kubernetes.io/part-of: dhole
+    dhole.dev/purpose: integration-test

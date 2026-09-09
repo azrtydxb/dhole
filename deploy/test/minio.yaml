@@ -1,0 +1,63 @@
+# MinIO for the integration suite: the S3 implementation of blobstore is held
+# to the same contract as the filesystem one, and that is only meaningful
+# against a real S3 API.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dhole-test-minio
+  namespace: dhole-test
+type: Opaque
+stringData:
+  # Test-only credentials; see the note in postgres.yaml.
+  MINIO_ROOT_USER: dholetest
+  MINIO_ROOT_PASSWORD: dhole-test-only
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: dhole-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          envFrom:
+            - secretRef: { name: dhole-test-minio }
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: dhole-test
+spec:
+  selector: { app: minio }
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001

@@ -1,0 +1,60 @@
+# Postgres for the integration suite. Ephemeral on purpose: the tests create
+# and drop their own schema, and nothing here is worth keeping between runs.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dhole-test-postgres
+  namespace: dhole-test
+type: Opaque
+stringData:
+  # Test-only credentials for a database reachable only inside the cluster
+  # and through an explicit port-forward. Nothing real is stored here.
+  POSTGRES_USER: dhole
+  POSTGRES_PASSWORD: dhole-test-only
+  POSTGRES_DB: dhole
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: dhole-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          envFrom:
+            - secretRef: { name: dhole-test-postgres }
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "dhole", "-d", "dhole"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: dhole-test
+spec:
+  selector: { app: postgres }
+  ports:
+    - port: 5432
+      targetPort: 5432
