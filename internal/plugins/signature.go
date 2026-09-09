@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
@@ -97,43 +96,52 @@ type Signatures interface {
 	Close() error
 }
 
-// sqliteSignatures is the signature store over the same SQLite file as the run
-// event log, exactly as the catalog and the cache are: the DDL is embedded
-// with the run store's and applied by the same migration runner, so the schema
-// has one definition.
-type sqliteSignatures struct {
-	db *sql.DB
+// sqlSignatures is the signature store over the same database as the run event
+// log, exactly as the catalog and the cache are: the DDL is embedded with the
+// run store's and applied by the same migration runner, so the schema has one
+// definition.
+type sqlSignatures struct {
+	db      *sql.DB
+	dialect runstore.Dialect
+	// ownsDB is true only when this store opened the handle itself, which is
+	// what makes Close safe: a store handed a shared handle must not close the
+	// run store's database out from under it.
+	ownsDB bool
 }
 
-var _ Signatures = (*sqliteSignatures)(nil)
+var _ Signatures = (*sqlSignatures)(nil)
 
-// NewSignatures opens the signature store over the SQLite database at path,
-// applying the embedded migrations.
-func NewSignatures(path string) (Signatures, error) {
-	migrated, err := runstore.NewSQLite(path)
-	if err != nil {
-		return nil, fmt.Errorf("plugins: apply migrations: %w", err)
-	}
-	if err := migrated.Close(); err != nil {
-		return nil, fmt.Errorf("plugins: close migration handle: %w", err)
-	}
+// NewSignatures returns the signature store over an already-open handle
+// speaking dialect. The handle is the caller's, and its schema is expected to
+// carry the migrations the run store applies.
+func NewSignatures(db *sql.DB, dialect runstore.Dialect) Signatures {
+	return &sqlSignatures{db: db, dialect: dialect}
+}
 
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	db, err := sql.Open("sqlite", dsn)
+// NewSQLiteSignatures is the single-file convenience: it opens the SQLite
+// database at path, applies the embedded migrations, and hands back a store
+// that owns and closes that handle. It is a shorthand for NewSignatures over
+// runstore.OpenSQLite, not the only way in — a Postgres deployment passes its
+// own handle to NewSignatures.
+func NewSQLiteSignatures(path string) (Signatures, error) {
+	db, err := runstore.OpenSQLite(path)
 	if err != nil {
 		return nil, fmt.Errorf("plugins: open sqlite: %w", err)
 	}
-	// One writer at a time, as the run store does.
-	db.SetMaxOpenConns(1)
-	return &sqliteSignatures{db: db}, nil
+	return &sqlSignatures{db: db, dialect: runstore.DialectSQLite, ownsDB: true}, nil
 }
 
-// Close releases the database handle.
-func (s *sqliteSignatures) Close() error { return s.db.Close() }
+// Close releases the database handle, and only if this store opened it. A
+// handle passed to NewSignatures belongs to whoever opened it.
+func (s *sqlSignatures) Close() error {
+	if !s.ownsDB {
+		return nil
+	}
+	return s.db.Close()
+}
 
 // Record validates the evidence before storing it.
-func (s *sqliteSignatures) Record(ctx context.Context, tenantID string, d *dholev1.Digest, sig Signature) error {
+func (s *sqlSignatures) Record(ctx context.Context, tenantID string, d *dholev1.Digest, sig Signature) error {
 	if err := requireTenant(tenantID); err != nil {
 		return err
 	}
@@ -164,7 +172,7 @@ func (s *sqliteSignatures) Record(ctx context.Context, tenantID string, d *dhole
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (tenant_id, digest, identity, issuer)
 		DO UPDATE SET payload = excluded.payload, source = excluded.source`
-	if _, err := s.db.ExecContext(ctx, q,
+	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q),
 		tenantID, text, sig.Identity, sig.Issuer, sig.Payload, string(sig.Source),
 		time.Now().UTC().Format(signatureTimeFormat),
 	); err != nil {
@@ -174,7 +182,7 @@ func (s *sqliteSignatures) Record(ctx context.Context, tenantID string, d *dhole
 }
 
 // Remove withdraws every record this tenant holds for the digest.
-func (s *sqliteSignatures) Remove(ctx context.Context, tenantID string, d *dholev1.Digest) error {
+func (s *sqlSignatures) Remove(ctx context.Context, tenantID string, d *dholev1.Digest) error {
 	if err := requireTenant(tenantID); err != nil {
 		return err
 	}
@@ -183,7 +191,7 @@ func (s *sqliteSignatures) Remove(ctx context.Context, tenantID string, d *dhole
 		return err
 	}
 	const q = `DELETE FROM artifact_signatures WHERE tenant_id = ? AND digest = ?`
-	if _, err := s.db.ExecContext(ctx, q, tenantID, text); err != nil {
+	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q), tenantID, text); err != nil {
 		return fmt.Errorf("plugins: remove signatures for %s: %w", text, err)
 	}
 	return nil
@@ -196,7 +204,7 @@ func (s *sqliteSignatures) Remove(ctx context.Context, tenantID string, d *dhole
 // That is the whole design: this check only ever runs on the way to executing
 // somebody else's code, so "I could not tell" and "no" must be the same
 // answer.
-func (s *sqliteSignatures) Verify(ctx context.Context, tenantID string, d *dholev1.Digest, allowed []string) error {
+func (s *sqlSignatures) Verify(ctx context.Context, tenantID string, d *dholev1.Digest, allowed []string) error {
 	if err := requireTenant(tenantID); err != nil {
 		return err
 	}
@@ -212,7 +220,7 @@ func (s *sqliteSignatures) Verify(ctx context.Context, tenantID string, d *dhole
 
 	const q = `SELECT identity, issuer, payload, source
 		FROM artifact_signatures WHERE tenant_id = ? AND digest = ?`
-	rows, err := s.db.QueryContext(ctx, q, tenantID, text)
+	rows, err := s.db.QueryContext(ctx, s.dialect.Rebind(q), tenantID, text)
 	if err != nil {
 		// A store that cannot answer has not said the artifact is signed; it
 		// has said nothing. Returning nil here would turn a database outage

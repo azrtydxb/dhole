@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
 // Argon2id parameters.
@@ -283,19 +285,34 @@ var decoyHash = sync.OnceValue(func() string {
 	return encoded
 })
 
-// -- SQLite-backed store ----------------------------------------------------
+// -- SQL-backed store -------------------------------------------------------
 
 // SQLStore persists principals and tokens in the same database as the run
-// store, whose migration runner applies 0004_identity.sql.
+// store, whose migration runner applies 0004_identity.sql. The statements
+// below are written once, with `?`, and rebound for the dialect in hand:
+// pgx rejects `?` outright, and a second per-dialect copy of each statement
+// would be free to drift.
 type SQLStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect runstore.Dialect
 }
 
 var _ Store = (*SQLStore)(nil)
 
-// NewSQLStore returns a Store over an already-migrated database handle.
+// NewSQLStore returns a Store over an already-migrated SQLite handle. It is
+// the convenience form of NewSQLStoreWithDialect and nothing more: a Postgres
+// deployment calls NewSQLStoreWithDialect, because pgx rejects the `?`
+// placeholders these statements are written with.
 func NewSQLStore(db *sql.DB) *SQLStore {
-	return &SQLStore{db: db}
+	return NewSQLStoreWithDialect(db, runstore.DialectSQLite)
+}
+
+// NewSQLStoreWithDialect returns a Store over an already-migrated handle
+// speaking dialect. The credential database is the one place where "works only
+// on the development store" locks every operator out of the deployment that
+// matters, so the dialect is explicit rather than assumed.
+func NewSQLStoreWithDialect(db *sql.DB, dialect runstore.Dialect) *SQLStore {
+	return &SQLStore{db: db, dialect: dialect}
 }
 
 // timeFormat matches the run store's: RFC3339 with nanoseconds in UTC sorts
@@ -311,7 +328,7 @@ func (s *SQLStore) PutPrincipal(ctx context.Context, p StoredPrincipal) error {
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (tenant_id, subject) DO UPDATE SET
 			kind = excluded.kind, credential_hash = excluded.credential_hash`
-	if _, err := s.db.ExecContext(ctx, q, p.TenantID, p.Subject, string(p.Kind), p.CredentialHash); err != nil {
+	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q), p.TenantID, p.Subject, string(p.Kind), p.CredentialHash); err != nil {
 		return fmt.Errorf("put principal: %w", err)
 	}
 	return nil
@@ -326,7 +343,7 @@ func (s *SQLStore) PrincipalCredential(ctx context.Context, tenantID, subject st
 		WHERE tenant_id = ? AND subject = ?`
 	p := StoredPrincipal{TenantID: tenantID, Subject: subject}
 	var kind string
-	err := s.db.QueryRowContext(ctx, q, tenantID, subject).Scan(&kind, &p.CredentialHash)
+	err := s.db.QueryRowContext(ctx, s.dialect.Rebind(q), tenantID, subject).Scan(&kind, &p.CredentialHash)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return StoredPrincipal{}, ErrNotFound
@@ -349,7 +366,7 @@ func (s *SQLStore) PutToken(ctx context.Context, t StoredToken) error {
 	const q = `INSERT INTO tokens (tenant_id, subject, token_hash, scopes, expires_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (tenant_id, token_hash) DO NOTHING`
-	if _, err := s.db.ExecContext(ctx, q,
+	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q),
 		t.TenantID, t.Subject, t.Hash, string(scopes), t.ExpiresAt.UTC().Format(timeFormat)); err != nil {
 		return fmt.Errorf("put token: %w", err)
 	}
@@ -368,7 +385,7 @@ func (s *SQLStore) Token(ctx context.Context, tenantID, tokenHash string) (Store
 		scopes  string
 		expires string
 	)
-	err := s.db.QueryRowContext(ctx, q, tenantID, tokenHash).Scan(&t.Subject, &t.Hash, &scopes, &expires)
+	err := s.db.QueryRowContext(ctx, s.dialect.Rebind(q), tenantID, tokenHash).Scan(&t.Subject, &t.Hash, &scopes, &expires)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return StoredToken{}, ErrNotFound
