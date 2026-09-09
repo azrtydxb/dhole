@@ -7,3 +7,5 @@ node_modules/
 .procoder/state/
 .procoder/index/
 .lycheecache
+/dhole
+*.test

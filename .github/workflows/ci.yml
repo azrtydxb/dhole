@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # amd64 and arm64 are both first-class targets, so the gate runs
+        # natively on each rather than cross-compiling and skipping the tests.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: install golangci-lint
+        # CI runs the same `make check` a developer runs, so the linter is
+        # installed rather than invoked through a separate action.
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+      - name: check
+        run: make check
+      - name: test
+        run: make test

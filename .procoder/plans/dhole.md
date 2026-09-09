@@ -43,12 +43,12 @@ decide what may be cached and what may be retried.
 Files: `go.mod`, `Makefile`, `.golangci.yml`, `.github/workflows/ci.yml`, `internal/version/version.go`, `internal/version/version_test.go`
 Interfaces: produces `version.Version() string`, `version.Commit() string`; `make check`, `make test` for every later task.
 
-- [ ] Write `internal/version/version_test.go` asserting `TestVersionIsSetAtBuild`: `require.NotEmpty(t, version.Version())` and `require.NotEqual(t, "unknown", version.Version())` when built with ldflags. Run `go test ./internal/version` — expect FAIL with "undefined: version.Version".
-- [ ] Create `go.mod` with `module github.com/azrtydxb/dhole` and `go 1.26`; add `github.com/stretchr/testify`.
-- [ ] Implement `internal/version/version.go` with `var version, commit = "unknown", "unknown"` and exported `Version()`/`Commit()` accessors.
-- [ ] Write `Makefile` with targets `check` (gofmt -l with non-empty failure, go vet, golangci-lint run, buf lint), `test` (`go test ./...`), `build` (ldflags setting `internal/version.version` and `.commit`).
-- [ ] Write `.golangci.yml` enabling `errcheck, govet, staticcheck, ineffassign, unused, gosec, revive` and `.github/workflows/ci.yml` running `make check test` on `ubuntu-latest` for amd64 and arm64.
-- [ ] Run `make build && ./dhole` then `go test ./internal/version` — expect PASS. Commit.
+- [x] Write `internal/version/version_test.go` asserting `TestVersionIsSetAtBuild`: `require.NotEmpty(t, version.Version())` and `require.NotEqual(t, "unknown", version.Version())` when built with ldflags. Run `go test ./internal/version` — expect FAIL with "undefined: version.Version".
+- [x] Create `go.mod` with `module github.com/azrtydxb/dhole` and `go 1.26`; add `github.com/stretchr/testify`.
+- [x] Implement `internal/version/version.go` with `var version, commit = "unknown", "unknown"` and exported `Version()`/`Commit()` accessors.
+- [x] Write `Makefile` with targets `check` (gofmt -l with non-empty failure, go vet, golangci-lint run, buf lint), `test` (`go test ./...`), `build` (ldflags setting `internal/version.version` and `.commit`).
+- [x] Write `.golangci.yml` enabling `errcheck, govet, staticcheck, ineffassign, unused, gosec, revive` and `.github/workflows/ci.yml` running `make check test` on `ubuntu-latest` for amd64 and arm64.
+- [x] Run `make build && ./dhole` then `go test ./internal/version` — expect PASS. Commit.
 
 ## Task 2: Core protobuf schema for pipelines
 
