@@ -2,6 +2,7 @@ package runstore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -60,6 +61,77 @@ func runStoreContract(t *testing.T, s runstore.Store) {
 	t.Run("LastSequenceOnEmptyTenantStartsAtZero", func(t *testing.T) {
 		contractLastSequenceStartsAtZero(t, s)
 	})
+	t.Run("WithTxCommitsEverythingOrNothing", func(t *testing.T) {
+		contractWithTxIsAtomic(t, s)
+	})
+	t.Run("WithTxRejectsAnUnscopedTenant", func(t *testing.T) {
+		contractWithTxEmptyTenantRejected(t, s)
+	})
+}
+
+// contractWithTxIsAtomic is what the outbox is built on. A run event and the
+// intent to publish it must commit as one act: if a caller can leave one of
+// them behind, a crash between the two loses a step silently and no retry
+// recovers what was never recorded (ADR 0005). Both stores are held to it,
+// because a transaction that is real on Postgres and a no-op on SQLite is a
+// guarantee that evaporates on a developer's machine.
+func contractWithTxIsAtomic(t *testing.T, s runstore.Store) {
+	ctx := context.Background()
+	tenant := uniqueTenant(t)
+	at := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+
+	// A transaction that returns an error rolls back, and the error reaches
+	// the caller unwrapped enough to be identified.
+	sentinel := errors.New("caller aborted the transaction")
+	err := s.WithTx(ctx, func(tx runstore.Tx) error {
+		if err := tx.Append(ctx, tenant, runstore.Event{
+			RunID: "run-1", Sequence: 1, Type: runstore.RunCreated, At: at,
+		}); err != nil {
+			return err
+		}
+		if err := tx.Append(ctx, tenant, runstore.Event{
+			RunID: "run-1", Sequence: 2, Type: runstore.RunCompleted, At: at,
+		}); err != nil {
+			return err
+		}
+		return sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
+
+	replayed, err := s.Replay(ctx, tenant, "run-1")
+	require.NoError(t, err)
+	require.Empty(t, replayed, "a rolled-back transaction must leave nothing behind")
+	last, err := s.LastSequence(ctx, tenant)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), last)
+
+	// A transaction that returns nil commits, all of it.
+	require.NoError(t, s.WithTx(ctx, func(tx runstore.Tx) error {
+		if err := tx.Append(ctx, tenant, runstore.Event{
+			RunID: "run-1", Sequence: 1, Type: runstore.RunCreated, At: at,
+		}); err != nil {
+			return err
+		}
+		return tx.Append(ctx, tenant, runstore.Event{
+			RunID: "run-1", Sequence: 2, Type: runstore.RunCompleted, At: at,
+		})
+	}))
+
+	replayed, err = s.Replay(ctx, tenant, "run-1")
+	require.NoError(t, err)
+	require.Len(t, replayed, 2, "a committed transaction must leave all of its writes")
+	require.Equal(t, runstore.RunCreated, replayed[0].Type)
+	require.Equal(t, runstore.RunCompleted, replayed[1].Type)
+}
+
+// contractWithTxEmptyTenantRejected: the transactional path is not a way
+// around the rule that there is no unscoped write in this system.
+func contractWithTxEmptyTenantRejected(t *testing.T, s runstore.Store) {
+	ctx := context.Background()
+	err := s.WithTx(ctx, func(tx runstore.Tx) error {
+		return tx.Append(ctx, "", runstore.Event{RunID: "run-1", Sequence: 1, Type: runstore.RunCreated})
+	})
+	require.ErrorIs(t, err, runstore.ErrTenantRequired)
 }
 
 // contractReplayOrder is the reason the run store exists. A run is not a

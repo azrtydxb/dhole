@@ -63,6 +63,61 @@ type Store interface {
 	// if the tenant has no events yet.
 	LastSequence(ctx context.Context, tenantID string) (uint64, error)
 
+	// WithTx runs fn inside one database transaction and commits only if fn
+	// returns nil, rolling back and returning fn's error otherwise.
+	//
+	// This is what the outbox is built on. A run event and the intent to
+	// publish it have to commit as ONE act: committed separately, a crash
+	// between them loses the step with no trace, and no retry recovers what
+	// was never recorded (ADR 0005). The transaction is the caller's, so
+	// anything else that must agree with the event — the outbox row above
+	// all — is written through the same Tx.
+	WithTx(ctx context.Context, fn func(Tx) error) error
+
 	// Close releases the store's resources.
+	Close() error
+}
+
+// Dialect names the SQL a Tx speaks. It exists because a caller writing its
+// own statements through Tx.Exec has to choose a placeholder style: SQLite
+// binds with `?` and Postgres with `$1`.
+type Dialect string
+
+// The dialects the two store implementations speak.
+const (
+	DialectSQLite   Dialect = "sqlite"
+	DialectPostgres Dialect = "postgres"
+)
+
+// Tx is one open transaction. It is NOT safe for concurrent use: a
+// transaction holds a single connection, and two goroutines using it at once
+// interleave on the wire.
+//
+// Alongside Append it carries a deliberate escape hatch — Exec, Query and
+// Dialect — for the tables that must commit atomically WITH a run event but
+// are not the event log itself. The outbox is the reason it exists; without
+// it the outbox would have to write on its own connection, which is precisely
+// the two-act commit this design refuses.
+type Tx interface {
+	// Append records an event in this transaction, with the same
+	// idempotence and tenant rules as Store.Append.
+	Append(ctx context.Context, tenantID string, e Event) error
+
+	// Exec runs a statement in this transaction.
+	Exec(ctx context.Context, query string, args ...any) error
+
+	// Query runs a query in this transaction. The caller must close the
+	// returned Rows before issuing anything else on the same Tx.
+	Query(ctx context.Context, query string, args ...any) (Rows, error)
+
+	// Dialect says which placeholder style and types query must use.
+	Dialect() Dialect
+}
+
+// Rows is a result set from Tx.Query, narrowed to what both drivers offer.
+type Rows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
 	Close() error
 }

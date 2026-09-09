@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -88,6 +89,38 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 // is append-only: a redelivered command finds its row already there and
 // changes nothing, rather than duplicating or rewriting history.
 func (s *PostgresStore) Append(ctx context.Context, tenantID string, e Event) error {
+	if err := checkAppendable(tenantID, e); err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx, postgresAppend, postgresAppendArgs(tenantID, e)...); err != nil {
+		return fmt.Errorf("append run event: %w", err)
+	}
+	return nil
+}
+
+// postgresAppend is the one INSERT both the store and its transactions use. A
+// transactional append that drifted from the plain one would break the single
+// guarantee the outbox rests on.
+const postgresAppend = `INSERT INTO run_events
+	(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	ON CONFLICT DO NOTHING`
+
+// postgresAppendArgs binds one event to postgresAppend. Both narrowing
+// conversions are guarded by checkAppendable, which every caller runs first:
+// Attempt is a uint32 and cannot overflow an int64, and a Sequence that could
+// has already been refused.
+func postgresAppendArgs(tenantID string, e Event) []any {
+	return []any{
+		tenantID, e.RunID, e.StepID, int64(e.Attempt),
+		int64(e.Sequence), //nolint:gosec // refused above by checkAppendable
+		string(e.Type), e.Payload, e.At.UTC(),
+	}
+}
+
+// checkAppendable holds the two rules an append must satisfy before it reaches
+// Postgres, whether or not it is inside a transaction.
+func checkAppendable(tenantID string, e Event) error {
 	if tenantID == "" {
 		return ErrTenantRequired
 	}
@@ -97,18 +130,75 @@ func (s *PostgresStore) Append(ctx context.Context, tenantID string, e Event) er
 	if e.Sequence > math.MaxInt64 {
 		return fmt.Errorf("append run event: sequence %d exceeds what a bigint can hold", e.Sequence)
 	}
-	const q = `INSERT INTO run_events
-		(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT DO NOTHING`
-	_, err := s.pool.Exec(ctx, q,
-		tenantID, e.RunID, e.StepID, int64(e.Attempt), int64(e.Sequence),
-		string(e.Type), e.Payload, e.At.UTC())
+	return nil
+}
+
+// WithTx runs fn in one transaction, committing only if it returns nil.
+//
+// fn's error comes back unwrapped so a caller's own sentinel survives
+// errors.Is. The deferred rollback is a no-op after a commit and is what
+// covers a panic inside fn — an abandoned transaction holds its row locks and
+// blocks every other drainer on SKIP LOCKED until the connection dies.
+func (s *PostgresStore) WithTx(ctx context.Context, fn func(Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := fn(&postgresTx{tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+// postgresTx is one open Postgres transaction handed to a WithTx callback.
+type postgresTx struct {
+	tx pgx.Tx
+}
+
+var _ Tx = (*postgresTx)(nil)
+
+func (t *postgresTx) Dialect() Dialect { return DialectPostgres }
+
+func (t *postgresTx) Append(ctx context.Context, tenantID string, e Event) error {
+	if err := checkAppendable(tenantID, e); err != nil {
+		return err
+	}
+	if _, err := t.tx.Exec(ctx, postgresAppend, postgresAppendArgs(tenantID, e)...); err != nil {
 		return fmt.Errorf("append run event: %w", err)
 	}
 	return nil
 }
+
+func (t *postgresTx) Exec(ctx context.Context, query string, args ...any) error {
+	if _, err := t.tx.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("exec in transaction: %w", err)
+	}
+	return nil
+}
+
+func (t *postgresTx) Query(ctx context.Context, query string, args ...any) (Rows, error) {
+	rows, err := t.tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query in transaction: %w", err)
+	}
+	return pgxRows{rows: rows}, nil
+}
+
+// pgxRows adapts pgx's result set to Rows. The only difference is Close, which
+// pgx does not report on.
+type pgxRows struct {
+	rows pgx.Rows
+}
+
+func (r pgxRows) Next() bool             { return r.rows.Next() }
+func (r pgxRows) Scan(dest ...any) error { return r.rows.Scan(dest...) }
+func (r pgxRows) Err() error             { return r.rows.Err() }
+func (r pgxRows) Close() error           { r.rows.Close(); return nil }
 
 // Replay returns the run's events in the order they must be applied.
 func (s *PostgresStore) Replay(ctx context.Context, tenantID, runID string) ([]Event, error) {
