@@ -1,0 +1,93 @@
+# The automation acceptance pipeline: the profile ADR 0016 calls "schedule and
+# API triggers, a long wait, execution across more than one engine type".
+#
+# The three steps are three different things about this system:
+#
+#   host    runs on whatever engine has no special capability — on this
+#           deployment the process engine the single binary hosts — and
+#           reports the kernel it saw, so the test can tell WHERE it ran
+#           instead of trusting where it was meant to run.
+#   hold    is never executed at all. It is gated by a durable timer, which
+#           is a ROW: the run's position lives in the log, so the wait costs
+#           nothing while a control plane is stopped and restarted underneath
+#           it (ADR 0003). Its `token` output is deliberately empty — the
+#           edge exists to order the graph, and a gate produces no artifact.
+#   cluster declares CAPABILITY_NETWORK, which the host-process backend does
+#           not advertise and the Kubernetes one does. That capability is the
+#           ONLY thing in this system that can route a step to an engine
+#           kind: the dispatch subject is job.dispatch.<tier>.<caps-hash>,
+#           and only an engine that can satisfy the set subscribes to it.
+#
+# `event` on the first step is the pipeline's one declared input — a free
+# input port, which is what a trigger binds to (ADR 0007). Both the cron
+# schedule and the webhook fill it. Nothing carries it INTO the run yet; see
+# the finding recorded with this task.
+id: acceptance-automation
+tenant:
+  id: default
+steps:
+  # The sleep is load-bearing, and it is a FINDING wearing a workaround.
+  # Arming a durable wait is not atomic with the scheduler's readiness
+  # decision: internal/wait writes STEP_AWAITING_TIMER in its own
+  # transaction, and an Advance that read the run's state before that
+  # transaction committed dispatches the gated step anyway — even though the
+  # gate event ends up EARLIER in the log, because the sequence is allocated
+  # inside the transaction and visibility is not. Observed, first run.
+  # A step type that armed the timer inside the dispatch transaction would
+  # close it; until one exists, the gate has to be armed while the step is
+  # provably not yet reachable, and five seconds of predecessor is what
+  # makes that provable.
+  - id: host
+    name: probe the host engine
+    plugin_ref: 'command:{"args":["/bin/sh","-c","sleep 5; uname -s > probe"]}'
+    effect_class: EFFECT_CLASS_PURE
+    inputs:
+      - name: event
+        type:
+          structured:
+            schema_id: dhole:acceptance/trigger-event
+            schema: '{"type":"string"}'
+    outputs:
+      - name: probe
+        type:
+          blob:
+            media_type: text/plain
+  - id: hold
+    name: wait for the timer
+    plugin_ref: 'command:{"args":["/bin/sh","-c","printf held > token"]}'
+    effect_class: EFFECT_CLASS_PURE
+    inputs:
+      - name: probe
+        type:
+          blob:
+            media_type: text/plain
+    outputs:
+      - name: token
+        type:
+          blob:
+            media_type: text/plain
+  - id: cluster
+    name: probe the kubernetes engine
+    plugin_ref: 'command:{"args":["/bin/sh","-c","uname -s > probe"]}'
+    effect_class: EFFECT_CLASS_PURE
+    capabilities:
+      - CAPABILITY_NETWORK
+    inputs:
+      - name: token
+        type:
+          blob:
+            media_type: text/plain
+    outputs:
+      - name: probe
+        type:
+          blob:
+            media_type: text/plain
+edges:
+  - from_step: host
+    from_port: probe
+    to_step: hold
+    to_port: probe
+  - from_step: hold
+    from_port: token
+    to_step: cluster
+    to_port: token

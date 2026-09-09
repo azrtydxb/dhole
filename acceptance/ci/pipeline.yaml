@@ -1,0 +1,82 @@
+# The CI acceptance pipeline: the profile ADR 0016 calls "a container build
+# that demonstrably hits the cache on a second run with unchanged inputs".
+#
+# Two honest deviations from the plan, both visible rather than papered over:
+#
+# 1. There is no container runtime on the machine this was built on, so the
+#    steps run in KUBERNETES pods rather than under Task 36's containerd
+#    executor, which is not built. Both backends pass the identical shared
+#    executor contract; the substitution is recorded in the README and in
+#    acceptance_test.go.
+# 2. Nothing here builds an OCI image, because nothing on the machine can.
+#    The `build` step assembles a layer tree and emits its manifest of
+#    content digests, which is the same SHAPE of work — expensive, pure, and
+#    a function of its declared inputs — and it is that shape, not the
+#    docker-ness, that the cache claim is about.
+#
+# Every step is EFFECT_CLASS_PURE with the default step-scoped sandbox lease,
+# which is what cache.Eligible requires; the third ingredient, a stable
+# environment identity, is the sandbox image's digest and comes from the
+# executor rather than from this file. A pipeline cannot name its own image
+# today — see the finding in acceptance_test.go.
+id: acceptance-ci
+tenant:
+  id: default
+steps:
+  # The source of truth for the build, emitted rather than fetched: a step's
+  # inputs come from edges and from nothing else (ADR 0001), and no trigger
+  # input reaches a step yet, so a pipeline cannot read a file from a
+  # repository. TestCIPipelineBuildsTheCheckedInDockerfile keeps this equal
+  # to acceptance/ci/Dockerfile.
+  - id: source
+    name: checkout
+    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"printf %s \\\"$DOCKERFILE\\\" > context\"],\"env\":{\"DOCKERFILE\":\"# The image the CI acceptance pipeline builds.\\n#\\n# It is checked in, and `TestCIPipelineBuildsTheCheckedInDockerfile` requires\\n# that the pipeline's `source` step emits exactly these bytes: a definition\\n# cannot reference a file from the repository \u2014 a step's inputs come from\\n# edges and nothing else (ADR 0001) \u2014 so the text is carried in the step, and\\n# that test is what stops the copy drifting from this file.\\nFROM busybox:1.36\\nCOPY hello /usr/local/bin/hello\\n# Never root: nothing here needs it, and the gate refuses a Dockerfile that\\n# does not say so.\\nUSER 65534:65534\\nENTRYPOINT [\\\"/usr/local/bin/hello\\\"]\\n\"}}"
+    effect_class: EFFECT_CLASS_PURE
+    outputs:
+      - name: context
+        type:
+          blob:
+            media_type: text/plain
+  # The expensive step, and the one the cache claim is about. It sleeps for
+  # five seconds on purpose: a second run that genuinely hits the cache does
+  # not spend them, and the wall-clock assertion is what notices.
+  - id: build
+    name: build image
+    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\nsleep 5\\nmkdir -p layer/usr/local/bin\\ncp context layer/Dockerfile\\nprintf '#!/bin/sh\\\\necho hello from dhole\\\\n' > layer/usr/local/bin/hello\\nchmod +x layer/usr/local/bin/hello\\ncd layer && find . -type f | sort | xargs sha256sum > ../image\"]}"
+    effect_class: EFFECT_CLASS_PURE
+    inputs:
+      - name: context
+        type:
+          blob:
+            media_type: text/plain
+    outputs:
+      - name: image
+        type:
+          blob:
+            media_type: text/plain
+  # The step that would fail if the build produced nothing: it reads the
+  # manifest through the edge, not from a shared workspace, and refuses a
+  # layer tree missing either file.
+  - id: test
+    name: test image
+    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\ngrep -q ' \\\\./Dockerfile$' image\\ngrep -q ' \\\\./usr/local/bin/hello$' image\\nprintf 'files=%s\\\\n' \\\"$(wc -l < image | tr -d ' ')\\\" > report\"]}"
+    effect_class: EFFECT_CLASS_PURE
+    inputs:
+      - name: image
+        type:
+          blob:
+            media_type: text/plain
+    outputs:
+      - name: report
+        type:
+          blob:
+            media_type: text/plain
+edges:
+  - from_step: source
+    from_port: context
+    to_step: build
+    to_port: context
+  - from_step: build
+    from_port: image
+    to_step: test
+    to_port: image
