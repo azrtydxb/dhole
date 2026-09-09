@@ -462,6 +462,18 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 - [ ] **`defstore.Store` cannot list a pipeline's revisions.** `ListRevisions` is served through an optional `api.RevisionLister` and answers `CodeUnimplemented` when the store cannot list, because an empty list would be a lie about a pipeline with a long history. Add the query to the store.
 - [ ] **`policy.Input` carries no taint keys.** Task 51's `taint.Check` returns a `policy.Decision` but builds it itself, because `internal/policy` was a concurrent task's file. Add the taint fields to `policy.Input` and the CEL environment so an operator can write a taint rule instead of relying on the four built-in ones. Found building Task 51.
 - [ ] **The wire contract does not mention the registration re-announce.** Task 18b made an engine re-announce every three heartbeats so a registration lost while the plane was down is recoverable, but the contract still says only "heartbeat every five seconds". A third-party engine written to the document alone is invisible after a plane restart. Document it.
+- [ ] **`dhole serve` does not serve the API.** `internal/server` assembles the bus, scheduler, outbox
+  and an engine, and never calls `api.Server`'s handler — nothing in `cmd/` or `internal/server` imports
+  `internal/api` at all. So the binary runs a control plane with no contract on it: the CLI has nothing to
+  talk to, and Task 46 had to write its own fixture binary to test the canvas at all. Serve the API from
+  the server, and delete `web/e2e/fixture/main.go`, which says in its own header that it exists only until
+  this is fixed. Found building Task 46.
+- [ ] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and
+  `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
+  ready steps are still dispatched inline, and no per-pipeline cap is enforced. Wire them — enqueue ready
+  steps, drain with `Next(ctx, slots)` against the fleet's free capacity, `Acquire` before the lease claim,
+  and release on EVERY terminal status, not only success. This is the same shape as the cache gap
+  (Task 15b): everything built, one end unconnected.
 - [ ] **The contract has no `CancelRun` and no `EngineService`.** Task 29's CLI therefore ships `run cancel`, `engine list` and `engine drain` as commands that exist and refuse, rather than reaching into `internal/registry` or the run store behind the API's back — a CLI able to do what the GUI cannot is the same ADR 0013 failure seen from the other side. Declare the RPCs and implement them; the CLI commands are already there waiting. Found building Task 29.
 - [ ] **`registry.Instance` drops the engine types an engine advertises.** `EngineRegistration` carries `engine_types`, and the registry does not keep them, so `api.Plan` cannot say which engine kind would run a step from the matched instance and reports the locally configured environment's kind instead. Carry `engine_types` on the instance and have Plan read it from the match. Found building Task 28.
 - [ ] **The editing head has nowhere to live.** Revisions are content-addressed and carry no parent, so `api.Heads` is an in-process interface whose only implementation is in memory. That is a real optimistic-concurrency check within one control plane and NOT one across several: two planes will each accept an edit against the same base. Store the head before any horizontal scale-out (Task 43).
@@ -673,12 +685,12 @@ Interfaces: produces `http.New(cfg)`, `git.New(cfg)` (GitHub, Gitea and Forgejo 
 Files: `internal/scheduler/fairness.go`, `internal/scheduler/budget.go`, `internal/scheduler/fairness_test.go`
 Interfaces: produces `scheduler.Queue` with `Enqueue(ctx, item QueueItem) error`, `Next(ctx, slots int) ([]QueueItem, error)`; `scheduler.Budgets` with `Acquire(ctx, tenantID, pipelineID string) (release func(), ok bool)`.
 
-- [ ] Write `internal/scheduler/fairness_test.go` asserting `TestWeightedFairQueuingUnderSaturation`: with tenant `a` enqueuing 10000 steps and tenant `b` enqueuing 10, `b`'s steps are all dispatched within the one-second target and `a` does not occupy more than its weighted share. Run — expect FAIL with "undefined: scheduler.NewQueue".
-- [ ] Add `TestConcurrencyBudgetCapsPipelineInFlight` asserting a pipeline with a budget of 2 never has 3 steps dispatched simultaneously.
-- [ ] Add `TestBudgetReleaseOnStepFailureNotOnlyOnSuccess` asserting a failed step releases its budget slot.
-- [ ] Add `TestQueueIsDeterministicUnderEqualWeights` asserting equal-weight tenants interleave one-for-one.
-- [ ] Implement `internal/scheduler/fairness.go` as a deficit round-robin over per-tenant queues and `budget.go` as a counting semaphore persisted in NATS KV so budgets survive a control-plane restart.
-- [ ] Run `go test ./internal/scheduler` — expect PASS. Commit.
+- [x] Write `internal/scheduler/fairness_test.go` asserting `TestWeightedFairQueuingUnderSaturation`: with tenant `a` enqueuing 10000 steps and tenant `b` enqueuing 10, `b`'s steps are all dispatched within the one-second target and `a` does not occupy more than its weighted share. Run — expect FAIL with "undefined: scheduler.NewQueue".
+- [x] Add `TestConcurrencyBudgetCapsPipelineInFlight` asserting a pipeline with a budget of 2 never has 3 steps dispatched simultaneously.
+- [x] Add `TestBudgetReleaseOnStepFailureNotOnlyOnSuccess` asserting a failed step releases its budget slot.
+- [x] Add `TestQueueIsDeterministicUnderEqualWeights` asserting equal-weight tenants interleave one-for-one.
+- [x] Implement `internal/scheduler/fairness.go` as a deficit round-robin over per-tenant queues and `budget.go` as a counting semaphore persisted in NATS KV so budgets survive a control-plane restart.
+- [x] Run `go test ./internal/scheduler` — expect PASS. Commit.
 
 ## Task 43: Control-plane scale-out and backpressure
 
@@ -719,11 +731,11 @@ Interfaces: produces `web/src/api/client.ts` exporting `pipelineClient`, `runCli
 Files: `web/src/canvas/Canvas.tsx`, `web/src/canvas/StepNode.tsx`, `web/src/canvas/edges.ts`, `web/src/canvas/layout.ts`, `web/e2e/canvas-authoring.spec.ts`
 Interfaces: produces `<Canvas pipelineId revisionId />`; `layout.autoLayout(steps, edges): NodePositions` (deterministic, derived from the DAG, never persisted).
 
-- [ ] Write `web/e2e/canvas-authoring.spec.ts` asserting `TestCanvasAuthorsPipelineEndToEnd`: add two nodes, drag from `a.out` to `b.in`, set a property, save, and require the resulting revision from the API contains the edge. Run `npx playwright test` — expect FAIL with "locator not found: [data-testid=add-step]".
-- [ ] Add a case asserting dragging from a `blob` output to a `structured` input is refused at drop time with a visible message, and no `ApplyOperation` call is made.
-- [ ] Add a case asserting node positions are not sent in any `ApplyOperation` request body, proving layout stays out of the document.
-- [ ] Implement `web/src/canvas/` with React Flow: `StepNode` rendering one handle per declared port, `edges.ts` validating type compatibility before allowing a connection, `layout.ts` computing deterministic positions from `dag` levels.
-- [ ] Run `npx playwright test` — expect PASS. Commit.
+- [x] Write `web/e2e/canvas-authoring.spec.ts` asserting `TestCanvasAuthorsPipelineEndToEnd`: add two nodes, drag from `a.out` to `b.in`, set a property, save, and require the resulting revision from the API contains the edge. Run `npx playwright test` — expect FAIL with "locator not found: [data-testid=add-step]".
+- [x] Add a case asserting dragging from a `blob` output to a `structured` input is refused at drop time with a visible message, and no `ApplyOperation` call is made.
+- [x] Add a case asserting node positions are not sent in any `ApplyOperation` request body, proving layout stays out of the document.
+- [x] Implement `web/src/canvas/` with React Flow: `StepNode` rendering one handle per declared port, `edges.ts` validating type compatibility before allowing a connection, `layout.ts` computing deterministic positions from `dag` levels.
+- [x] Run `npx playwright test` — expect PASS. Commit.
 
 ## Task 47: Schema-driven property panel and diff review
 
