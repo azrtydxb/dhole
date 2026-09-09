@@ -232,12 +232,12 @@ Interfaces: produces `lease.Manager` with `Claim(ctx, tenantID, runID, stepID st
 Files: `internal/scheduler/scheduler.go`, `internal/scheduler/match.go`, `internal/scheduler/scheduler_test.go`
 Interfaces: produces `scheduler.Scheduler` with `Advance(ctx, tenantID, runID string) error`, `OnStatus(ctx, s *dholev1.JobStatus) error`; `scheduler.Match(req executor.Requirements, engines []registry.Instance) []registry.Instance`.
 
-- [ ] Write `internal/scheduler/scheduler_test.go` asserting `TestAdvanceDispatchesOnlyReadySteps`: for the Task 3 diamond pipeline, the first `Advance` dispatches only `a`; after `a` succeeds, the next dispatches `b` and `c` but not `d`. Run — expect FAIL with "undefined: scheduler.New".
-- [ ] Add `TestMatchFiltersByCapabilityOSAndArch` asserting a step requiring `PRIVILEGED` on `linux/arm64` matches only an instance advertising all three.
-- [ ] Add `TestUnschedulableStepReportsWhy` asserting a step whose requirements match no instance produces an event whose payload contains "no engine advertises capability PRIVILEGED".
+- [x] Write `internal/scheduler/scheduler_test.go` asserting `TestAdvanceDispatchesOnlyReadySteps`: for the Task 3 diamond pipeline, the first `Advance` dispatches only `a`; after `a` succeeds, the next dispatches `b` and `c` but not `d`. Run — expect FAIL with "undefined: scheduler.New".
+- [x] Add `TestMatchFiltersByCapabilityOSAndArch` asserting a step requiring `PRIVILEGED` on `linux/arm64` matches only an instance advertising all three.
+- [x] Add `TestUnschedulableStepReportsWhy` asserting a step whose requirements match no instance produces an event whose payload contains "no engine advertises capability PRIVILEGED".
 - [ ] Wire `policy.Engine.Evaluate` into the scheduler before dispatch. This is the second half of Task 21, which could only do the definition-save side because the scheduler did not exist yet. The save guard also cannot populate `Input.Signed` or `Input.Upstream` — those come from Tasks 30 and 33 — so the scheduler is where a dispatch-time decision gets the full input.
-- [ ] Implement `internal/scheduler/match.go` (pure filtering, no I/O) and `internal/scheduler/scheduler.go` reading the run's event log, computing ready steps from `dag.Graph`, claiming a lease, and enqueuing a `JobDispatch` through the outbox.
-- [ ] Run `go test ./internal/scheduler` — expect PASS. Commit.
+- [x] Implement `internal/scheduler/match.go` (pure filtering, no I/O) and `internal/scheduler/scheduler.go` reading the run's event log, computing ready steps from `dag.Graph`, claiming a lease, and enqueuing a `JobDispatch` through the outbox.
+- [x] Run `go test ./internal/scheduler` — expect PASS. Commit.
 
 ## Task 15: Cache keys and skip-on-hit
 
@@ -256,11 +256,11 @@ Interfaces: produces `cache.Key(step *dholev1.Step, envIdentity string, inputs [
 Files: `internal/cache/eligibility.go`, `internal/cache/eligibility_test.go`
 Interfaces: produces `cache.Eligible(step *dholev1.Step, lease executor.LeaseScope, envIdentity string) (bool, string)` returning the reason when false.
 
-- [ ] Write `internal/cache/eligibility_test.go` asserting `TestPoolLeaseMarksStepNonCacheable`: a `pure` step under `LeasePool` returns `(false, "pool lease reuses state that cannot be hashed")`. Run — expect FAIL with "undefined: cache.Eligible".
-- [ ] Add `TestPureStepUnderStepLeaseIsEligible` asserting `(true, "")` for `LeaseStep` with a non-empty `envIdentity`.
-- [ ] Add `TestEffectfulStepIsNeverEligible` asserting both `IDEMPOTENT` and `AT_MOST_ONCE` return false with a reason naming the effect class.
-- [ ] Implement `internal/cache/eligibility.go` and call it from the scheduler, recording the reason on the `STEP_DISPATCHED` event so the run view can display it.
-- [ ] Run `go test ./internal/cache` — expect PASS. Commit.
+- [x] Write `internal/cache/eligibility_test.go` asserting `TestPoolLeaseMarksStepNonCacheable`: a `pure` step under `LeasePool` returns `(false, "pool lease reuses state that cannot be hashed")`. Run — expect FAIL with "undefined: cache.Eligible".
+- [x] Add `TestPureStepUnderStepLeaseIsEligible` asserting `(true, "")` for `LeaseStep` with a non-empty `envIdentity`.
+- [x] Add `TestEffectfulStepIsNeverEligible` asserting both `IDEMPOTENT` and `AT_MOST_ONCE` return false with a reason naming the effect class.
+- [x] Implement `internal/cache/eligibility.go` and call it from the scheduler, recording the reason on the `STEP_DISPATCHED` event so the run view can display it.
+- [x] Run `go test ./internal/cache` — expect PASS. Commit.
 
 ## Task 17: CAS refcount garbage collection
 
