@@ -47,7 +47,7 @@ decide what may be cached and what may be retried.
   0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
-  0011 policy_audit (21), 0012 upstreams (34), 0013 timers (20). A task
+  0011 policy_audit (21), 0012 upstreams (34), 0013 timers (20), 0014 trigger_schedules (40). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -596,11 +596,11 @@ Interfaces: produces `conformance.Run(ctx, cfg conformance.Config) (conformance.
 Files: `internal/trigger/trigger.go`, `internal/trigger/schedule/schedule.go`, `internal/trigger/schedule/schedule_test.go`
 Interfaces: produces `trigger.Trigger` with `Start(ctx, sink trigger.Sink) error`, `Kind() string`; `trigger.Sink` with `Fire(ctx, tenantID, pipelineID string, inputs map[string]*structpb.Value) error`; `trigger.Binding{PipelineID string; InputMapping map[string]string}`.
 
-- [ ] Write `internal/trigger/schedule/schedule_test.go` asserting `TestScheduleFiresAtCronBoundary`: a `* * * * * *` schedule fires at least twice within 3s with the bound inputs populated. Run — expect FAIL with "undefined: schedule.New".
-- [ ] Add `TestMissedScheduleWindowFiresOnceOnRecovery` asserting a schedule whose window elapsed entirely during downtime fires exactly once on restart, reusing Task 20's timer store.
-- [ ] Add `TestConcurrencyBudgetOfOneSkipsOverlappingFire` asserting a second fire while the previous run is active is recorded as skipped with a reason, not queued indefinitely.
-- [ ] Implement `internal/trigger/trigger.go` and `internal/trigger/schedule/schedule.go` using `robfig/cron/v3` with persistence through the durable timer store.
-- [ ] Run `go test ./internal/trigger/...` — expect PASS. Commit.
+- [x] Write `internal/trigger/schedule/schedule_test.go` asserting `TestScheduleFiresAtCronBoundary`: a `* * * * * *` schedule fires at least twice within 3s with the bound inputs populated. Run — expect FAIL with "undefined: schedule.New".
+- [x] Add `TestMissedScheduleWindowFiresOnceOnRecovery` asserting a schedule whose window elapsed entirely during downtime fires exactly once on restart, reusing Task 20's timer store.
+- [x] Add `TestConcurrencyBudgetOfOneSkipsOverlappingFire` asserting a second fire while the previous run is active is recorded as skipped with a reason, not queued indefinitely.
+- [x] Implement `internal/trigger/trigger.go` and `internal/trigger/schedule/schedule.go` using `robfig/cron/v3` with persistence through the durable timer store.
+- [x] Run `go test ./internal/trigger/...` — expect PASS. Commit.
 
 ## Task 41: HTTP, git webhook and pipeline-completion triggers
 
