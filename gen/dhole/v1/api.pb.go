@@ -2670,6 +2670,401 @@ func (x *DrainEngineResponse) GetEngine() *Engine {
 	return nil
 }
 
+// Cursor is where an editor's pointer is on the canvas, in the canvas's own
+// coordinates. It is a hint for drawing and nothing else: no operation is
+// expressed in these numbers, and no position ever reaches a definition.
+type Cursor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float64                `protobuf:"fixed64,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float64                `protobuf:"fixed64,2,opt,name=y,proto3" json:"y,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Cursor) Reset() {
+	*x = Cursor{}
+	mi := &file_dhole_v1_api_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Cursor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Cursor) ProtoMessage() {}
+
+func (x *Cursor) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Cursor.ProtoReflect.Descriptor instead.
+func (*Cursor) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *Cursor) GetX() float64 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *Cursor) GetY() float64 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+// PresenceEvent is one OTHER editor of a pipeline, as the editors watching it
+// may draw them.
+//
+// It carries a handle and no more of the person than that. Everything else the
+// control plane knows about a caller — the tenant, the kind of credential, the
+// credential itself — stays on the control plane: drawing a cursor needs a
+// label to put beside it, an opaque id to keep one person's two tabs apart,
+// and what that editor has selected. The selection is a step id in a pipeline
+// the recipient can already read, which is why it is not a disclosure; a field
+// naming anything outside that pipeline would be.
+type PresenceEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The editor's display handle: the principal's subject, and nothing else.
+	Principal string `protobuf:"bytes,1,opt,name=principal,proto3" json:"principal,omitempty"`
+	// The step this editor has selected, empty when they have selected none.
+	Selection string  `protobuf:"bytes,2,opt,name=selection,proto3" json:"selection,omitempty"`
+	Cursor    *Cursor `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// Opaque, and per editing session rather than per person: one person in two
+	// tabs is two sessions with two cursors.
+	SessionId string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// This session has left; stop drawing it. A session that vanishes WITHOUT
+	// saying so — a killed browser, a dropped connection — is reported gone by
+	// everyone watching once its announcement stops being refreshed.
+	Gone          bool `protobuf:"varint,5,opt,name=gone,proto3" json:"gone,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PresenceEvent) Reset() {
+	*x = PresenceEvent{}
+	mi := &file_dhole_v1_api_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PresenceEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PresenceEvent) ProtoMessage() {}
+
+func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PresenceEvent.ProtoReflect.Descriptor instead.
+func (*PresenceEvent) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *PresenceEvent) GetPrincipal() string {
+	if x != nil {
+		return x.Principal
+	}
+	return ""
+}
+
+func (x *PresenceEvent) GetSelection() string {
+	if x != nil {
+		return x.Selection
+	}
+	return ""
+}
+
+func (x *PresenceEvent) GetCursor() *Cursor {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+func (x *PresenceEvent) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *PresenceEvent) GetGone() bool {
+	if x != nil {
+		return x.Gone
+	}
+	return false
+}
+
+// WatchPresenceRequest follows who else is editing one pipeline.
+//
+// session_id is the caller's own session, and it ties this stream's lifetime
+// to that session: when the stream ends, the session is announced gone. It is
+// optional — a caller that only watches, and announces nothing, leaves it
+// empty and is invisible to the others.
+type WatchPresenceRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PipelineId string                 `protobuf:"bytes,1,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	SessionId  string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// What this session has selected as it joins, and where its pointer is.
+	//
+	// They are here rather than left to a first UpdatePresence because the
+	// subject is ephemeral: an announcement published before this stream has
+	// subscribed is simply not there, and nothing would ever refresh it. Opening
+	// the stream and announcing on it is one act, in one order, on one server.
+	Selection     string  `protobuf:"bytes,3,opt,name=selection,proto3" json:"selection,omitempty"`
+	Cursor        *Cursor `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchPresenceRequest) Reset() {
+	*x = WatchPresenceRequest{}
+	mi := &file_dhole_v1_api_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchPresenceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchPresenceRequest) ProtoMessage() {}
+
+func (x *WatchPresenceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchPresenceRequest.ProtoReflect.Descriptor instead.
+func (*WatchPresenceRequest) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *WatchPresenceRequest) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *WatchPresenceRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *WatchPresenceRequest) GetSelection() string {
+	if x != nil {
+		return x.Selection
+	}
+	return ""
+}
+
+func (x *WatchPresenceRequest) GetCursor() *Cursor {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+// WatchPresenceResponse is one presence event. It wraps rather than repeats
+// PresenceEvent, because the same message is what travels on the ephemeral
+// subject between control planes: one shape, one meaning, wherever it is read.
+type WatchPresenceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Event         *PresenceEvent         `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchPresenceResponse) Reset() {
+	*x = WatchPresenceResponse{}
+	mi := &file_dhole_v1_api_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchPresenceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchPresenceResponse) ProtoMessage() {}
+
+func (x *WatchPresenceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchPresenceResponse.ProtoReflect.Descriptor instead.
+func (*WatchPresenceResponse) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *WatchPresenceResponse) GetEvent() *PresenceEvent {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+// UpdatePresenceRequest is one editor saying what it is doing now.
+//
+// The principal is NEVER taken from here: it comes from the credential, like
+// everywhere else in this contract. A caller can say where its cursor is; it
+// cannot say who it is.
+type UpdatePresenceRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PipelineId string                 `protobuf:"bytes,1,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	SessionId  string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Selection  string                 `protobuf:"bytes,3,opt,name=selection,proto3" json:"selection,omitempty"`
+	Cursor     *Cursor                `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// Leave, without waiting for the announcement to expire.
+	Gone          bool `protobuf:"varint,5,opt,name=gone,proto3" json:"gone,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdatePresenceRequest) Reset() {
+	*x = UpdatePresenceRequest{}
+	mi := &file_dhole_v1_api_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdatePresenceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdatePresenceRequest) ProtoMessage() {}
+
+func (x *UpdatePresenceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdatePresenceRequest.ProtoReflect.Descriptor instead.
+func (*UpdatePresenceRequest) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *UpdatePresenceRequest) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *UpdatePresenceRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *UpdatePresenceRequest) GetSelection() string {
+	if x != nil {
+		return x.Selection
+	}
+	return ""
+}
+
+func (x *UpdatePresenceRequest) GetCursor() *Cursor {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+func (x *UpdatePresenceRequest) GetGone() bool {
+	if x != nil {
+		return x.Gone
+	}
+	return false
+}
+
+// UpdatePresenceResponse is empty: presence is fire-and-forget, and a field
+// here would be state this call had accumulated somewhere.
+type UpdatePresenceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdatePresenceResponse) Reset() {
+	*x = UpdatePresenceResponse{}
+	mi := &file_dhole_v1_api_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdatePresenceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdatePresenceResponse) ProtoMessage() {}
+
+func (x *UpdatePresenceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdatePresenceResponse.ProtoReflect.Descriptor instead.
+func (*UpdatePresenceResponse) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{47}
+}
+
 var File_dhole_v1_api_proto protoreflect.FileDescriptor
 
 const file_dhole_v1_api_proto_rawDesc = "" +
@@ -2852,7 +3247,35 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x12DrainEngineRequest\x12\x1b\n" +
 	"\tengine_id\x18\x01 \x01(\tR\bengineId\"?\n" +
 	"\x13DrainEngineResponse\x12(\n" +
-	"\x06engine\x18\x01 \x01(\v2\x10.dhole.v1.EngineR\x06engine*r\n" +
+	"\x06engine\x18\x01 \x01(\v2\x10.dhole.v1.EngineR\x06engine\"$\n" +
+	"\x06Cursor\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x01R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x01R\x01y\"\xa8\x01\n" +
+	"\rPresenceEvent\x12\x1c\n" +
+	"\tprincipal\x18\x01 \x01(\tR\tprincipal\x12\x1c\n" +
+	"\tselection\x18\x02 \x01(\tR\tselection\x12(\n" +
+	"\x06cursor\x18\x03 \x01(\v2\x10.dhole.v1.CursorR\x06cursor\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04gone\x18\x05 \x01(\bR\x04gone\"\x9e\x01\n" +
+	"\x14WatchPresenceRequest\x12\x1f\n" +
+	"\vpipeline_id\x18\x01 \x01(\tR\n" +
+	"pipelineId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x1c\n" +
+	"\tselection\x18\x03 \x01(\tR\tselection\x12(\n" +
+	"\x06cursor\x18\x04 \x01(\v2\x10.dhole.v1.CursorR\x06cursor\"F\n" +
+	"\x15WatchPresenceResponse\x12-\n" +
+	"\x05event\x18\x01 \x01(\v2\x17.dhole.v1.PresenceEventR\x05event\"\xb3\x01\n" +
+	"\x15UpdatePresenceRequest\x12\x1f\n" +
+	"\vpipeline_id\x18\x01 \x01(\tR\n" +
+	"pipelineId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x1c\n" +
+	"\tselection\x18\x03 \x01(\tR\tselection\x12(\n" +
+	"\x06cursor\x18\x04 \x01(\v2\x10.dhole.v1.CursorR\x06cursor\x12\x12\n" +
+	"\x04gone\x18\x05 \x01(\bR\x04gone\"\x18\n" +
+	"\x16UpdatePresenceResponse*r\n" +
 	"\n" +
 	"ChangeKind\x12\x1b\n" +
 	"\x17CHANGE_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -2861,7 +3284,7 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x13CHANGE_KIND_CHANGED\x10\x032\xa7\x01\n" +
 	"\rEngineService\x12J\n" +
 	"\vListEngines\x12\x1c.dhole.v1.ListEnginesRequest\x1a\x1d.dhole.v1.ListEnginesResponse\x12J\n" +
-	"\vDrainEngine\x12\x1c.dhole.v1.DrainEngineRequest\x1a\x1d.dhole.v1.DrainEngineResponse2\xbf\x06\n" +
+	"\vDrainEngine\x12\x1c.dhole.v1.DrainEngineRequest\x1a\x1d.dhole.v1.DrainEngineResponse2\xe8\a\n" +
 	"\x0fPipelineService\x12S\n" +
 	"\x0eCreatePipeline\x12\x1f.dhole.v1.CreatePipelineRequest\x1a .dhole.v1.CreatePipelineResponse\x12J\n" +
 	"\vGetPipeline\x12\x1c.dhole.v1.GetPipelineRequest\x1a\x1d.dhole.v1.GetPipelineResponse\x12S\n" +
@@ -2873,7 +3296,9 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x0fApproveRevision\x12 .dhole.v1.ApproveRevisionRequest\x1a!.dhole.v1.ApproveRevisionResponse\x12A\n" +
 	"\bStartRun\x12\x19.dhole.v1.StartRunRequest\x1a\x1a.dhole.v1.StartRunResponse\x12C\n" +
 	"\bWatchRun\x12\x19.dhole.v1.WatchRunRequest\x1a\x1a.dhole.v1.WatchRunResponse0\x01\x12D\n" +
-	"\tCancelRun\x12\x1a.dhole.v1.CancelRunRequest\x1a\x1b.dhole.v1.CancelRunResponseB\x89\x01\n" +
+	"\tCancelRun\x12\x1a.dhole.v1.CancelRunRequest\x1a\x1b.dhole.v1.CancelRunResponse\x12R\n" +
+	"\rWatchPresence\x12\x1e.dhole.v1.WatchPresenceRequest\x1a\x1f.dhole.v1.WatchPresenceResponse0\x01\x12S\n" +
+	"\x0eUpdatePresence\x12\x1f.dhole.v1.UpdatePresenceRequest\x1a .dhole.v1.UpdatePresenceResponseB\x89\x01\n" +
 	"\fcom.dhole.v1B\bApiProtoP\x01Z.github.com/azrtydxb/dhole/gen/dhole/v1;dholev1\xa2\x02\x03DXX\xaa\x02\bDhole.V1\xca\x02\bDhole\\V1\xe2\x02\x14Dhole\\V1\\GPBMetadata\xea\x02\tDhole::V1b\x06proto3"
 
 var (
@@ -2889,7 +3314,7 @@ func file_dhole_v1_api_proto_rawDescGZIP() []byte {
 }
 
 var file_dhole_v1_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_dhole_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_dhole_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
 var file_dhole_v1_api_proto_goTypes = []any{
 	(ChangeKind)(0),                 // 0: dhole.v1.ChangeKind
 	(*AddStep)(nil),                 // 1: dhole.v1.AddStep
@@ -2934,19 +3359,25 @@ var file_dhole_v1_api_proto_goTypes = []any{
 	(*ListEnginesResponse)(nil),     // 40: dhole.v1.ListEnginesResponse
 	(*DrainEngineRequest)(nil),      // 41: dhole.v1.DrainEngineRequest
 	(*DrainEngineResponse)(nil),     // 42: dhole.v1.DrainEngineResponse
-	nil,                             // 43: dhole.v1.Revision.LockfileEntry
-	(*Step)(nil),                    // 44: dhole.v1.Step
-	(*Edge)(nil),                    // 45: dhole.v1.Edge
-	(*Pipeline)(nil),                // 46: dhole.v1.Pipeline
-	(*Digest)(nil),                  // 47: dhole.v1.Digest
-	(EffectClass)(0),                // 48: dhole.v1.EffectClass
-	(Capability)(0),                 // 49: dhole.v1.Capability
-	(*InFlight)(nil),                // 50: dhole.v1.InFlight
+	(*Cursor)(nil),                  // 43: dhole.v1.Cursor
+	(*PresenceEvent)(nil),           // 44: dhole.v1.PresenceEvent
+	(*WatchPresenceRequest)(nil),    // 45: dhole.v1.WatchPresenceRequest
+	(*WatchPresenceResponse)(nil),   // 46: dhole.v1.WatchPresenceResponse
+	(*UpdatePresenceRequest)(nil),   // 47: dhole.v1.UpdatePresenceRequest
+	(*UpdatePresenceResponse)(nil),  // 48: dhole.v1.UpdatePresenceResponse
+	nil,                             // 49: dhole.v1.Revision.LockfileEntry
+	(*Step)(nil),                    // 50: dhole.v1.Step
+	(*Edge)(nil),                    // 51: dhole.v1.Edge
+	(*Pipeline)(nil),                // 52: dhole.v1.Pipeline
+	(*Digest)(nil),                  // 53: dhole.v1.Digest
+	(EffectClass)(0),                // 54: dhole.v1.EffectClass
+	(Capability)(0),                 // 55: dhole.v1.Capability
+	(*InFlight)(nil),                // 56: dhole.v1.InFlight
 }
 var file_dhole_v1_api_proto_depIdxs = []int32{
-	44, // 0: dhole.v1.AddStep.step:type_name -> dhole.v1.Step
-	45, // 1: dhole.v1.Connect.edge:type_name -> dhole.v1.Edge
-	45, // 2: dhole.v1.RemoveEdge.edge:type_name -> dhole.v1.Edge
+	50, // 0: dhole.v1.AddStep.step:type_name -> dhole.v1.Step
+	51, // 1: dhole.v1.Connect.edge:type_name -> dhole.v1.Edge
+	51, // 2: dhole.v1.RemoveEdge.edge:type_name -> dhole.v1.Edge
 	1,  // 3: dhole.v1.Operation.add_step:type_name -> dhole.v1.AddStep
 	3,  // 4: dhole.v1.Operation.connect:type_name -> dhole.v1.Connect
 	5,  // 5: dhole.v1.Operation.set_property:type_name -> dhole.v1.SetProperty
@@ -2955,64 +3386,72 @@ var file_dhole_v1_api_proto_depIdxs = []int32{
 	2,  // 8: dhole.v1.Operation.remove_step:type_name -> dhole.v1.RemoveStep
 	6,  // 9: dhole.v1.Operation.set_step_config:type_name -> dhole.v1.SetStepConfig
 	0,  // 10: dhole.v1.Change.kind:type_name -> dhole.v1.ChangeKind
-	45, // 11: dhole.v1.Change.edge:type_name -> dhole.v1.Edge
+	51, // 11: dhole.v1.Change.edge:type_name -> dhole.v1.Edge
 	9,  // 12: dhole.v1.Diff.changes:type_name -> dhole.v1.Change
-	43, // 13: dhole.v1.Revision.lockfile:type_name -> dhole.v1.Revision.LockfileEntry
-	46, // 14: dhole.v1.GetPipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
+	49, // 13: dhole.v1.Revision.lockfile:type_name -> dhole.v1.Revision.LockfileEntry
+	52, // 14: dhole.v1.GetPipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
 	11, // 15: dhole.v1.GetPipelineResponse.revision:type_name -> dhole.v1.Revision
-	46, // 16: dhole.v1.CreatePipelineRequest.pipeline:type_name -> dhole.v1.Pipeline
-	46, // 17: dhole.v1.CreatePipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
+	52, // 16: dhole.v1.CreatePipelineRequest.pipeline:type_name -> dhole.v1.Pipeline
+	52, // 17: dhole.v1.CreatePipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
 	11, // 18: dhole.v1.CreatePipelineResponse.revision:type_name -> dhole.v1.Revision
 	8,  // 19: dhole.v1.ApplyOperationRequest.operation:type_name -> dhole.v1.Operation
 	11, // 20: dhole.v1.ApplyOperationResponse.revision:type_name -> dhole.v1.Revision
 	10, // 21: dhole.v1.ApplyOperationResponse.diff:type_name -> dhole.v1.Diff
 	8,  // 22: dhole.v1.ApplyOperationResponse.inverse:type_name -> dhole.v1.Operation
-	46, // 23: dhole.v1.ApplyOperationResponse.pipeline:type_name -> dhole.v1.Pipeline
-	46, // 24: dhole.v1.ValidateRequest.pipeline:type_name -> dhole.v1.Pipeline
+	52, // 23: dhole.v1.ApplyOperationResponse.pipeline:type_name -> dhole.v1.Pipeline
+	52, // 24: dhole.v1.ValidateRequest.pipeline:type_name -> dhole.v1.Pipeline
 	19, // 25: dhole.v1.ValidateResponse.diagnostics:type_name -> dhole.v1.Diagnostic
 	22, // 26: dhole.v1.PlanResponse.steps:type_name -> dhole.v1.PlannedStep
 	11, // 27: dhole.v1.ListRevisionsResponse.revisions:type_name -> dhole.v1.Revision
 	11, // 28: dhole.v1.ApproveRevisionResponse.revision:type_name -> dhole.v1.Revision
-	47, // 29: dhole.v1.Plugin.digest:type_name -> dhole.v1.Digest
-	48, // 30: dhole.v1.Plugin.effect_class:type_name -> dhole.v1.EffectClass
-	49, // 31: dhole.v1.Plugin.capabilities:type_name -> dhole.v1.Capability
+	53, // 29: dhole.v1.Plugin.digest:type_name -> dhole.v1.Digest
+	54, // 30: dhole.v1.Plugin.effect_class:type_name -> dhole.v1.EffectClass
+	55, // 31: dhole.v1.Plugin.capabilities:type_name -> dhole.v1.Capability
 	33, // 32: dhole.v1.GetPluginResponse.plugin:type_name -> dhole.v1.Plugin
 	36, // 33: dhole.v1.CancelRunResponse.steps:type_name -> dhole.v1.CancelledStep
-	49, // 34: dhole.v1.Engine.capabilities:type_name -> dhole.v1.Capability
-	50, // 35: dhole.v1.Engine.in_flight:type_name -> dhole.v1.InFlight
+	55, // 34: dhole.v1.Engine.capabilities:type_name -> dhole.v1.Capability
+	56, // 35: dhole.v1.Engine.in_flight:type_name -> dhole.v1.InFlight
 	38, // 36: dhole.v1.ListEnginesResponse.engines:type_name -> dhole.v1.Engine
 	38, // 37: dhole.v1.DrainEngineResponse.engine:type_name -> dhole.v1.Engine
-	39, // 38: dhole.v1.EngineService.ListEngines:input_type -> dhole.v1.ListEnginesRequest
-	41, // 39: dhole.v1.EngineService.DrainEngine:input_type -> dhole.v1.DrainEngineRequest
-	14, // 40: dhole.v1.PipelineService.CreatePipeline:input_type -> dhole.v1.CreatePipelineRequest
-	12, // 41: dhole.v1.PipelineService.GetPipeline:input_type -> dhole.v1.GetPipelineRequest
-	16, // 42: dhole.v1.PipelineService.ApplyOperation:input_type -> dhole.v1.ApplyOperationRequest
-	18, // 43: dhole.v1.PipelineService.Validate:input_type -> dhole.v1.ValidateRequest
-	21, // 44: dhole.v1.PipelineService.Plan:input_type -> dhole.v1.PlanRequest
-	32, // 45: dhole.v1.PipelineService.GetPlugin:input_type -> dhole.v1.GetPluginRequest
-	24, // 46: dhole.v1.PipelineService.ListRevisions:input_type -> dhole.v1.ListRevisionsRequest
-	26, // 47: dhole.v1.PipelineService.ApproveRevision:input_type -> dhole.v1.ApproveRevisionRequest
-	28, // 48: dhole.v1.PipelineService.StartRun:input_type -> dhole.v1.StartRunRequest
-	30, // 49: dhole.v1.PipelineService.WatchRun:input_type -> dhole.v1.WatchRunRequest
-	35, // 50: dhole.v1.PipelineService.CancelRun:input_type -> dhole.v1.CancelRunRequest
-	40, // 51: dhole.v1.EngineService.ListEngines:output_type -> dhole.v1.ListEnginesResponse
-	42, // 52: dhole.v1.EngineService.DrainEngine:output_type -> dhole.v1.DrainEngineResponse
-	15, // 53: dhole.v1.PipelineService.CreatePipeline:output_type -> dhole.v1.CreatePipelineResponse
-	13, // 54: dhole.v1.PipelineService.GetPipeline:output_type -> dhole.v1.GetPipelineResponse
-	17, // 55: dhole.v1.PipelineService.ApplyOperation:output_type -> dhole.v1.ApplyOperationResponse
-	20, // 56: dhole.v1.PipelineService.Validate:output_type -> dhole.v1.ValidateResponse
-	23, // 57: dhole.v1.PipelineService.Plan:output_type -> dhole.v1.PlanResponse
-	34, // 58: dhole.v1.PipelineService.GetPlugin:output_type -> dhole.v1.GetPluginResponse
-	25, // 59: dhole.v1.PipelineService.ListRevisions:output_type -> dhole.v1.ListRevisionsResponse
-	27, // 60: dhole.v1.PipelineService.ApproveRevision:output_type -> dhole.v1.ApproveRevisionResponse
-	29, // 61: dhole.v1.PipelineService.StartRun:output_type -> dhole.v1.StartRunResponse
-	31, // 62: dhole.v1.PipelineService.WatchRun:output_type -> dhole.v1.WatchRunResponse
-	37, // 63: dhole.v1.PipelineService.CancelRun:output_type -> dhole.v1.CancelRunResponse
-	51, // [51:64] is the sub-list for method output_type
-	38, // [38:51] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	43, // 38: dhole.v1.PresenceEvent.cursor:type_name -> dhole.v1.Cursor
+	43, // 39: dhole.v1.WatchPresenceRequest.cursor:type_name -> dhole.v1.Cursor
+	44, // 40: dhole.v1.WatchPresenceResponse.event:type_name -> dhole.v1.PresenceEvent
+	43, // 41: dhole.v1.UpdatePresenceRequest.cursor:type_name -> dhole.v1.Cursor
+	39, // 42: dhole.v1.EngineService.ListEngines:input_type -> dhole.v1.ListEnginesRequest
+	41, // 43: dhole.v1.EngineService.DrainEngine:input_type -> dhole.v1.DrainEngineRequest
+	14, // 44: dhole.v1.PipelineService.CreatePipeline:input_type -> dhole.v1.CreatePipelineRequest
+	12, // 45: dhole.v1.PipelineService.GetPipeline:input_type -> dhole.v1.GetPipelineRequest
+	16, // 46: dhole.v1.PipelineService.ApplyOperation:input_type -> dhole.v1.ApplyOperationRequest
+	18, // 47: dhole.v1.PipelineService.Validate:input_type -> dhole.v1.ValidateRequest
+	21, // 48: dhole.v1.PipelineService.Plan:input_type -> dhole.v1.PlanRequest
+	32, // 49: dhole.v1.PipelineService.GetPlugin:input_type -> dhole.v1.GetPluginRequest
+	24, // 50: dhole.v1.PipelineService.ListRevisions:input_type -> dhole.v1.ListRevisionsRequest
+	26, // 51: dhole.v1.PipelineService.ApproveRevision:input_type -> dhole.v1.ApproveRevisionRequest
+	28, // 52: dhole.v1.PipelineService.StartRun:input_type -> dhole.v1.StartRunRequest
+	30, // 53: dhole.v1.PipelineService.WatchRun:input_type -> dhole.v1.WatchRunRequest
+	35, // 54: dhole.v1.PipelineService.CancelRun:input_type -> dhole.v1.CancelRunRequest
+	45, // 55: dhole.v1.PipelineService.WatchPresence:input_type -> dhole.v1.WatchPresenceRequest
+	47, // 56: dhole.v1.PipelineService.UpdatePresence:input_type -> dhole.v1.UpdatePresenceRequest
+	40, // 57: dhole.v1.EngineService.ListEngines:output_type -> dhole.v1.ListEnginesResponse
+	42, // 58: dhole.v1.EngineService.DrainEngine:output_type -> dhole.v1.DrainEngineResponse
+	15, // 59: dhole.v1.PipelineService.CreatePipeline:output_type -> dhole.v1.CreatePipelineResponse
+	13, // 60: dhole.v1.PipelineService.GetPipeline:output_type -> dhole.v1.GetPipelineResponse
+	17, // 61: dhole.v1.PipelineService.ApplyOperation:output_type -> dhole.v1.ApplyOperationResponse
+	20, // 62: dhole.v1.PipelineService.Validate:output_type -> dhole.v1.ValidateResponse
+	23, // 63: dhole.v1.PipelineService.Plan:output_type -> dhole.v1.PlanResponse
+	34, // 64: dhole.v1.PipelineService.GetPlugin:output_type -> dhole.v1.GetPluginResponse
+	25, // 65: dhole.v1.PipelineService.ListRevisions:output_type -> dhole.v1.ListRevisionsResponse
+	27, // 66: dhole.v1.PipelineService.ApproveRevision:output_type -> dhole.v1.ApproveRevisionResponse
+	29, // 67: dhole.v1.PipelineService.StartRun:output_type -> dhole.v1.StartRunResponse
+	31, // 68: dhole.v1.PipelineService.WatchRun:output_type -> dhole.v1.WatchRunResponse
+	37, // 69: dhole.v1.PipelineService.CancelRun:output_type -> dhole.v1.CancelRunResponse
+	46, // 70: dhole.v1.PipelineService.WatchPresence:output_type -> dhole.v1.WatchPresenceResponse
+	48, // 71: dhole.v1.PipelineService.UpdatePresence:output_type -> dhole.v1.UpdatePresenceResponse
+	57, // [57:72] is the sub-list for method output_type
+	42, // [42:57] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_api_proto_init() }
@@ -3038,7 +3477,7 @@ func file_dhole_v1_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_api_proto_rawDesc), len(file_dhole_v1_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   43,
+			NumMessages:   49,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

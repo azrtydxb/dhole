@@ -119,9 +119,14 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// every dispatch does. An API reaching engines over a connection of
 		// its own would be a second control plane.
 		Control: api.NewBusControl(s.infra.plane),
-		Catalog: catalog.New(s.infra.db, s.infra.dialect),
-		OS:      runtime.GOOS,
-		Arch:    runtime.GOARCH,
+		// The same connection carries presence. It is an ephemeral subject
+		// per pipeline and nothing about it is stored (internal/api's
+		// presence.go); giving the API a bus connection of its own would be a
+		// second control plane on the same bus.
+		Presence: s.infra.plane,
+		Catalog:  catalog.New(s.infra.db, s.infra.dialect),
+		OS:       runtime.GOOS,
+		Arch:     runtime.GOARCH,
 	}
 	// Assigned only when there is one. A nil executor.Executor stored in the
 	// interface field would be a non-nil interface holding nil, and Plan's

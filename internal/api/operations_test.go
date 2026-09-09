@@ -430,8 +430,14 @@ func TestEveryOperationInverseRoundTrips(t *testing.T) {
 }
 
 // TestApplyOperationRejectsStaleVersion: two people editing at once is the
-// normal case. The second edit against a superseded base is refused, not
-// silently merged into a document that neither of them wrote.
+// normal case. The second edit against a superseded base is refused when it
+// overlaps the first, not silently merged into a document that neither of them
+// wrote.
+//
+// Both operations here rename step "c" — the same step, from the same base.
+// Disjoint edits DO merge, which is multiplayer editing and is tested in
+// presence_test.go; this is the case where merging would tell one of the two
+// that their change had landed when it had not.
 func TestApplyOperationRejectsStaleVersion(t *testing.T) {
 	h := newRealHarness(t)
 	original, base := seed(t, h, tenantA)
@@ -447,7 +453,9 @@ func TestApplyOperationRejectsStaleVersion(t *testing.T) {
 	_, err = h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
 		PipelineId:   original.GetId(),
 		BaseRevision: base.ID,
-		Operation:    fixtureFor(t, "add_step"),
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_Rename{
+			Rename: &dholev1.Rename{StepId: "c", Name: "carol was here"},
+		}},
 	}, tokenCarol))
 	require.Error(t, err)
 	require.Equal(t, connect.CodeAborted, connect.CodeOf(err))
@@ -661,6 +669,23 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 		return err
 	case "WatchRun":
 		stream, err := h.client.WatchRun(ctx, connect.NewRequest(&dholev1.WatchRunRequest{RunId: "run-x"}))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stream.Close() }()
+		if stream.Receive() {
+			return nil
+		}
+		return stream.Err()
+	case "UpdatePresence":
+		_, err := h.client.UpdatePresence(ctx, connect.NewRequest(&dholev1.UpdatePresenceRequest{
+			PipelineId: "pipe-1", SessionId: "tab-1",
+		}))
+		return err
+	case "WatchPresence":
+		stream, err := h.client.WatchPresence(ctx, connect.NewRequest(&dholev1.WatchPresenceRequest{
+			PipelineId: "pipe-1", SessionId: "tab-1",
+		}))
 		if err != nil {
 			return err
 		}

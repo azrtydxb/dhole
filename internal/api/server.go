@@ -154,6 +154,13 @@ type Config struct {
 	// LogArchive is the authoritative log the run view falls back to once a
 	// step has finished. Optional, with the same rule.
 	LogArchive LogArchive
+	// Presence is the ephemeral subject multiplayer editors announce
+	// themselves on. Optional: without one, WatchPresence says so rather
+	// than serving an editor who appears to be alone.
+	Presence PresenceBus
+	// PresenceTTL overrides DefaultPresenceTTL: how long an announcement
+	// stands without being refreshed.
+	PresenceTTL time.Duration
 	// PollInterval overrides DefaultPollInterval.
 	PollInterval time.Duration
 	// Now is the clock, injectable for tests.
@@ -180,8 +187,12 @@ type Server struct {
 	archive LogArchive
 	os      string
 	arch    string
-	poll    time.Duration
-	now     func() time.Time
+	// presence is the ephemeral subject editors announce on, and presenceTTL
+	// is how long one announcement stands unrefreshed. See presence.go.
+	presence    PresenceBus
+	presenceTTL time.Duration
+	poll        time.Duration
+	now         func() time.Time
 }
 
 // Compile-time proof that the server serves the whole generated contract: a
@@ -200,23 +211,28 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		defs:    cfg.Definitions,
-		auth:    cfg.Auth,
-		runs:    cfg.Runs,
-		adv:     cfg.Advancer,
-		heads:   cfg.Heads,
-		cache:   cfg.Cache,
-		fleet:   cfg.Fleet,
-		drain:   cfg.Drain,
-		control: cfg.Control,
-		env:     cfg.Environment,
-		cat:     cfg.Catalog,
-		live:    cfg.LiveLogs,
-		archive: cfg.LogArchive,
-		os:      cfg.OS,
-		arch:    cfg.Arch,
-		poll:    cfg.PollInterval,
-		now:     cfg.Now,
+		defs:        cfg.Definitions,
+		auth:        cfg.Auth,
+		runs:        cfg.Runs,
+		adv:         cfg.Advancer,
+		heads:       cfg.Heads,
+		cache:       cfg.Cache,
+		fleet:       cfg.Fleet,
+		drain:       cfg.Drain,
+		control:     cfg.Control,
+		env:         cfg.Environment,
+		cat:         cfg.Catalog,
+		live:        cfg.LiveLogs,
+		archive:     cfg.LogArchive,
+		os:          cfg.OS,
+		arch:        cfg.Arch,
+		presence:    cfg.Presence,
+		presenceTTL: cfg.PresenceTTL,
+		poll:        cfg.PollInterval,
+		now:         cfg.Now,
+	}
+	if s.presenceTTL <= 0 {
+		s.presenceTTL = DefaultPresenceTTL
 	}
 	if s.heads == nil {
 		s.heads = NewMemoryHeads()
@@ -373,22 +389,38 @@ func (s *Server) ApplyOperation(
 	if err != nil {
 		return nil, storeError("read head", err)
 	}
+	// The revision this edit will actually be applied to. It is the caller's
+	// base whenever the head is still there, and the head when somebody else
+	// has moved it and their edit touched nothing this one touches: two people
+	// editing different parts of one pipeline both keep their change, which is
+	// the whole of multiplayer editing (presence.go). Overlapping edits are
+	// refused there, with the newer revision attached.
+	applyTo := base
 	if known && head != base {
-		return nil, connect.NewError(connect.CodeAborted, fmt.Errorf(
-			"api: revision conflict: pipeline %q is at revision %s, not the %s this edit was made against",
-			pipelineID, head, base))
+		applyTo, err = s.rebaseOnto(ctx, p.TenantID, pipelineID, base, head, req.Msg.GetOperation())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// The definition is read out of the store and edited on a COPY: the
 	// revision the caller based its edit on is immutable, and a run that
 	// pinned it must read back exactly what it pinned however long it lasts.
-	current, err := s.defs.Get(ctx, p.TenantID, pipelineID, base)
+	current, err := s.defs.Get(ctx, p.TenantID, pipelineID, applyTo)
 	if err != nil {
 		return nil, storeError("get pipeline", err)
 	}
 
 	next, diff, inverse, err := Apply(current, req.Msg.GetOperation())
 	if err != nil {
+		if applyTo != base {
+			// The edit was disjoint on paper and does not apply in fact.
+			// That is a conflict rather than a bad request: the operation was
+			// well formed against the revision its author was looking at.
+			return nil, s.conflict(ctx, p.TenantID, applyTo, fmt.Sprintf(
+				"pipeline %q moved to revision %s, where this edit no longer applies: %v",
+				pipelineID, applyTo, err))
+		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
@@ -403,13 +435,21 @@ func (s *Server) ApplyOperation(
 	// between processes too.
 	from := ""
 	if known {
-		from = base
+		from = applyTo
 	}
 	if err := s.heads.CompareAndSetHead(ctx, p.TenantID, pipelineID, from, rev.ID); err != nil {
-		if errors.Is(err, defstore.ErrHeadMoved) {
-			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf(
-				"api: revision conflict: pipeline %q moved away from %s while this edit was being applied",
-				pipelineID, base))
+		if headMoved(err) {
+			// Somebody moved the head between the read above and this write.
+			// The refusal carries wherever it is NOW rather than where this
+			// caller last looked, because that is the revision they have to
+			// rebase onto.
+			current, _, headErr := s.heads.Head(ctx, p.TenantID, pipelineID)
+			if headErr != nil {
+				return nil, storeError("read head", headErr)
+			}
+			return nil, s.conflict(ctx, p.TenantID, current, fmt.Sprintf(
+				"pipeline %q moved to revision %s while this edit was being applied",
+				pipelineID, current))
 		}
 		return nil, storeError("record head", err)
 	}

@@ -35,10 +35,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/catalog"
+	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
@@ -50,6 +52,13 @@ import (
 // browser side of the suite does not have to shell out.
 type issued struct {
 	Token string `json:"token"`
+}
+
+// seeded is one pipeline of a named shape and the revision to base the first
+// edit on. It is what POST /shape/{name} answers with.
+type seeded struct {
+	PipelineID string `json:"pipelineId"`
+	RevisionID string `json:"revisionId"`
 }
 
 func main() {
@@ -99,6 +108,11 @@ func run(addr, dsn, waitFor string) error {
 
 	local := identity.NewLocal(identity.NewSQLStore(db))
 	plugins := catalog.New(db, runstore.DialectSQLite)
+	// The shapes below name commands rather than published plugins, so there
+	// is nothing to pin; saying so beats leaving an unpinned save to chance.
+	defs := defstore.New(db, defstore.WithoutPinning())
+	// One counter, so two shapes of the same name are two pipelines.
+	var n atomic.Uint64
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {

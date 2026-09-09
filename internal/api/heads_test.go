@@ -71,10 +71,17 @@ func TestTwoPlanesCannotBothAcceptAnEditAgainstTheSameBase(t *testing.T) {
 	// The second plane still believes base is current. It is not, and this is
 	// the moment the two planes have to disagree with each other rather than
 	// both agreeing with a caller.
+	//
+	// The edit OVERLAPS the first — both rename step "c" — because two edits
+	// that touch different steps are merged rather than refused (presence.go).
+	// The head's compare-and-set is what decides which of two planes gets to
+	// write; this asserts that it decides.
 	_, err = two.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
 		PipelineId:   "pipe-1",
 		BaseRevision: base.ID,
-		Operation:    fixtureFor(t, "add_step"),
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_Rename{
+			Rename: &dholev1.Rename{StepId: "c", Name: "the second plane"},
+		}},
 	}, tokenAlice))
 	require.Error(t, err, "two planes both accepted an edit against the same base")
 	require.Equal(t, connect.CodeAborted, connect.CodeOf(err))
