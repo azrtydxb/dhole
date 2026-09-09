@@ -1,0 +1,55 @@
+// Package wire holds the engine protocol version and the rule for agreeing on
+// one. The wire schema is a public contract: within a major version changes are
+// additive only, and the control plane must keep talking to engines one version
+// behind so a fleet upgrades gradually rather than in a flag day.
+package wire
+
+import "fmt"
+
+// ProtocolVersion is the version this build of the control plane speaks.
+const ProtocolVersion uint32 = 1
+
+// SupportedWindow is how many versions back the control plane accepts. One
+// means "current and previous"; widening it is a deliberate decision, because
+// every extra version is a shape the control plane must keep handling.
+const SupportedWindow uint32 = 1
+
+// Negotiate picks the version this control plane and an engine will speak.
+func Negotiate(engineVersions []uint32) (uint32, error) {
+	return NegotiateAgainst(ProtocolVersion, engineVersions)
+}
+
+// NegotiateAgainst is Negotiate with the control plane's version supplied
+// explicitly, so the compatibility window can be exercised at versions this
+// build does not happen to be pinned at.
+//
+// It returns the highest version both sides speak. It never returns a version
+// above the control plane's own — an engine advertising a future version is
+// talked down, not deferred to.
+func NegotiateAgainst(ours uint32, engineVersions []uint32) (uint32, error) {
+	oldest := oldestAccepted(ours)
+
+	best, found := uint32(0), false
+	for _, v := range engineVersions {
+		if v < oldest || v > ours {
+			continue
+		}
+		if !found || v > best {
+			best, found = v, true
+		}
+	}
+	if !found {
+		return 0, fmt.Errorf("unsupported protocol: engine speaks %v, this control plane accepts %d..%d",
+			engineVersions, oldest, ours)
+	}
+	return best, nil
+}
+
+// oldestAccepted is the floor of the compatibility window, clamped so a
+// control plane at version 1 does not accept version 0.
+func oldestAccepted(ours uint32) uint32 {
+	if ours <= SupportedWindow {
+		return 1
+	}
+	return ours - SupportedWindow
+}
