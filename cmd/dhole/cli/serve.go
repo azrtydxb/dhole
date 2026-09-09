@@ -7,9 +7,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/azrtydxb/dhole/internal/obs"
 	"github.com/azrtydxb/dhole/internal/server"
 	"github.com/azrtydxb/dhole/internal/version"
 )
@@ -23,12 +25,35 @@ import (
 // same control plane and puts it in front of somebody else's Postgres, NATS
 // and engines.
 func serveCmd(o *options) *cobra.Command {
-	var mode, storeDSN, busURL, blobRoot, deploymentID string
+	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint string
+	var otlpInsecure bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "run the control plane",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Telemetry is installed before anything can emit, and its
+			// shutdown is deferred immediately: spans are batched, so what is
+			// not flushed is not exported, and the unflushed tail belongs to
+			// whatever someone is about to investigate. An unconfigured
+			// collector is not an error — a broken one must not take the
+			// control plane down with it.
+			shutdownObs, err := obs.Init(cmd.Context(), obs.Config{
+				ServiceName:  "dhole-control-plane",
+				OTLPEndpoint: otlpEndpoint,
+				Insecure:     otlpInsecure,
+			})
+			if err != nil {
+				return fmt.Errorf("telemetry: %w", err)
+			}
+			defer func() {
+				flush, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), 10*time.Second)
+				defer cancel()
+				if err := shutdownObs(flush); err != nil {
+					_, _ = fmt.Fprintf(o.env.Stderr, "dhole: telemetry shutdown: %v\n", err)
+				}
+			}()
+
 			srv, err := server.New(server.Config{
 				Mode:     server.Mode(mode),
 				StoreDSN: storeDSN,
@@ -75,6 +100,10 @@ func serveCmd(o *options) *cobra.Command {
 	flags.StringVar(&deploymentID, "deployment-id", os.Getenv("DHOLE_DEPLOYMENT_ID"),
 		"name of this control plane; two planes sharing a database must not share it "+
 			"(derived from --blob-root when unset)")
+	flags.StringVar(&otlpEndpoint, "otlp-endpoint", os.Getenv("DHOLE_OTLP_ENDPOINT"),
+		"OTLP collector address for traces and metrics; unset means telemetry goes nowhere")
+	flags.BoolVar(&otlpInsecure, "otlp-insecure", false,
+		"send to the OTLP collector without TLS")
 	return cmd
 }
 

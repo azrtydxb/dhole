@@ -661,11 +661,11 @@ Interfaces: produces `server.PartitionFor(runID string, n int) int`, `server.Cla
 Files: `internal/obs/tracing.go`, `internal/obs/metrics.go`, `internal/obs/obs_test.go`
 Interfaces: produces `obs.Init(ctx, cfg obs.Config) (shutdown func(context.Context) error, err error)`, `obs.StepSpan(ctx, runID, stepID string) (context.Context, trace.Span)`.
 
-- [ ] Write `internal/obs/obs_test.go` asserting `TestEachStepEmitsOneSpanWithRunAndStepAttributes`: running the two-step pipeline against an in-memory exporter yields two step spans carrying `dhole.run_id` and `dhole.step_id`, parented to a run span. Run — expect FAIL with "undefined: obs.StepSpan".
-- [ ] Add `TestStepResourceMetricsAreRecorded` asserting `dhole_step_cpu_seconds` and `dhole_step_max_rss_bytes` are exported per step.
-- [ ] Add `TestBuildDurationRegressionMetricIsExported` asserting `dhole_step_duration_seconds` carries a `cache_hit` label so slow-down analysis can separate the two.
-- [ ] Implement `internal/obs/tracing.go` and `metrics.go` with OpenTelemetry, propagating trace context through the `JobDispatch` message so engine-side spans join the run trace.
-- [ ] Run `go test ./internal/obs` — expect PASS. Commit.
+- [x] Write `internal/obs/obs_test.go` asserting `TestEachStepEmitsOneSpanWithRunAndStepAttributes`: running the two-step pipeline against an in-memory exporter yields two step spans carrying `dhole.run_id` and `dhole.step_id`, parented to a run span. Run — expect FAIL with "undefined: obs.StepSpan".
+- [x] Add `TestStepResourceMetricsAreRecorded` asserting `dhole_step_cpu_seconds` and `dhole_step_max_rss_bytes` are exported per step.
+- [x] Add `TestBuildDurationRegressionMetricIsExported` asserting `dhole_step_duration_seconds` carries a `cache_hit` label so slow-down analysis can separate the two.
+- [x] Implement `internal/obs/tracing.go` and `metrics.go` with OpenTelemetry, propagating trace context through the `JobDispatch` message so engine-side spans join the run trace.
+- [x] Run `go test ./internal/obs` — expect PASS. Commit.
 
 ## Task 45: Web app scaffold and generated client
 
