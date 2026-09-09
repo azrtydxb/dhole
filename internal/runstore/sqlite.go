@@ -75,10 +75,12 @@ func migrationNumber(name string) string {
 	return number
 }
 
-// timeFormat is how an event timestamp is stored. SQLite has no time type;
-// RFC3339 with nanoseconds in UTC sorts lexicographically in the same order it
-// sorts chronologically.
-const timeFormat = time.RFC3339Nano
+// TimeFormat is how a timestamp is stored under SQLite. SQLite has no time
+// type; RFC3339 with nanoseconds in UTC sorts lexicographically in the same
+// order it sorts chronologically. It is exported because anything writing its
+// own timestamp column through a Tx — the outbox — has to store it the same
+// way or the ordering silently stops being chronological.
+const TimeFormat = time.RFC3339Nano
 
 // SQLiteStore is the development and homelab implementation of Store, backed
 // by a single SQLite file. Postgres is the tuned target; this one has to keep
@@ -96,8 +98,18 @@ var _ Store = (*SQLiteStore)(nil)
 func NewSQLite(path string) (Store, error) {
 	// WAL keeps a reader from blocking the writer; the busy timeout absorbs
 	// the brief contention that remains instead of failing the append.
+	//
+	// _txlock=immediate takes the write lock when a transaction BEGINS rather
+	// than at its first write. SQLite has no SELECT ... FOR UPDATE, so this
+	// database-wide write lock IS the outbox drainer's row claim: a second
+	// control plane cannot read the same unsent rows and publish them a
+	// second time, because it cannot enter the transaction at all until the
+	// first one commits. Deferred locking would instead let both read, both
+	// publish, and one fail at commit — after the duplicate had already gone
+	// out.
 	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" +
+		"&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite run store: %w", err)
@@ -132,22 +144,90 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	return nil
 }
 
+// sqliteAppend is the one INSERT both the store and its transactions use. A
+// second copy of it inside WithTx would be free to drift from this one, and a
+// transactional append behaving differently from a plain one is exactly the
+// kind of divergence the outbox cannot survive.
+const sqliteAppend = `INSERT INTO run_events
+	(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT DO NOTHING`
+
+// sqliteAppendArgs binds one event to sqliteAppend.
+func sqliteAppendArgs(tenantID string, e Event) []any {
+	return []any{
+		tenantID, e.RunID, e.StepID, e.Attempt, e.Sequence,
+		string(e.Type), e.Payload, e.At.UTC().Format(TimeFormat),
+	}
+}
+
 // Append records an event, ignoring a duplicate of one already stored.
 func (s *SQLiteStore) Append(ctx context.Context, tenantID string, e Event) error {
 	if tenantID == "" {
 		return ErrTenantRequired
 	}
-	const q = `INSERT INTO run_events
-		(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT DO NOTHING`
-	_, err := s.db.ExecContext(ctx, q,
-		tenantID, e.RunID, e.StepID, e.Attempt, e.Sequence,
-		string(e.Type), e.Payload, e.At.UTC().Format(timeFormat))
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, sqliteAppend, sqliteAppendArgs(tenantID, e)...); err != nil {
 		return fmt.Errorf("append run event: %w", err)
 	}
 	return nil
+}
+
+// WithTx runs fn in one transaction, committing only if it returns nil.
+//
+// fn's error is returned unwrapped, so a caller that aborts with its own
+// sentinel can still identify it with errors.Is. The deferred rollback is a
+// no-op after a successful commit and is what covers a panic inside fn: a
+// transaction left open holds SQLite's write lock and stalls every writer
+// behind it.
+func (s *SQLiteStore) WithTx(ctx context.Context, fn func(Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := fn(&sqliteTx{tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+// sqliteTx is one open SQLite transaction handed to a WithTx callback.
+type sqliteTx struct {
+	tx *sql.Tx
+}
+
+var _ Tx = (*sqliteTx)(nil)
+
+func (t *sqliteTx) Dialect() Dialect { return DialectSQLite }
+
+func (t *sqliteTx) Append(ctx context.Context, tenantID string, e Event) error {
+	if tenantID == "" {
+		return ErrTenantRequired
+	}
+	if _, err := t.tx.ExecContext(ctx, sqliteAppend, sqliteAppendArgs(tenantID, e)...); err != nil {
+		return fmt.Errorf("append run event: %w", err)
+	}
+	return nil
+}
+
+func (t *sqliteTx) Exec(ctx context.Context, query string, args ...any) error {
+	if _, err := t.tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("exec in transaction: %w", err)
+	}
+	return nil
+}
+
+func (t *sqliteTx) Query(ctx context.Context, query string, args ...any) (Rows, error) {
+	rows, err := t.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query in transaction: %w", err)
+	}
+	// *sql.Rows already has exactly the Rows shape.
+	return rows, nil
 }
 
 // Replay returns the run's events in the order they must be applied.
@@ -178,7 +258,7 @@ func (s *SQLiteStore) Replay(ctx context.Context, tenantID, runID string) ([]Eve
 		}
 		e.Type = EventType(typ)
 		e.Payload = given
-		if e.At, err = time.Parse(timeFormat, at); err != nil {
+		if e.At, err = time.Parse(TimeFormat, at); err != nil {
 			return nil, fmt.Errorf("replay run: parse event time: %w", err)
 		}
 		events = append(events, e)

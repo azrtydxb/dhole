@@ -185,12 +185,12 @@ Interfaces: produces `bus.Bus` with `Publish(ctx, subject string, msg proto.Mess
 Files: `internal/outbox/outbox.go`, `internal/outbox/outbox_test.go`, `internal/runstore/migrations/0002_outbox.sql`
 Interfaces: produces `outbox.Outbox` with `Enqueue(ctx, tx runstore.Tx, tenantID, subject string, msg proto.Message) error`, `Drain(ctx) (int, error)`; `runstore.Store.WithTx(ctx, fn func(Tx) error) error` added to Task 4's interface.
 
-- [ ] Write `internal/outbox/outbox_test.go` asserting `TestEventAndPublishCommitTogether`: within one `WithTx`, append an event and enqueue a message, then force the transaction to roll back and require neither is present. Run — expect FAIL with "undefined: outbox.New".
-- [ ] Add `TestDrainPublishesThenMarksSent` asserting `Drain` publishes to the bus and a second `Drain` returns 0.
-- [ ] Add `TestDrainRetriesAfterBusFailure`: with the bus stopped, `Drain` returns an error and leaves the row unsent; after restarting the bus, `Drain` publishes it.
-- [ ] Write migration `0002_outbox.sql` creating `outbox(id, tenant_id, subject, payload, created_at, sent_at NULL)` with an index on `sent_at IS NULL`.
-- [ ] Implement `WithTx` on both store implementations and `internal/outbox/outbox.go` with a polling drainer on a 200ms ticker.
-- [ ] Run `go test ./internal/outbox` — expect PASS. Commit.
+- [x] Write `internal/outbox/outbox_test.go` asserting `TestEventAndPublishCommitTogether`: within one `WithTx`, append an event and enqueue a message, then force the transaction to roll back and require neither is present. Run — expect FAIL with "undefined: outbox.New".
+- [x] Add `TestDrainPublishesThenMarksSent` asserting `Drain` publishes to the bus and a second `Drain` returns 0.
+- [x] Add `TestDrainRetriesAfterBusFailure`: with the bus stopped, `Drain` returns an error and leaves the row unsent; after restarting the bus, `Drain` publishes it.
+- [x] Write migration `0002_outbox.sql` creating `outbox(id, tenant_id, subject, payload, created_at, sent_at NULL)` with an index on `sent_at IS NULL`.
+- [x] Implement `WithTx` on both store implementations and `internal/outbox/outbox.go` with a polling drainer on a 200ms ticker.
+- [x] Run `go test ./internal/outbox` — expect PASS. Commit.
 
 ## Task 12: Engine agent runtime
 
