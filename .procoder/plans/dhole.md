@@ -857,10 +857,10 @@ Interfaces: produces `vm.New(cfg vm.Config) (executor.Executor, error)`; `Config
 Files: `internal/executor/process/process_darwin.go`, `internal/executor/process/process_windows.go`, `internal/executor/process/process_platform_test.go`, `.github/workflows/ci.yml`
 Interfaces: produces build-tagged implementations of the Task 9 signal and process-tree behaviour for `darwin` and `windows`.
 
-- [ ] Write `internal/executor/process/process_platform_test.go` asserting `TestProcessTreeIsKilledOnCancelOnEveryPlatform`: a command spawning a child that outlives its parent is fully terminated within 2s. Run on Windows — expect FAIL with "signal: not supported by windows".
-- [ ] Add `TestExitCodeOnOOMIsReportedConsistently` asserting a memory-exhausting command yields a documented exit code on each platform rather than a silent success.
-- [ ] Implement `process_windows.go` using a Job Object to kill the process tree, and `process_darwin.go` using process groups with `SIGTERM` then `SIGKILL`.
-- [ ] Extend `executorContract` with the two new cases so all executors are held to them, and update `docs/wire-contract.md` with the documented OOM exit codes.
+- [x] Write `internal/executor/process/process_platform_test.go` asserting `TestProcessTreeIsKilledOnCancelOnEveryPlatform`: a command spawning a child that outlives its parent is fully terminated within 2s. Run on Windows — expect FAIL with "signal: not supported by windows".
+- [x] Add `TestExitCodeOnOOMIsReportedConsistently` asserting a memory-exhausting command yields a documented exit code on each platform rather than a silent success.
+- [x] Implement `process_windows.go` using a Job Object to kill the process tree, and `process_darwin.go` using process groups with `SIGTERM` then `SIGKILL`.
+- [x] Extend `executorContract` with the two new cases so all executors are held to them, and update `docs/wire-contract.md` with the documented OOM exit codes.
 - [ ] Add `macos-latest` and `windows-latest` engine jobs to CI running `make conformance`.
 - [ ] Run `make conformance` on all three platforms — expect PASS. Commit.
 

@@ -16,6 +16,7 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/cache"
 	"github.com/azrtydxb/dhole/internal/executor"
+	"github.com/azrtydxb/dhole/internal/executor/executortest"
 	"github.com/azrtydxb/dhole/internal/executor/pool"
 	"github.com/azrtydxb/dhole/internal/executor/process"
 )
@@ -525,4 +526,40 @@ func TestCloseReleasesEverything(t *testing.T) {
 	// The one still out is released when its holder gives it back.
 	require.NoError(t, b.Release(t.Context()))
 	require.Equal(t, 1, maker.at(1).releaseCount(), "a closed pool keeps nothing warm")
+}
+
+// pooledExecutor presents a warm pool as an ordinary executor.Executor, so the
+// shared conformance contract can be run against it. Everything the contract
+// asks for goes through a POOL LEASE rather than a fresh sandbox, which is the
+// point: a sandbox handed out warm has to behave exactly like a cold one, and
+// the two cases Task 54 added — a cancelled step leaving nothing running, a
+// killed step reporting 137 — are the ones a reused sandbox is most likely to
+// get wrong, because whatever the last occupant leaked is still in there.
+type pooledExecutor struct {
+	inner executor.Executor
+	mgr   *pool.Manager
+	key   string
+}
+
+func (p *pooledExecutor) Kind() string                         { return p.inner.Kind() }
+func (p *pooledExecutor) Capabilities() []dholev1.Capability   { return p.inner.Capabilities() }
+func (p *pooledExecutor) EnvironmentIdentity() (string, error) { return p.inner.EnvironmentIdentity() }
+
+func (p *pooledExecutor) Acquire(ctx context.Context, spec executor.Spec) (executor.Sandbox, error) {
+	return p.mgr.Acquire(ctx, p.key, func() (executor.Sandbox, error) {
+		return p.inner.Acquire(ctx, executor.Spec{Env: spec.Env, Lease: executor.LeasePool})
+	})
+}
+
+// TestPooledExecutorContract holds the pool to the same contract every backend
+// passes. A pool that quietly weakened one of the executor guarantees would be
+// invisible otherwise: nothing else in this package runs the shared suite.
+func TestPooledExecutorContract(t *testing.T) {
+	mgr := pool.New(pool.Options{})
+	t.Cleanup(func() { require.NoError(t, mgr.Close(context.WithoutCancel(t.Context()))) })
+	executortest.Contract(t, &pooledExecutor{
+		inner: process.New(),
+		mgr:   mgr,
+		key:   "tenant-a/contract",
+	})
 }

@@ -70,3 +70,58 @@ jobs:
       # `make check`.
       - name: e2e
         run: make web-e2e
+
+  # The macOS and Windows engines (Task 54). The gate above runs on Linux
+  # only, so without these two jobs the build-tagged halves of
+  # internal/executor/process are files nobody ever compiles, let alone runs.
+  engine-macos:
+    name: engine (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      # The executor contract is where the property that matters lives: a
+      # cancelled step leaves nothing running, and a killed step reports 137.
+      - name: executor tests
+        run: go test ./internal/executor/...
+      # macOS carries python3 and a POSIX shell, so the reference engine and
+      # the suite's cases both run here exactly as they do on Linux.
+      - name: conformance
+        run: make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
+
+  engine-windows:
+    name: engine (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # bash, because the Makefile and these commands are POSIX shell. Git's
+        # bash is on every Windows runner.
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+      # This is the first time the Job Object engine is executed rather than
+      # merely compiled: process_windows.go is unreachable from any other job.
+      - name: executor tests
+        run: go test ./internal/executor/...
+      # `make conformance` is deliberately NOT run here, and the reason is not
+      # the Makefile. The reference engine in testdata/engines/minimal-python
+      # is POSIX-only — it calls os.killpg/os.getpgid, neither of which exists
+      # on Windows, and shells out to `rm -rf` — and every case in
+      # conformance/cases.go dispatches a POSIX `sh -c` command using sleep,
+      # printf and tr. Running it here would fail on the fixtures rather than
+      # on the engine under test, which would say nothing about Windows.
+      # Enabling it needs a Windows-capable reference engine and
+      # shell-neutral cases; until then this job proves what it can.

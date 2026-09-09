@@ -35,13 +35,21 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/catalog"
+	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
+
+// seeded is a pipeline this process created for a test to work on.
+type seeded struct {
+	PipelineID string `json:"pipelineId"`
+	RevisionID string `json:"revisionId"`
+}
 
 // issued is a credential minted for one tenant. `dhole serve` prints the
 // bootstrap credential for the default tenant only, and a suite testing that
@@ -99,6 +107,11 @@ func run(addr, dsn, waitFor string) error {
 
 	local := identity.NewLocal(identity.NewSQLStore(db))
 	plugins := catalog.New(db, runstore.DialectSQLite)
+	// A definition store for the shaped pipelines below. A pipeline with no
+	// plugin references is created through CreatePipeline like any client
+	// would; a SHAPE carries steps with commands, which no operation can set.
+	defs := defstore.NewWithDialect(db, runstore.DialectSQLite, defstore.WithoutPinning())
+	var n atomic.Int64
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {

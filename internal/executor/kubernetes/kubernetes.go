@@ -59,6 +59,10 @@ const (
 	sandboxRoot = "/dhole"
 	// readyTimeout bounds waiting for a pod to schedule and pull its image.
 	readyTimeout = 3 * time.Minute
+	// killTreeTimeout bounds the sweep that terminates a cancelled step's
+	// processes. It is short: it runs on the cancellation path, where the
+	// caller is already gone.
+	killTreeTimeout = 30 * time.Second
 	// evictionExitCode is what a step reports when its pod disappeared under
 	// it. 137 is the conventional SIGKILL status, and it is deliberately not
 	// zero: an evicted step is a failed step, never a silent pass.
@@ -327,9 +331,53 @@ func (s *sandbox) Exec(ctx context.Context, cmd executor.Cmd) (int32, error) {
 			return 0, err
 		}
 	}
-	script := fmt.Sprintf("cd %s || exit 127\nexec env %s %s",
-		shellQuote(dir), envArgs(s.env, cmd.Env), shellArgs(cmd.Args))
-	return s.run(ctx, []string{"sh", "-c", script}, cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	// Every process of this command carries a unique marker in its
+	// environment. Cancellation needs to find them again, and it cannot do it
+	// by parentage: a step whose direct child exits leaves its grandchildren
+	// reparented to pid 1, with nothing left connecting them to this command.
+	// An inherited environment variable survives that, and survives a new
+	// process group too.
+	tree := treeMarker + "=" + rand.String(12)
+	script := fmt.Sprintf("cd %s || exit 127\nexec env %s %s %s",
+		shellQuote(dir), shellQuote(tree), envArgs(s.env, cmd.Env), shellArgs(cmd.Args))
+	code, err := s.run(ctx, []string{"sh", "-c", script}, cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	if ctx.Err() != nil {
+		// The API server drops the exec stream when the context ends; the
+		// processes in the pod never hear about it. Under a pipeline or pool
+		// lease the pod outlives the step, so a cancelled step would go on
+		// burning the node's CPU for the rest of the run.
+		if killErr := s.killTree(ctx, tree); killErr != nil && err == nil {
+			err = killErr
+		}
+	}
+	return code, err
+}
+
+// treeMarker is the environment variable naming which command a process
+// belongs to. It is read back out of /proc/<pid>/environ, which the kernel
+// only shows to the same user — the same user every process in the container
+// runs as.
+const treeMarker = "DHOLE_EXEC_TREE"
+
+// killTree kills every process in the container carrying marker, which is the
+// command and everything it spawned, however deep and whoever has since
+// adopted it. The sweeping shell excludes itself; it does not carry the
+// marker, but saying so costs nothing and a future caller might.
+func (s *sandbox) killTree(ctx context.Context, marker string) error {
+	// Detached from the caller's context on purpose: this runs BECAUSE that
+	// context is done, and a cancelled step still has to leave nothing behind.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killTreeTimeout)
+	defer cancel()
+	script := fmt.Sprintf(`for p in /proc/[0-9]*; do
+  pid=${p#/proc/}
+  [ "$pid" = "$$" ] && continue
+  if grep -qa %s "$p/environ" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null; fi
+done
+exit 0`, shellQuote(marker))
+	if _, err := s.run(ctx, []string{"sh", "-c", script}, nil, nil, nil); err != nil {
+		return fmt.Errorf("kubernetes executor: terminate the cancelled step's processes: %w", err)
+	}
+	return nil
 }
 
 // run streams one command through the exec subresource.

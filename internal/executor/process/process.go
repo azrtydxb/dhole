@@ -88,7 +88,7 @@ type sandbox struct {
 
 	mu       sync.Mutex
 	released bool
-	running  map[int]struct{} // process group ids of live commands
+	running  map[*processTree]struct{} // the trees of the commands running now
 	// usage of the most recently finished command, when the platform reports
 	// it. Kept here because it exists only on the ProcessState of a reaped
 	// process: nothing can ask for it afterwards.
@@ -153,30 +153,65 @@ func (s *sandbox) Exec(ctx context.Context, cmd executor.Cmd) (int32, error) {
 	c.Stdin = cmd.Stdin
 	c.Stdout = cmd.Stdout
 	c.Stderr = cmd.Stderr
-	// The command and everything it spawns share one process group, so a
-	// signal reaches the whole tree. Without this, terminating a shell leaves
+	// The command and everything it spawns are confined to one tree — a
+	// process group on unix, a job object on Windows — so that terminating
+	// the step terminates all of it. Without this, cancelling a shell leaves
 	// its children running on the host forever.
-	setProcessGroup(c)
-	// Cancellation kills the GROUP, not the leader.
-	//
-	// exec.CommandContext's default kills c.Process alone, and the process
-	// group above exists precisely because a step is a tree. Killing only its
-	// root leaves the rest running on the host AND holding the pipes this
-	// command's stdout and stderr are read through — so Wait blocks draining
-	// a pipe nobody will ever close, and a cancelled step never returns.
-	c.Cancel = func() error { return signalProcessGroup(c.Process.Pid, executor.SIGKILL) }
-	// And a bound on the drain even so. A grandchild that escaped the group,
-	// or one that ignores SIGKILL while stuck in the kernel, must not turn a
+	tree := newProcessTree(c)
+	// os/exec's default cancellation kills the started process and nothing
+	// else, which is no cancellation at all for a step that spawned anything:
+	// the child it kills may already have exited, while the grandchild that
+	// holds the work runs on — still holding the pipes this command's output
+	// is read through, so Wait blocks draining a pipe nobody will close and a
+	// cancelled step never returns. Cancellation is the ONLY way a job is
+	// stopped in production (internal/engine cancels the context; nothing
+	// calls Signal), so this is the path that has to reach the whole tree.
+	c.Cancel = tree.terminate
+	// And a bound on the drain even so. A process that escaped the tree, or
+	// one ignoring SIGKILL while stuck in the kernel, must not turn a
 	// cancellation into a hang: after this, Wait returns and the pipes are
 	// closed under it.
 	c.WaitDelay = cancelDrainDelay
 
 	if err := c.Start(); err != nil {
+		tree.close()
 		return 0, fmt.Errorf("process executor: start %q: %w", cmd.Args[0], err)
 	}
-	s.track(c.Process.Pid)
+	if err := tree.adopt(c); err != nil {
+		// A command that cannot be confined is a command that cannot be
+		// stopped. Killing it now is better than running a step that would
+		// outlive its run.
+		_ = c.Process.Kill()
+		_ = c.Wait()
+		tree.close()
+		return 0, fmt.Errorf("process executor: confine %q: %w", cmd.Args[0], err)
+	}
+	s.track(tree)
+
+	// os/exec's own context watcher retires the moment the started process is
+	// reaped, so it never fires for the case that matters: a step whose direct
+	// child exits and leaves a grandchild holding the work — and the output
+	// pipe. Watching the context here covers both, and it is the reason Exec
+	// returns at all in that case rather than blocking forever on a pipe held
+	// by a process nothing is going to stop.
+	watched := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+			_ = tree.terminate()
+		case <-watched:
+		}
+	}()
+
 	err := c.Wait()
-	s.untrack(c.Process.Pid)
+	close(watched)
+	// Wait for the watcher before releasing the tree: a terminate still in
+	// flight must not race the handle it is terminating through.
+	<-watcherDone
+	s.untrack(tree)
+	tree.close()
 	s.recordUsage(c.ProcessState)
 
 	var exitErr *exec.ExitError
@@ -194,17 +229,17 @@ func (s *sandbox) Exec(ctx context.Context, cmd executor.Cmd) (int32, error) {
 // currently running. Signalling an idle sandbox is not an error.
 func (s *sandbox) Signal(_ context.Context, sig executor.Signal) error {
 	s.mu.Lock()
-	pids := make([]int, 0, len(s.running))
-	for pid := range s.running {
-		pids = append(pids, pid)
+	trees := make([]*processTree, 0, len(s.running))
+	for tree := range s.running {
+		trees = append(trees, tree)
 	}
 	s.mu.Unlock()
 
 	var errs []error
-	for _, pid := range pids {
-		// The group, not the process: a step is a tree, and killing only its
+	for _, tree := range trees {
+		// The tree, not the process: a step is a tree, and killing only its
 		// root orphans the rest onto the host.
-		if err := signalProcessGroup(pid, sig); err != nil {
+		if err := tree.signal(sig); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -266,19 +301,19 @@ func (s *sandbox) Release(_ context.Context) error {
 	return nil
 }
 
-func (s *sandbox) track(pid int) {
+func (s *sandbox) track(tree *processTree) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running == nil {
-		s.running = make(map[int]struct{})
+		s.running = make(map[*processTree]struct{})
 	}
-	s.running[pid] = struct{}{}
+	s.running[tree] = struct{}{}
 }
 
-func (s *sandbox) untrack(pid int) {
+func (s *sandbox) untrack(tree *processTree) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.running, pid)
+	delete(s.running, tree)
 }
 
 // environ merges the sandbox environment with a command's overrides. The host

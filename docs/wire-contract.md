@@ -280,6 +280,46 @@ restarted — with nothing anywhere reporting a fault.
 - `Attach` asks the engine to serve an interactive session against a running
   job on the given ephemeral reply subject.
 
+## Exit codes
+
+`JobStatus.exit_code` is the step's exit status, and it decides the phase: zero
+is `PHASE_SUCCEEDED`, anything else is `PHASE_FAILED`. Three rules bind every
+engine.
+
+**Never negative.** A negative int32 sign-extends to ten bytes on the wire, and
+a varint decoder that stops early never terminates on one. An engine with no
+status of its own to report — a platform that gives it nothing — reports a
+non-zero positive code, not -1.
+
+**A step the engine killed reports 137.** Cancellation, a `Cancel` control
+message, a step timeout, a drain that ran out of patience: all of them report
+137 on every platform and every backend. On unix that is the POSIX 128+SIGKILL;
+on Windows the job object is deliberately terminated with the same number, so
+one code means one thing wherever the step ran. A step killed by some other
+signal follows the same convention: SIGTERM is 143, SIGINT is 130.
+
+**A step that ran out of memory is never a success.** This is the one an engine
+author cannot guess, because the platforms genuinely differ — there is no
+portable "OOM exit code", and an engine that reported 0 because it could not
+tell would have its result cached and shipped. What Dhole's own engines report:
+
+| Platform / backend                      | What memory exhaustion does                                                                                                                                                                                                                                            | `exit_code`                                                       |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Linux, process engine                   | The kernel's OOM killer picks a victim and sends SIGKILL.                                                                                                                                                                                                              | `137`                                                             |
+| Linux, container and Kubernetes engines | The cgroup's memory limit is hit; the container is `OOMKilled`, which is SIGKILL.                                                                                                                                                                                      | `137`                                                             |
+| macOS                                   | There is no OOM killer for an ordinary process. The allocation is refused and the program fails on its own terms — the Go runtime aborts with `2`, CPython raises `MemoryError` and exits `1`. Only under system-wide pressure does Jetsam step in, with SIGKILL.      | The program's own non-zero status, or `137` when Jetsam killed it |
+| Windows                                 | There is no OOM killer either. The commit limit refuses the allocation and the program fails on its own terms; a hard abort raises `STATUS_NO_MEMORY` (`0xC0000017`), which is far wider than an exit byte and is clamped rather than truncated into a different code. | The program's own non-zero status, or `255`                       |
+
+The clamp is general: an exit status above 255 is reported as 255, so a
+Windows NTSTATUS cannot wrap into a small number that reads as an ordinary
+failure — or, worse, as a success.
+
+One platform limitation belongs here because it changes what a step can rely
+on: **Windows has no signal a running step can handle**. `SIGTERM` and `SIGINT`
+from `EngineControl` terminate the job object immediately, exactly as `SIGKILL`
+does. A step that needs to flush state before it dies cannot be written to do
+so on Windows.
+
 ## What this document does not yet specify
 
 A conformance suite (`make conformance`) runs an engine written in Python
@@ -308,12 +348,11 @@ suite's own choices are named so a second implementer makes the same ones.
   only ever needs equality, and this document should say so explicitly.
 - **The engine's half of the fence rule.** Nothing states what an engine does
   with a `Cancel` whose fence is not the one it holds. It must refuse it.
-- **Non-zero exits.** That a non-zero exit means `PHASE_FAILED`, and that
-  `exit_code` carries the code, is nowhere stated.
 - **`PHASE_RUNNING`.** Defined in the schema; the message flow never says when
   to send it.
 
 One implementation detail worth writing down here because it bit the Python
-engine: a step killed by a signal reports a NEGATIVE exit code, and protobuf
-sign-extends a negative int to ten bytes. A varint decoder that stops early
-never terminates on one.
+engine: a step killed by a signal has no exit status of its own, and an engine
+that passes the platform's -1 straight through publishes a NEGATIVE exit code,
+which protobuf sign-extends to ten bytes. A varint decoder that stops early
+never terminates on one. Exit codes above says what to report instead.
