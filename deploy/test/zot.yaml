@@ -1,0 +1,62 @@
+# zot is the OCI registry the plugin resolver is tested against. A real
+# registry, because the properties that matter — a tag resolving to a digest,
+# and a moved tag NOT changing an already-resolved one — are registry
+# behaviour, and a fake would only test our belief about it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zot-config
+  namespace: dhole-test
+data:
+  config.json: |
+    {
+      "storage": { "rootDirectory": "/var/lib/registry" },
+      "http": { "address": "0.0.0.0", "port": "5000" },
+      "log": { "level": "warn" }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zot
+  namespace: dhole-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: zot }
+  template:
+    metadata:
+      labels: { app: zot }
+    spec:
+      containers:
+        - name: zot
+          image: ghcr.io/project-zot/zot-linux-arm64:v2.1.2
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /v2/
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/zot
+            - name: data
+              mountPath: /var/lib/registry
+      volumes:
+        - name: config
+          configMap: { name: zot-config }
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zot
+  namespace: dhole-test
+spec:
+  selector: { app: zot }
+  ports:
+    - port: 5000
+      targetPort: 5000

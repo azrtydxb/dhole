@@ -1,6 +1,6 @@
 # Integration-test dependencies
 
-The integration suite needs a real Postgres and a real S3 API. Two
+The integration suite needs a real Postgres, a real S3 API and a real OCI registry. Two
 implementations of one contract are only worth having if both are exercised;
 a mock would test our idea of Postgres rather than Postgres.
 
@@ -28,6 +28,7 @@ way:
 ```sh
 kubectl -n dhole-test port-forward svc/postgres 55432:5432 &
 kubectl -n dhole-test port-forward svc/minio    59000:9000 &
+kubectl -n dhole-test port-forward svc/zot      55000:5000 &
 ```
 
 Then:
@@ -37,6 +38,7 @@ export DHOLE_TEST_POSTGRES_DSN='postgres://dhole:dholetestsecret@localhost:55432
 export DHOLE_TEST_S3_ENDPOINT='http://localhost:59000'
 export DHOLE_TEST_S3_ACCESS_KEY=dholetest
 export DHOLE_TEST_S3_SECRET_KEY=dholetestsecret
+export DHOLE_TEST_OCI_REGISTRY='127.0.0.1:55000'
 make test-integration
 ```
 
