@@ -170,6 +170,9 @@ type Server struct {
 	defs    defstore.Store
 	out     *outbox.Outbox
 	fleet   *registry.KV
+	// partitions is this process's share of the run-id ring. Nil means the
+	// plane owns every run — see ownsRun.
+	partitions *planePartitions
 
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -293,7 +296,15 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases = in, fleet, defs, out, sched, leases
+	// The ring BEFORE anything advances a run: exactly one plane may advance a
+	// given run, so a plane that has not claimed yet must not advance at all.
+	parts, err := startPartitioning(ctx, in.conn, s.cfg.DeploymentID)
+	if err != nil {
+		in.close()
+		return err
+	}
+
+	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.cancel = cancel
@@ -334,6 +345,7 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	// is supposed to notice.
 	s.spawn(func() { s.advanceLoop(runCtx, s.infra.store, s.sched) })
 	s.spawn(func() { s.sweepLoop(runCtx, s.sched) })
+	s.spawn(func() { s.renewLoop(runCtx) })
 
 	// Last, and only in embedded mode: the engine starts once the plane can
 	// already hear it. A registration is a fire-and-forget message on a core
@@ -580,6 +592,11 @@ func (s *Server) advanceOpenRuns(ctx context.Context, store runstore.Store, sche
 			continue
 		}
 		for _, runID := range open {
+			// Checked per RUN, not per pass: a plane that loses a partition
+			// must stop advancing its runs at the next one.
+			if !s.ownsRun(runID) {
+				continue
+			}
 			if err := sched.Advance(ctx, tenantID, runID); err != nil {
 				if ctx.Err() != nil {
 					return true
@@ -693,6 +710,7 @@ const DefaultTenant = "default"
 func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipeline) (string, error) {
 	s.mu.Lock()
 	running, sched, defs, store := s.running, s.sched, s.defs, s.storeLocked()
+	parts := s.partitions
 	s.mu.Unlock()
 	if !running {
 		return "", errors.New("server: not started")
@@ -736,6 +754,14 @@ func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipelin
 		return "", err
 	}
 
+	// Advancing it here saves a tick of latency when this plane is also the
+	// run's owner — and it is skipped when it is not. A plane that advanced a
+	// run it does not own, even once, even the moment it created it, is a
+	// second writer for that run: the owner is already responsible for it and
+	// is about to advance it too.
+	if parts != nil && !parts.parts.Owns(runID) {
+		return runID, nil
+	}
 	if err := sched.Advance(ctx, tenantID, runID); err != nil {
 		return runID, err
 	}
