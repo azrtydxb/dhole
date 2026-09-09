@@ -434,12 +434,12 @@ Interfaces: produces `registry.Registry` with `Register(ctx, r *dholev1.EngineRe
 Files: `internal/plugins/resolver.go`, `internal/plugins/oci.go`, `internal/plugins/casref.go`, `internal/plugins/resolver_test.go`
 Interfaces: produces `plugins.Resolver` with `Resolve(ctx, tenantID, ref string) (plugins.Artifact, error)`, `Fetch(ctx, tenantID string, a plugins.Artifact) (io.ReadCloser, error)`; `Artifact{Ref string; Digest *dholev1.Digest; Scheme oci|cas; MediaType string}`.
 
-- [ ] Write `internal/plugins/resolver_test.go` asserting `TestResolverHandlesBothSchemesUniformly`: an `oci://` reference against a local registry and a `cas://` reference against the filesystem CAS both resolve to an `Artifact` with a populated digest and both `Fetch` successfully. Run — expect FAIL with "undefined: plugins.NewResolver".
-- [ ] Add `TestTagIsResolvedToDigestAtSaveAndNeverAtDispatch` asserting `Resolve` on `oci://reg/img:v1` returns a digest, and that dispatch with a tag-only reference returns an error containing "unresolved tag".
-- [ ] Add `TestMovedTagDoesNotChangeExistingRevision` asserting that after retagging the registry image, an existing lockfile still fetches the original digest.
-- [ ] Implement `internal/plugins/oci.go` with `google/go-containerregistry` (digest-pinned pulls, no tag resolution at fetch), `casref.go` delegating to `cas.Store`, and `resolver.go` dispatching on scheme.
-- [ ] Add `zot` to `docker-compose.test.yml` on port 55000 as the test registry.
-- [ ] Run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/plugins/resolver_test.go` asserting `TestResolverHandlesBothSchemesUniformly`: an `oci://` reference against a local registry and a `cas://` reference against the filesystem CAS both resolve to an `Artifact` with a populated digest and both `Fetch` successfully. Run — expect FAIL with "undefined: plugins.NewResolver".
+- [x] Add `TestTagIsResolvedToDigestAtSaveAndNeverAtDispatch` asserting `Resolve` on `oci://reg/img:v1` returns a digest, and that dispatch with a tag-only reference returns an error containing "unresolved tag".
+- [x] Add `TestMovedTagDoesNotChangeExistingRevision` asserting that after retagging the registry image, an existing lockfile still fetches the original digest.
+- [x] Implement `internal/plugins/oci.go` with `google/go-containerregistry` (digest-pinned pulls, no tag resolution at fetch), `casref.go` delegating to `cas.Store`, and `resolver.go` dispatching on scheme.
+- [x] Add `zot` to `docker-compose.test.yml` on port 55000 as the test registry.
+- [x] Run `make test-integration` — expect PASS. Commit.
 
 ## Task 33: Detached signature records and verification
 
