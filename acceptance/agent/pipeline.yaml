@@ -1,0 +1,138 @@
+# The agent acceptance pipeline: the profile ADR 0016 calls "a schema-validated
+# structured output, a bounded loop, a human approval gate, and recorded token
+# cost".
+#
+# It is also the pipeline that shows most clearly what is built and not wired.
+# Three of its five steps carry a `builtin:` plugin reference, and NOTHING in
+# the control plane maps such a reference to a step type: internal/steps/llm,
+# internal/steps/loop and internal/steps/approval are libraries with tests and
+# no caller. So the plane runs `brief` and `apply` on an engine, and the
+# acceptance test does for the other three what that missing dispatcher would
+# — behind the gates the scheduler already honours, against the same run store
+# and the same tenant.
+#
+# What each step is here to prove:
+#
+#   brief     a plain step, on an engine, whose five seconds are the window in
+#             which the gates behind it are armed. See the arming race in
+#             acceptance/automation/pipeline.yaml.
+#   classify  the model call. Its OUTPUT PORT carries the schema the answer
+#             must satisfy — there is no second place a schema could live, and
+#             an answer that fails it is refused rather than passed on.
+#   refine    the bounded loop. `max_iterations: 3` is a hard ceiling, and the
+#             exit condition is one the body never satisfies, so the only way
+#             this loop can end is at its bound. That is the property
+#             ADR 0015 is about.
+#   approve   the human gate. A run holding one is neither running nor
+#             finished; it costs a row.
+#   apply     the effectful step behind the gate, declared AT_MOST_ONCE
+#             because it is the one thing here that must never be replayed
+#             (ADR 0002) — which is also why it is not cacheable.
+id: acceptance-agent
+tenant:
+  id: default
+steps:
+  - id: brief
+    name: gather the brief
+    plugin_ref: 'command:{"args":["/bin/sh","-c","sleep 5; printf %s \"$BRIEF\" > brief"],"env":{"BRIEF":"release 1.4.0 changes a public interface"}}'
+    effect_class: EFFECT_CLASS_PURE
+    outputs:
+      - name: brief
+        type:
+          blob:
+            media_type: text/plain
+  - id: classify
+    name: classify the release
+    plugin_ref: builtin:llm
+    effect_class: EFFECT_CLASS_IDEMPOTENT
+    config:
+      provider: stub
+      model: acceptance-model
+      max_tokens: "4096"
+      prompt: Classify the severity of this release and summarise it in one sentence.
+    inputs:
+      - name: brief
+        type:
+          blob:
+            media_type: text/plain
+    outputs:
+      - name: finding
+        type:
+          structured:
+            schema_id: dhole:acceptance/finding
+            schema: |
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["severity", "summary"],
+                "properties": {
+                  "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                  "summary": {"type": "string", "minLength": 1}
+                }
+              }
+  - id: refine
+    name: refine the finding
+    plugin_ref: builtin:loop
+    effect_class: EFFECT_CLASS_IDEMPOTENT
+    config:
+      max_iterations: "3"
+      # A condition the body never satisfies: this loop can only end at its
+      # ceiling, which is what makes the ceiling testable.
+      exit_condition: state.done
+    inputs:
+      - name: finding
+        type:
+          structured:
+            schema_id: dhole:acceptance/finding
+    outputs:
+      - name: plan
+        type:
+          structured:
+            schema_id: dhole:acceptance/plan
+  - id: approve
+    name: approve the release
+    plugin_ref: builtin:approval
+    effect_class: EFFECT_CLASS_AT_MOST_ONCE
+    config:
+      prompt: Approve applying release 1.4.0?
+    inputs:
+      - name: plan
+        type:
+          structured:
+            schema_id: dhole:acceptance/plan
+    outputs:
+      - name: decision
+        type:
+          structured:
+            schema_id: dhole:acceptance/decision
+  - id: apply
+    name: apply the release
+    plugin_ref: 'command:{"args":["/bin/sh","-c","printf applied > receipt"]}'
+    effect_class: EFFECT_CLASS_AT_MOST_ONCE
+    inputs:
+      - name: decision
+        type:
+          structured:
+            schema_id: dhole:acceptance/decision
+    outputs:
+      - name: receipt
+        type:
+          blob:
+            media_type: text/plain
+edges:
+  - from_step: brief
+    from_port: brief
+    to_step: classify
+    to_port: brief
+  - from_step: classify
+    from_port: finding
+    to_step: refine
+    to_port: finding
+  - from_step: refine
+    from_port: plan
+    to_step: approve
+    to_port: plan
+  - from_step: approve
+    from_port: decision
+    to_step: apply
+    to_port: decision

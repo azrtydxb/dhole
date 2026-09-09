@@ -23,6 +23,7 @@ DHOLE_TEST_KUBECONFIG     ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
 .PHONY: check web-check web-e2e test test-race test-integration conformance build clean
+.PHONY: acceptance acceptance-ci acceptance-automation acceptance-agent
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
 check:
@@ -86,6 +87,40 @@ test-integration:
 	go test $(GO_PKGS) -tags=integration
 	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
 	go test ./... -tags=integration
+
+## acceptance-*: the three acceptance pipelines — the definition of done for
+## v1 (ADR 0016). One target per profile, because they are three separate
+## claims and a single target that ran all three would report one verdict for
+## three questions.
+##
+## They are NOT part of `make test`. Each one starts a control plane, talks to
+## a live Postgres and creates and destroys pods in a real Kubernetes cluster;
+## with nothing running they skip themselves, naming what is missing.
+##
+## -count=1 because a cached PASS is not a run, and these are exactly the
+## tests whose value is that they ran today.
+##
+## Set DHOLE_TEST_KUBECONFIG to a kubeconfig for a cluster the tests may create
+## and delete their OWN namespace in. They never touch a namespace they did not
+## create.
+ACCEPTANCE_FLAGS ?= -count=1 -v -timeout 30m
+
+acceptance-ci:
+	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
+	go test ./acceptance $(ACCEPTANCE_FLAGS) -run 'TestAcceptanceCICacheHit|TestCIPipelineBuildsTheCheckedInDockerfile'
+
+acceptance-automation:
+	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
+	DHOLE_TEST_POSTGRES_DSN='$(DHOLE_TEST_POSTGRES_DSN)' \
+	go test ./acceptance $(ACCEPTANCE_FLAGS) -run TestAcceptanceAutomationTriggersAndWait
+
+acceptance-agent:
+	DHOLE_TEST_POSTGRES_DSN='$(DHOLE_TEST_POSTGRES_DSN)' \
+	go test ./acceptance $(ACCEPTANCE_FLAGS) -run TestAcceptanceAgentLoopAndApproval
+
+## acceptance: all three, in the order the profiles were designed in. It stops
+## at the first failure, which is what you want from a definition of done.
+acceptance: acceptance-ci acceptance-automation acceptance-agent
 
 ## conformance: run the engine conformance suite against ANY engine command.
 ## This is the executable half of docs/wire-contract.md: it starts its own NATS
