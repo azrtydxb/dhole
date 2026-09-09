@@ -291,11 +291,11 @@ Interfaces: produces `server.New(cfg server.Config) (*server.Server, error)`, `S
 Files: `internal/effects/effects.go`, `internal/effects/retry.go`, `internal/effects/effects_test.go`
 Interfaces: produces `effects.RetryPolicy(step *dholev1.Step) effects.Policy`; `Policy{MaxAttempts int; Backoff time.Duration; RequiresIdempotencyKey bool; RequiresExclusiveLease bool}`; `effects.IdempotencyKey(runID, stepID string, attempt uint32) string`.
 
-- [ ] Write `internal/effects/effects_test.go` asserting `TestPolicyPerEffectClass`: `PURE` yields `MaxAttempts: 3, RequiresExclusiveLease: false`; `IDEMPOTENT` yields `RequiresIdempotencyKey: true`; `AT_MOST_ONCE` yields `MaxAttempts: 1, RequiresExclusiveLease: true`. Run — expect FAIL with "undefined: effects.RetryPolicy".
-- [ ] Add `TestIdempotentRetryReusesIdempotencyKey` asserting `IdempotencyKey` is identical across attempts 1 and 2 of the same step and differs between steps.
-- [ ] Add `TestAtMostOnceStepIsNeverAutoRetried` driving the scheduler through a step failure and requiring no second dispatch is enqueued, and that an event of type `STEP_AWAITING_REPLAY` is recorded instead.
-- [ ] Implement `internal/effects/effects.go` and `retry.go`, and change the scheduler from Task 14 to consult `RetryPolicy` before re-dispatch and to require a valid lease fence for `RequiresExclusiveLease`.
-- [ ] Run `go test ./internal/effects ./internal/scheduler` — expect PASS. Commit.
+- [x] Write `internal/effects/effects_test.go` asserting `TestPolicyPerEffectClass`: `PURE` yields `MaxAttempts: 3, RequiresExclusiveLease: false`; `IDEMPOTENT` yields `RequiresIdempotencyKey: true`; `AT_MOST_ONCE` yields `MaxAttempts: 1, RequiresExclusiveLease: true`. Run — expect FAIL with "undefined: effects.RetryPolicy".
+- [x] Add `TestIdempotentRetryReusesIdempotencyKey` asserting `IdempotencyKey` is identical across attempts 1 and 2 of the same step and differs between steps.
+- [x] Add `TestAtMostOnceStepIsNeverAutoRetried` driving the scheduler through a step failure and requiring no second dispatch is enqueued, and that an event of type `STEP_AWAITING_REPLAY` is recorded instead.
+- [x] Implement `internal/effects/effects.go` and `retry.go`, and change the scheduler from Task 14 to consult `RetryPolicy` before re-dispatch and to require a valid lease fence for `RequiresExclusiveLease`.
+- [x] Run `go test ./internal/effects ./internal/scheduler` — expect PASS. Commit.
 
 ## Task 20: Durable waits, timers and human approval
 
