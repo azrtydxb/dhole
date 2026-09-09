@@ -119,15 +119,41 @@ func sqliteAppendArgs(tenantID string, e Event) []any {
 	}
 }
 
+// sqliteOpenRun and sqliteCloseRun maintain the open-run index. They are
+// written in the SAME transaction as the event that justifies them, so a crash
+// can never leave a finished run offered for advancement forever or an open
+// one invisible to a plane that restarted.
+// sqliteNextSequence hands out the tenant's next log position, atomically.
+//
+// It is the counter's own successor OR the log's high-water mark, whichever is
+// higher. The high-water mark is not only a seed for the first allocation: a
+// caller may still supply an explicit sequence — replaying a log whose order
+// is already decided does exactly that — and the allocator has to stay ahead
+// of anything written that way, or it would hand out a number the log already
+// holds.
+const sqliteNextSequence = `INSERT INTO run_sequences (tenant_id, next)
+	VALUES (?, COALESCE((SELECT MAX(sequence) FROM run_events WHERE tenant_id = ?), 0) + 1)
+	ON CONFLICT (tenant_id) DO UPDATE SET next = MAX(
+		run_sequences.next + 1,
+		COALESCE((SELECT MAX(sequence) FROM run_events WHERE tenant_id = ?), 0) + 1)
+	RETURNING next`
+
+const (
+	sqliteOpenRun = `INSERT INTO open_runs (tenant_id, run_id, created_at)
+		VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
+	sqliteCloseRun = `DELETE FROM open_runs WHERE tenant_id = ? AND run_id = ?`
+)
+
 // Append records an event, ignoring a duplicate of one already stored.
+//
+// It runs in a transaction because it writes two things: the event, and the
+// open-run index entry the event implies. Committed separately they could
+// disagree, which is the same two-act commit the outbox exists to prevent.
 func (s *SQLiteStore) Append(ctx context.Context, tenantID string, e Event) error {
 	if tenantID == "" {
 		return ErrTenantRequired
 	}
-	if _, err := s.db.ExecContext(ctx, sqliteAppend, sqliteAppendArgs(tenantID, e)...); err != nil {
-		return fmt.Errorf("append run event: %w", err)
-	}
-	return nil
+	return s.WithTx(ctx, func(tx Tx) error { return tx.Append(ctx, tenantID, e) })
 }
 
 // WithTx runs fn in one transaction, committing only if it returns nil.
@@ -166,8 +192,35 @@ func (t *sqliteTx) Append(ctx context.Context, tenantID string, e Event) error {
 	if tenantID == "" {
 		return ErrTenantRequired
 	}
-	if _, err := t.tx.ExecContext(ctx, sqliteAppend, sqliteAppendArgs(tenantID, e)...); err != nil {
+	if e.Sequence == 0 {
+		if err := t.tx.QueryRowContext(ctx, sqliteNextSequence, tenantID, tenantID, tenantID).
+			Scan(&e.Sequence); err != nil {
+			return fmt.Errorf("append run event: allocating a sequence: %w", err)
+		}
+	}
+	result, err := t.tx.ExecContext(ctx, sqliteAppend, sqliteAppendArgs(tenantID, e)...)
+	if err != nil {
 		return fmt.Errorf("append run event: %w", err)
+	}
+	// The index moves only when the LOG moved. A redelivered event finds its
+	// row already there and writes nothing, so a replayed RUN_CREATED cannot
+	// resurrect a run that has since finished.
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("append run event: %w", err)
+	}
+	if affected == 0 {
+		return nil
+	}
+	switch {
+	case e.Type == RunCreated:
+		_, err = t.tx.ExecContext(ctx, sqliteOpenRun,
+			tenantID, e.RunID, e.At.UTC().Format(TimeFormat))
+	case closesRun(e.Type):
+		_, err = t.tx.ExecContext(ctx, sqliteCloseRun, tenantID, e.RunID)
+	}
+	if err != nil {
+		return fmt.Errorf("append run event: open-run index: %w", err)
 	}
 	return nil
 }
@@ -238,6 +291,33 @@ func (s *SQLiteStore) LastSequence(ctx context.Context, tenantID string) (uint64
 		return 0, fmt.Errorf("last sequence: %w", err)
 	}
 	return last, nil
+}
+
+// OpenRuns lists the tenant's unfinished runs, oldest first.
+func (s *SQLiteStore) OpenRuns(ctx context.Context, tenantID string) ([]string, error) {
+	if tenantID == "" {
+		return nil, ErrTenantRequired
+	}
+	const q = `SELECT run_id FROM open_runs WHERE tenant_id = ?
+		ORDER BY created_at ASC, run_id ASC`
+	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("open runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var runs []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, fmt.Errorf("open runs: %w", err)
+		}
+		runs = append(runs, runID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("open runs: %w", err)
+	}
+	return runs, nil
 }
 
 // Close releases the underlying database handle.

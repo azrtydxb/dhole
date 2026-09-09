@@ -14,9 +14,9 @@
 // comments elsewhere:
 //
 // A run is not a goroutine (ADR 0003). Nothing in Server holds a run's
-// position. Advance reads the log and writes the log; the only thing kept in
-// memory is a set of run ids to poll, and even that is a workaround noted in
-// runs() below.
+// position, and nothing holds the set of runs either: the advance loop asks
+// the store which runs are open, so a plane that restarts inherits the work of
+// the one it replaced instead of starting empty.
 //
 // The bus is not the source of truth (ADR 0005). Nothing here publishes a
 // dispatch. The scheduler enqueues it in the same transaction as the event
@@ -30,10 +30,12 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -52,6 +54,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/wire"
 )
 
 // Mode is which of the two deployments this process is.
@@ -84,14 +87,31 @@ const StatusStream = "STATUS"
 // missed beats before the fleet forgets it.
 const engineTTL = 30 * time.Second
 
-// advanceInterval is how often every live run is re-advanced.
+// advanceInterval is how often the plane re-advances the runs the store says
+// are open.
 //
-// A poll is not elegant and it is not free, and it is here because Advance is
-// otherwise driven only by an arriving status: a run whose step could not be
-// placed when it was submitted — no engine registered yet, the usual case one
-// second after start-up — would sit unscheduled forever, because nothing else
-// would ever ask again.
+// Advance is otherwise driven only by an arriving status, so a run whose step
+// could not be placed when it was submitted — no engine registered yet, the
+// usual case one second after start-up — would sit unscheduled forever because
+// nothing would ever ask again. The same is true of a step waiting out a retry
+// backoff: the thing it is waiting for is time, and time sends no message.
+//
+// What changed from the first version of this loop is not the tick but where
+// the SET comes from. It used to be a map this process filled as it submitted
+// runs, so a plane that restarted advanced only what it had itself started and
+// abandoned every waiting run it inherited. It now comes from the open-run
+// index, which is the store's answer and not this process's memory — which is
+// what makes a restart a replay (ADR 0003).
 const advanceInterval = 250 * time.Millisecond
+
+// orphanSweepInterval is how often the plane looks for leases nobody renewed.
+//
+// A step whose engine died is in flight as far as the log is concerned until
+// something says otherwise, so this interval is the delay between an engine
+// dying and its work being available to somebody else. It is well under the
+// lease TTL: the TTL decides when a holder is presumed dead, and this decides
+// how promptly we act on it.
+const orphanSweepInterval = 5 * time.Second
 
 // startTimeout bounds bringing the plane up when the caller's context does not.
 const startTimeout = 60 * time.Second
@@ -110,6 +130,18 @@ type Config struct {
 	// BlobRoot is the directory the content-addressed store, the blob store
 	// and the embedded bus keep their data under.
 	BlobRoot string
+	// DeploymentID names this control plane, and is what scopes its outbox
+	// claim. Two planes that share a database MUST NOT share it: an outbox row
+	// is addressed to one plane's bus, and a claim that does not name the
+	// plane makes each of them publish the other's dispatches to engines that
+	// have never heard of the run.
+	//
+	// Every process of ONE plane must share it, though — that is what lets two
+	// of them drain the same backlog for availability. Left empty it is
+	// derived from BlobRoot, which is the state directory this plane owns
+	// alone: stable across restarts, and different for two planes that share
+	// nothing but a database.
+	DeploymentID string
 }
 
 // Server is one control plane.
@@ -123,6 +155,7 @@ type Server struct {
 	running bool
 	infra   *infra
 	sched   *scheduler.Scheduler
+	leases  lease.Manager
 	defs    defstore.Store
 	out     *outbox.Outbox
 	fleet   *registry.KV
@@ -130,17 +163,6 @@ type Server struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	stopSub []func()
-
-	// live is the set of runs this process polls. See runs().
-	liveMu sync.Mutex
-	live   map[runKey]struct{}
-}
-
-// runKey identifies a run. The tenant is part of it because there is no
-// unscoped anything, even while only one tenant exists.
-type runKey struct {
-	tenantID string
-	runID    string
 }
 
 // New validates cfg. It opens nothing: a Server that has not been started
@@ -163,11 +185,27 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Mode == ModeDistributed && cfg.BusURL == "" {
 		return nil, errors.New("server: distributed mode needs a bus URL")
 	}
-	return &Server{
-		cfg:  cfg,
-		log:  slog.Default(),
-		live: map[runKey]struct{}{},
-	}, nil
+	if cfg.DeploymentID == "" {
+		cfg.DeploymentID = derivedDeploymentID(cfg.BlobRoot)
+	}
+	return &Server{cfg: cfg, log: slog.Default()}, nil
+}
+
+// derivedDeploymentID names a plane that was not given a name, from the one
+// thing it owns alone and keeps across restarts: its state directory. It is
+// hashed rather than used raw so the id stays a short, subject-safe token
+// whatever the path looks like.
+//
+// A random id per process would be worse than none: the rows a plane enqueued
+// before a restart would be owed to a deployment that no longer exists, and no
+// drainer would ever claim them again.
+func derivedDeploymentID(blobRoot string) string {
+	root, err := filepath.Abs(blobRoot)
+	if err != nil {
+		root = blobRoot
+	}
+	sum := sha256.Sum256([]byte(root))
+	return "plane-" + hex.EncodeToString(sum[:])[:16]
 }
 
 // Start brings the plane up and returns once it is serving.
@@ -218,7 +256,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Task 32 nor 35 provides — this becomes WithResolver, and saving unpinned
 	// stops being allowed here.
 	defs := defstore.NewWithDialect(in.db, in.dialect, defstore.WithoutPinning())
-	out := outbox.New(in.store, in.plane, outbox.WithErrorHandler(func(err error) {
+	out := outbox.New(in.store, in.plane, s.cfg.DeploymentID, outbox.WithErrorHandler(func(err error) {
 		s.log.Error("outbox drain failed", "error", err)
 	}))
 	sched, err := scheduler.New(scheduler.Config{
@@ -237,7 +275,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.infra, s.fleet, s.defs, s.out, s.sched = in, fleet, defs, out, sched
+	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases = in, fleet, defs, out, sched, leases
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.cancel = cancel
@@ -272,7 +310,12 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 			s.log.Error("outbox stopped", "error", err)
 		}
 	})
-	s.spawn(func() { s.advanceLoop(runCtx) })
+	// The store and the scheduler are passed in rather than read back off the
+	// Server: Stop holds s.mu while it waits for this goroutine to end, so a
+	// loop that reached for the lock would deadlock against the shutdown it
+	// is supposed to notice.
+	s.spawn(func() { s.advanceLoop(runCtx, s.infra.store, s.sched) })
+	s.spawn(func() { s.sweepLoop(runCtx, s.sched) })
 
 	// Last, and only in embedded mode: the engine starts once the plane can
 	// already hear it. A registration is a fire-and-forget message on a core
@@ -346,35 +389,96 @@ func (s *Server) consumeRegistrations(startCtx, runCtx context.Context) error {
 
 // handleEngineMessage applies one engine-to-plane message.
 //
-// The SUBJECT decides what the bytes are, and it has to: an EngineHeartbeat
-// decodes cleanly as an EngineRegistration — both start with engine_id, and
-// protobuf cannot tell a packed repeated uint32 from a repeated message on the
-// wire — so guessing by content silently registered engines with no platform
-// and no capabilities, and every step after that was unschedulable.
+// The BYTES decide what the message is. An EngineHeartbeat decodes cleanly as
+// an EngineRegistration — both start with engine_id, and protobuf cannot tell
+// a packed repeated uint32 from a repeated message on the wire — so guessing
+// by content once registered engines with no platform and no capabilities, and
+// every step after that was unschedulable. Engines now publish inside an
+// EngineMessage frame, whose oneof carries the type (docs/wire-contract.md,
+// "Message framing").
+//
+// A frame with no body is an engine speaking the earlier framing, and the
+// subject is what its type is recovered from — the control plane accepts
+// engines one version behind, and an engine in someone else's network is not
+// upgraded on our schedule.
 func (s *Server) handleEngineMessage(ctx context.Context, subject string, data []byte) {
+	framed, err := wire.DecodeEngineMessage(data)
+	if err != nil {
+		s.log.Error("undecodable engine message", "subject", subject, "error", err)
+		return
+	}
 	switch {
+	case framed.GetRegistration() != nil:
+		s.register(ctx, framed.GetRegistration())
+	case framed.GetHeartbeat() != nil:
+		s.beat(ctx, framed.GetHeartbeat())
 	case subject == bus.SubjectEngineRegistration():
 		reg := &dholev1.EngineRegistration{}
 		if err := proto.Unmarshal(data, reg); err != nil {
 			s.log.Error("undecodable engine registration", "error", err)
 			return
 		}
-		if err := s.fleet.Register(ctx, reg); err != nil && ctx.Err() == nil {
-			s.log.Error("registering engine", "engine", reg.GetEngineId(), "error", err)
-		}
+		s.register(ctx, reg)
 	case strings.HasPrefix(subject, "engine.heartbeat."):
 		beat := &dholev1.EngineHeartbeat{}
 		if err := proto.Unmarshal(data, beat); err != nil {
 			s.log.Error("undecodable engine heartbeat", "error", err)
 			return
 		}
-		if err := s.fleet.Heartbeat(ctx, beat); err != nil && ctx.Err() == nil {
-			s.log.Error("engine heartbeat refused", "engine", beat.GetEngineId(), "error", err)
-		}
+		s.beat(ctx, beat)
 	default:
 		// engine.control.* is the plane talking to an engine; it is on this
 		// pattern only because one subscription is what keeps the other two
 		// in order.
+	}
+}
+
+func (s *Server) register(ctx context.Context, reg *dholev1.EngineRegistration) {
+	if err := s.fleet.Register(ctx, reg); err != nil && ctx.Err() == nil {
+		s.log.Error("registering engine", "engine", reg.GetEngineId(), "error", err)
+	}
+}
+
+func (s *Server) beat(ctx context.Context, beat *dholev1.EngineHeartbeat) {
+	// The leases FIRST, and whatever the registry then makes of the engine.
+	//
+	// A heartbeat is the only evidence a step is still being worked on: a
+	// lease expires thirty seconds after it is claimed, and the sweeper takes
+	// every expired one as an engine that died. Renewing on what the engine
+	// says it holds is what stops a step longer than a lease TTL from being
+	// re-dispatched out from under the engine running it
+	// (docs/wire-contract.md, "Heartbeats and orphans").
+	//
+	// It happens even for an engine the registry refuses. The refusal is about
+	// what the engine can be given NEXT — a heartbeat cannot describe a fleet
+	// member — and says nothing about the work it is already holding, which is
+	// real whether or not we can schedule to it.
+	s.renewHeld(ctx, beat)
+	if err := s.fleet.Heartbeat(ctx, beat); err != nil && ctx.Err() == nil {
+		s.log.Error("engine heartbeat refused", "engine", beat.GetEngineId(), "error", err)
+	}
+}
+
+// renewHeld extends the lease behind every job an engine says it is holding.
+//
+// A fence that is no longer current is not an error and not news: the engine
+// has been superseded and is about to find out, and renewing nothing is
+// exactly right — its report will be discarded too.
+func (s *Server) renewHeld(ctx context.Context, beat *dholev1.EngineHeartbeat) {
+	for _, held := range beat.GetInFlight() {
+		_, token, err := scheduler.DecodeFence(held.GetFenceToken())
+		if err != nil {
+			s.log.Error("undecodable fence in a heartbeat",
+				"engine", beat.GetEngineId(), "run", held.GetRunId(),
+				"step", held.GetStepId(), "error", err)
+			continue
+		}
+		if err := s.leases.Renew(ctx, token); err != nil &&
+			!errors.Is(err, lease.ErrFenced) && ctx.Err() == nil {
+			s.log.Error("renewing a held lease",
+				"engine", beat.GetEngineId(), "run", held.GetRunId(),
+				"step", held.GetStepId(), "error", err)
+		}
 	}
 }
 
@@ -423,9 +527,9 @@ func (s *Server) consumeStatuses(startCtx, runCtx context.Context) error {
 	return nil
 }
 
-// advanceLoop re-advances every live run on a tick. See advanceInterval for
-// why polling is here at all.
-func (s *Server) advanceLoop(ctx context.Context) {
+// advanceLoop re-advances, on a tick, every run the STORE says is unfinished.
+// See advanceInterval for why the tick is here and why the set is not.
+func (s *Server) advanceLoop(ctx context.Context, store runstore.Store, sched *scheduler.Scheduler) {
 	ticker := time.NewTicker(advanceInterval)
 	defer ticker.Stop()
 	for {
@@ -434,18 +538,80 @@ func (s *Server) advanceLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		for _, key := range s.runs() {
-			if err := s.sched.Advance(ctx, key.tenantID, key.runID); err != nil {
+		if s.advanceOpenRuns(ctx, store, sched) {
+			return
+		}
+	}
+}
+
+// advanceOpenRuns advances one pass over the open-run index. It reports
+// whether the server is shutting down.
+//
+// Nothing here removes a run from anything. A run leaves the index because the
+// scheduler wrote RUN_COMPLETED or RUN_FAILED and the store took it out in the
+// same transaction — so the plane holds no opinion of its own about which runs
+// are finished, and two planes advancing the same tenant cannot disagree.
+func (s *Server) advanceOpenRuns(ctx context.Context, store runstore.Store, sched *scheduler.Scheduler) bool {
+	for _, tenantID := range s.tenants() {
+		open, err := store.OpenRuns(ctx, tenantID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return true
+			}
+			s.log.Error("listing open runs", "tenant", tenantID, "error", err)
+			continue
+		}
+		for _, runID := range open {
+			if err := sched.Advance(ctx, tenantID, runID); err != nil {
 				if ctx.Err() != nil {
-					return
+					return true
 				}
-				s.log.Error("advancing run", "run", key.runID, "error", err)
-				continue
+				s.log.Error("advancing run", "tenant", tenantID, "run", runID, "error", err)
 			}
-			done, err := s.completed(ctx, key)
-			if err == nil && done {
-				s.forget(key)
+		}
+	}
+	return false
+}
+
+// tenants is the set of tenants this plane advances runs for.
+//
+// It is one tenant today because nothing yet writes the tenant register that
+// migration 0009 created: `dhole serve` serves DefaultTenant. It is a method
+// rather than a constant at the call site because the loop above must iterate
+// tenants rather than assume one, so that filling this in from the register is
+// a change to this function and to nothing else.
+func (s *Server) tenants() []string {
+	return []string{DefaultTenant}
+}
+
+// sweepLoop expires the leases nobody renewed and records the attempts that
+// died with their holders.
+//
+// It runs on its own tick rather than inside advanceLoop because it is a
+// different question: advanceLoop asks what a run can do next, and this asks
+// which engines stopped answering. Running them together would tie how quickly
+// a dead engine is noticed to how often runs are re-examined.
+func (s *Server) sweepLoop(ctx context.Context, sched *scheduler.Scheduler) {
+	ticker := time.NewTicker(orphanSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		lost, err := sched.SweepOrphans(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
 			}
+			s.log.Error("sweeping orphaned leases", "error", err)
+			continue
+		}
+		if lost > 0 {
+			// Worth a line: an engine died holding work, and somebody
+			// reading the log after an incident needs to see when.
+			s.log.Warn("re-dispatching steps whose engine stopped answering", "steps", lost)
 		}
 	}
 }
@@ -540,25 +706,17 @@ func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipelin
 		return "", err
 	}
 
+	// The sequence is the store's to allocate: two planes submitting at once
+	// would otherwise read the same last position and write the same one.
 	runID := "run_" + randomID()
-	sequence, err := store.LastSequence(ctx, tenantID)
-	if err != nil {
-		return "", fmt.Errorf("server: reading sequence for %s: %w", tenantID, err)
-	}
 	if err := store.Append(ctx, tenantID, runstore.Event{
-		RunID:    runID,
-		Sequence: sequence + 1,
-		Type:     runstore.RunCreated,
-		Payload:  payload,
-		At:       time.Now().UTC(),
+		RunID:   runID,
+		Type:    runstore.RunCreated,
+		Payload: payload,
+		At:      time.Now().UTC(),
 	}); err != nil {
 		return "", err
 	}
-
-	key := runKey{tenantID: tenantID, runID: runID}
-	s.liveMu.Lock()
-	s.live[key] = struct{}{}
-	s.liveMu.Unlock()
 
 	if err := sched.Advance(ctx, tenantID, runID); err != nil {
 		return runID, err
@@ -606,44 +764,6 @@ func (s *Server) storeLocked() runstore.Store {
 		return nil
 	}
 	return s.infra.store
-}
-
-// runs is the set of runs this process re-advances.
-//
-// It is in memory, and that is a gap rather than a design: runstore has no way
-// to enumerate a tenant's unfinished runs — Replay needs a run id you already
-// have — so a control plane that restarts cannot rediscover a run that is
-// waiting on nothing but somebody asking it again. A run whose steps are all
-// in flight recovers anyway, because the engine's status arrives on a durable
-// subject and drives Advance from there; a run that was stuck unschedulable
-// does not. Closing this needs an index of open runs in the store.
-func (s *Server) runs() []runKey {
-	s.liveMu.Lock()
-	defer s.liveMu.Unlock()
-	out := make([]runKey, 0, len(s.live))
-	for key := range s.live {
-		out = append(out, key)
-	}
-	return out
-}
-
-func (s *Server) forget(key runKey) {
-	s.liveMu.Lock()
-	delete(s.live, key)
-	s.liveMu.Unlock()
-}
-
-func (s *Server) completed(ctx context.Context, key runKey) (bool, error) {
-	events, err := s.Events(ctx, key.tenantID, key.runID)
-	if err != nil {
-		return false, err
-	}
-	for _, e := range events {
-		if e.Type == runstore.RunCompleted {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func diagnostics(diags []dag.Diagnostic) string {

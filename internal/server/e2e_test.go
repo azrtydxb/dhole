@@ -26,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
@@ -39,9 +40,12 @@ import (
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor/process"
+	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/mirror"
 	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/server"
+	"github.com/azrtydxb/dhole/internal/wire"
 )
 
 // tenantID scopes every record and every subject in this file. There is no
@@ -687,4 +691,228 @@ func isolatedDatabase(t *testing.T, dsn string) string {
 		_, _ = cleanup.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)")
 	})
 	return parsed.String()
+}
+
+// TestRestartedPlaneRediscoversAWaitingRun is ADR 0003's claim taken
+// literally: a restart is a replay, not a loss.
+//
+// The run here is the one that only an index can save. It is not in flight —
+// no engine ever took it — so nothing durable will arrive to drive it: a
+// status on a durable subject rescues a dispatched step, and this step was
+// never dispatched. Its whole existence, for the first plane, was a row in the
+// log and an entry in a map; when that process ended, only the row was left.
+//
+// A plane that keeps the set of runs to advance in memory therefore abandons
+// this run silently and forever, which is the failure mode this system is
+// built to make impossible. The second plane must find it in the store.
+func TestRestartedPlaneRediscoversAWaitingRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	// A bus neither plane owns, so no engine exists until the test makes one.
+	busServer, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(busServer.Close)
+
+	dir := t.TempDir()
+	cfg := server.Config{
+		Mode:     server.ModeDistributed,
+		StoreDSN: filepath.Join(dir, "dhole.db"),
+		BusURL:   busServer.URL(),
+		BlobRoot: filepath.Join(dir, "state"),
+	}
+
+	first, err := server.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, first.Start(ctx))
+
+	runID, err := first.Submit(ctx, tenantID, loadPipeline(t))
+	require.NoError(t, err)
+	awaitEvent(ctx, t, first, runID, "STEP_UNSCHEDULABLE")
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	require.NoError(t, first.Stop(stopCtx))
+	stopCancel()
+
+	// A second process, holding nothing the first one knew.
+	second, err := server.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, second.Start(ctx))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		require.NoError(t, second.Stop(ctx))
+	})
+
+	stopEngine := startExternalEngine(ctx, t, busServer.URL(),
+		blobstore.NewFilesystem(t.TempDir()), second.CAS())
+	t.Cleanup(stopEngine)
+
+	events := awaitRunCompleted(ctx, t, second, runID)
+	requireStepSucceeded(t, events, "a")
+	requireStepSucceeded(t, events, "b")
+}
+
+// TestEngineThatStartedBeforeThePlaneBecomesVisible closes the gap that made a
+// lost registration permanent.
+//
+// EngineRegistration is fire-and-forget on a core subject, and Heartbeat
+// deliberately refuses to rebuild an instance from a message that cannot
+// describe one (registry.ErrNotRegistered): a heartbeat carries an engine id
+// and what it holds, so an instance resurrected from one would advertise no
+// platform and no capabilities, and every step matched against it would be
+// unschedulable. Both halves of that are right, and together they meant an
+// engine that announced itself while no plane was listening stayed invisible
+// until somebody restarted it — an engine in a customer's network, which is
+// exactly the engine nobody can restart.
+//
+// The engine here starts first, publishes its registration into an empty room,
+// and must join the fleet anyway.
+func TestEngineThatStartedBeforeThePlaneBecomesVisible(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	busServer, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(busServer.Close)
+
+	dir := t.TempDir()
+	blobRoot := filepath.Join(dir, "state")
+	// The engine shares the plane's content-addressed store, as an engine
+	// beside it would; the plane has not been built yet, so the path is the
+	// one it will open rather than one asked of it.
+	engineCAS := cas.NewFilesystem(filepath.Join(blobRoot, "cas"))
+	require.NoError(t, os.MkdirAll(filepath.Join(blobRoot, "cas"), 0o750))
+
+	stopEngine := startExternalEngine(ctx, t, busServer.URL(),
+		blobstore.NewFilesystem(t.TempDir()), engineCAS)
+	t.Cleanup(stopEngine)
+
+	// Its registration is on the wire and gone before anything is listening.
+	// A heartbeat or two follow it into the same empty room.
+	time.Sleep(2 * engine.HeartbeatInterval)
+
+	srv, err := server.New(server.Config{
+		Mode:     server.ModeDistributed,
+		StoreDSN: filepath.Join(dir, "dhole.db"),
+		BusURL:   busServer.URL(),
+		BlobRoot: blobRoot,
+	})
+	require.NoError(t, err)
+	require.NoError(t, srv.Start(ctx))
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stopCancel()
+		require.NoError(t, srv.Stop(stopCtx))
+	})
+
+	runID, err := srv.Submit(ctx, tenantID, loadPipeline(t))
+	require.NoError(t, err)
+
+	events := awaitRunCompleted(ctx, t, srv, runID)
+	requireStepSucceeded(t, events, "a")
+	requireStepSucceeded(t, events, "b")
+}
+
+// TestThePlaneSweepsDeadLeases is the wiring the scheduler's own orphan tests
+// cannot check: a sweeper nobody runs re-dispatches nothing.
+//
+// The lease here belongs to no run — it stands in for an engine that took a
+// step and died — and the assertion is simply that the control plane notices
+// it expired without anybody asking. A plane that never sweeps leaves it in
+// the bucket forever, and with it every step whose holder is gone.
+func TestThePlaneSweepsDeadLeases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	srv := startEmbedded(ctx, t)
+
+	conn, err := nats.Connect(srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	leases, err := lease.New(ctx, conn)
+	require.NoError(t, err)
+
+	token, err := leases.Claim(ctx, tenantID, "run-nobody-owns", "step", 1, 200*time.Millisecond)
+	require.NoError(t, err)
+	require.NoError(t, leases.Validate(ctx, token))
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		err := leases.Validate(ctx, token)
+		if errors.Is(err, lease.ErrFenced) {
+			return // The plane swept it.
+		}
+		require.NoError(t, err)
+		if time.Now().After(deadline) {
+			t.Fatal("the control plane never swept a lease that expired: an engine that dies " +
+				"holding a step leaves that step in flight forever")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestAHeartbeatKeepsALiveStepsLeaseAlive is the other half of sweeping, and
+// without it the sweeper is worse than the gap it closes.
+//
+// A lease expires 30 seconds after it is claimed and NOTHING in this system
+// renewed one: the wire contract says "a lease that stops being renewed
+// expires", and an engine's heartbeat lists every job it holds with that job's
+// fence token precisely so the plane can renew it. Until it did, a sweeper
+// would take a step away from an engine that is alive and running it — every
+// step longer than a lease TTL, re-dispatched forever, which is exactly the
+// duplicate execution the fence exists to prevent.
+//
+// The engine here is a heartbeat and nothing else: the assertion is that the
+// plane renews on what an engine SAYS it holds, whatever else it is doing.
+func TestAHeartbeatKeepsALiveStepsLeaseAlive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	srv := startEmbedded(ctx, t)
+
+	conn, err := nats.Connect(srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	leases, err := lease.New(ctx, conn)
+	require.NoError(t, err)
+
+	// A lease far shorter than the sweep interval, so an unrenewed one is
+	// certainly dead by the first sweep.
+	token, err := leases.Claim(ctx, tenantID, "run-held", "step", 1, 500*time.Millisecond)
+	require.NoError(t, err)
+
+	engineBus, err := bus.Connect(ctx, srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(engineBus.Close)
+
+	beating, stopBeating := context.WithCancel(ctx)
+	defer stopBeating()
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-beating.Done():
+				return
+			case <-ticker.C:
+			}
+			_ = engineBus.Publish(beating, bus.SubjectEngineHeartbeat("engine-holding"),
+				wire.FrameHeartbeat(&dholev1.EngineHeartbeat{
+					EngineId: "engine-holding",
+					InFlight: []*dholev1.InFlight{{
+						RunId:      "run-held",
+						StepId:     "step",
+						Attempt:    1,
+						FenceToken: scheduler.EncodeFence(tenantID, token),
+					}},
+				}))
+		}
+	}()
+
+	// Well past two sweeps and many lease lifetimes.
+	time.Sleep(12 * time.Second)
+	require.NoError(t, leases.Validate(ctx, token),
+		"the plane took a step away from an engine that was telling it, every 100ms, "+
+			"that it still held it")
 }

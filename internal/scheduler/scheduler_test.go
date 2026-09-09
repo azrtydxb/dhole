@@ -193,6 +193,19 @@ func newHarnessWith(
 	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline, instances ...registry.Instance,
 ) *harness {
 	t.Helper()
+	return newHarnessWithLeaseTTL(ctx, t, pipeline, scheduler.DefaultLeaseTTL, instances...)
+}
+
+// newHarnessWithLeaseTTL is newHarnessWith with the lease deadline in the
+// test's hands. A lease that expires is the ONLY way an orphan exists, and the
+// lease manager here is the real KV one over a real NATS server — its clock is
+// the server's, not a variable a test can advance — so a case about expiry has
+// to shorten the TTL and wait.
+func newHarnessWithLeaseTTL(
+	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline,
+	ttl time.Duration, instances ...registry.Instance,
+) *harness {
+	t.Helper()
 
 	store, err := runstore.NewSQLite(t.TempDir() + "/run.db")
 	require.NoError(t, err)
@@ -210,7 +223,7 @@ func newHarnessWith(
 	require.NoError(t, err)
 
 	recorder := &recordingBus{}
-	ob := outbox.New(store, recorder)
+	ob := outbox.New(store, recorder, "test-plane")
 	fleet := staticFleet{instances: instances}
 	defs := staticDefs{pipeline: pipeline}
 
@@ -224,6 +237,7 @@ func newHarnessWith(
 		OS:          "linux",
 		Arch:        "amd64",
 		EnvIdentity: "sha256:env",
+		LeaseTTL:    ttl,
 	})
 	require.NoError(t, err)
 
@@ -713,4 +727,75 @@ func TestRunCompletesAndStopsAdvancing(t *testing.T) {
 
 	require.Equal(t, 1, h.countEvents(ctx, t, runstore.RunCompleted, ""),
 		"a finished run is completed once and stays completed")
+}
+
+// TestAnOrphanedAttemptIsRecordedAndReDispatched is the gap between a dead
+// engine and a run that carries on.
+//
+// lease.Expire has always been able to tell you a step's holder died, and
+// nothing could act on it: plan counts any step with attempts > 0 as in flight,
+// forever, and no event said an attempt had died. So the step sat in a run that
+// was neither finished nor progressing, and the only evidence was a lease that
+// had quietly disappeared from a KV bucket.
+//
+// The engine here is not stopped or drained — it simply stops renewing, which
+// is what a crashed engine, a severed network and a wedged host all look like.
+func TestAnOrphanedAttemptIsRecordedAndReDispatched(t *testing.T) {
+	ctx := testContext(t)
+	const ttl = 250 * time.Millisecond
+	h := newHarnessWithLeaseTTL(ctx, t, diamond(), ttl, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+	first := h.bus.dispatches(t)[0]
+
+	// Nobody renews. The holder is gone.
+	time.Sleep(2 * ttl)
+
+	lost, err := h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, lost, "the sweeper must find the step whose lease died")
+	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"),
+		"an attempt that died has to be IN the log; a run's log is the only place anyone looks")
+
+	// And the point of recording it: the step runs again, under a new fence,
+	// so a resurrected engine's late report is recognised as stale.
+	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t))
+	second := h.bus.dispatches(t)[1]
+	require.Equal(t, uint32(2), second.GetAttempt())
+	require.NotEqual(t, first.GetFenceToken(), second.GetFenceToken(),
+		"a re-dispatch under the SAME fence would let the dead engine's report overwrite the new one")
+
+	// Sweeping again finds nothing: the orphan was claimed by this sweep, and
+	// a second plane sweeping concurrently must not re-report it.
+	lost, err = h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Zero(t, lost)
+}
+
+// TestAnOrphanedAtMostOnceStepIsNotSilentlyRepeated is the other half, and the
+// one that would be a real incident. An engine that stopped answering may have
+// run the step to completion and died before reporting it, so re-dispatching a
+// step whose effect class forbids an automatic retry would charge the card
+// twice. It waits for a person instead (ADR 0002).
+func TestAnOrphanedAtMostOnceStepIsNotSilentlyRepeated(t *testing.T) {
+	ctx := testContext(t)
+	const ttl = 250 * time.Millisecond
+
+	pipeline := diamond()
+	pipeline.GetSteps()[0].EffectClass = dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE
+	h := newHarnessWithLeaseTTL(ctx, t, pipeline, ttl, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	time.Sleep(2 * ttl)
+	lost, err := h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, lost)
+
+	require.Equal(t, []string{"a"}, h.drain(ctx, t),
+		"an at-most-once step whose engine died must not be dispatched again on its own")
+	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAwaitingReplay, "a"),
+		"and the run must say so, because nothing will move until a person acts")
 }

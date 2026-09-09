@@ -507,7 +507,7 @@ func newPlane(ctx context.Context, t *testing.T, store runstore.Store, url, tena
 	require.NoError(t, err)
 
 	recorder := &recordingBus{}
-	ob := outbox.New(store, recorder)
+	ob := outbox.New(store, recorder, "test-plane")
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       store,
 		Outbox:      ob,

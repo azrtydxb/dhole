@@ -21,6 +21,31 @@ import (
 // this interval is a contract number and not a tuning knob.
 const HeartbeatInterval = 5 * time.Second
 
+// RegistrationInterval is how often an engine RE-ANNOUNCES itself.
+//
+// A registration is fire-and-forget on a core subject, and the plane's
+// Heartbeat deliberately refuses to rebuild an instance from a beat that
+// cannot describe one (registry.ErrNotRegistered): an instance resurrected
+// from a heartbeat would advertise no platform and no capabilities, and every
+// step matched against it would be unschedulable. Both of those are right, and
+// together they made a registration published while no plane was listening
+// permanent: the engine stayed invisible until somebody restarted it — an
+// engine behind NAT in a customer's network, which is the engine nobody can
+// restart.
+//
+// The alternative was a durable registration subject. It was rejected: a
+// stream would make a plane that restarts replay the registrations of engines
+// that died months ago, which is precisely the stale fleet ADR 0010 keeps the
+// registry ephemeral to avoid — and it would then need retention tuning, an
+// acknowledged consumer, and engine credentials to publish into a stream. A
+// repeat costs one small message every fifteen seconds per engine and is
+// self-healing: whatever was missed, the plane hears again shortly, and an
+// engine that has genuinely died stops repeating and ages out on its own.
+//
+// Three heartbeats: long enough not to be chatter, short enough that a plane
+// which has just come up has the fleet within one lease TTL.
+const RegistrationInterval = 3 * HeartbeatInterval
+
 // publishTimeout bounds one outbound publish. Nothing in an engine may wait
 // forever: a bus call that hangs holds a slot and stops the heartbeats that
 // prove the engine is alive.
@@ -153,7 +178,9 @@ func (r *registryClient) register(ctx context.Context) error {
 		EngineTypes:      r.engineTypes,
 		Tier:             r.tier,
 	}
-	if err := r.bus.Publish(ctx, bus.SubjectEngineRegistration(), reg); err != nil {
+	// Framed, never bare: the plane must be able to tell a registration from a
+	// heartbeat by its bytes alone (docs/wire-contract.md, "Message framing").
+	if err := r.bus.Publish(ctx, bus.SubjectEngineRegistration(), wire.FrameRegistration(reg)); err != nil {
 		return fmt.Errorf("engine: register %q: %w", r.engineID, err)
 	}
 	return nil
@@ -214,13 +241,19 @@ func (r *registryClient) heartbeat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 	beat := &dholev1.EngineHeartbeat{EngineId: r.engineID, InFlight: r.snapshot()}
-	return r.bus.Publish(ctx, bus.SubjectEngineHeartbeat(r.engineID), beat)
+	return r.bus.Publish(ctx, bus.SubjectEngineHeartbeat(r.engineID), wire.FrameHeartbeat(beat))
 }
 
-// run heartbeats until ctx is done.
+// run heartbeats, and re-announces this engine, until ctx is done.
+//
+// A failed re-announcement is not fatal for the same reason a failed heartbeat
+// is not: the next one is along shortly, and an engine that exited on a
+// transient publish error would abandon work it is still running.
 func (r *registryClient) run(ctx context.Context) {
-	ticker := time.NewTicker(HeartbeatInterval)
-	defer ticker.Stop()
+	beats := time.NewTicker(HeartbeatInterval)
+	defer beats.Stop()
+	announcements := time.NewTicker(RegistrationInterval)
+	defer announcements.Stop()
 	// One immediately, so the plane does not wait a full interval to learn
 	// this engine exists.
 	_ = r.heartbeat(ctx)
@@ -228,7 +261,13 @@ func (r *registryClient) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-announcements.C:
+			// Before the beat that follows it: the plane admits an engine on a
+			// registration and promotes it on a heartbeat, so announcing
+			// second would leave it registering for another five seconds.
+			_ = r.register(ctx)
+			continue
+		case <-beats.C:
 		case <-r.nudge:
 		}
 		_ = r.heartbeat(ctx)

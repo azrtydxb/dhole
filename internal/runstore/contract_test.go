@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,6 +68,159 @@ func runStoreContract(t *testing.T, s runstore.Store) {
 	t.Run("WithTxRejectsAnUnscopedTenant", func(t *testing.T) {
 		contractWithTxEmptyTenantRejected(t, s)
 	})
+	t.Run("OpenRunsListsTheRunsStillToAdvance", func(t *testing.T) {
+		contractOpenRuns(t, s)
+	})
+	t.Run("TheStoreAllocatesAPerTenantTotalOrder", func(t *testing.T) {
+		contractSequenceIsATotalOrder(t, s)
+	})
+}
+
+// contractSequenceIsATotalOrder is the ordering claim this system makes
+// everywhere and, until now, kept nowhere.
+//
+// The outbox's own documentation says it: "anything that needs an order reads
+// it from the run event log's sequence, which is the only thing in this system
+// that carries one". It did not carry one. Every writer computed its own
+// sequence as `LastSequence + 1` outside any transaction, so two writers that
+// read before either wrote produced the SAME number — and the primary key is
+// (tenant, run, step, attempt, sequence) with ON CONFLICT DO NOTHING, so two
+// different events that collided there did not conflict loudly. One of them
+// silently was not written.
+//
+// A sequence the store allocates is what makes the order real: one number per
+// tenant, handed out once, inside the transaction that uses it.
+func contractSequenceIsATotalOrder(t *testing.T, s runstore.Store) {
+	ctx := context.Background()
+	tenant := uniqueTenant(t)
+
+	const (
+		writers = 8
+		each    = 5
+	)
+	var wg sync.WaitGroup
+	errs := make(chan error, writers*each)
+	for w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range each {
+				// Sequence 0 asks the store for the tenant's next position.
+				// Every writer here is a control plane advancing a different
+				// run at the same moment, which is the ordinary case and not
+				// a contrived race.
+				err := s.Append(ctx, tenant, runstore.Event{
+					RunID:   fmt.Sprintf("run-%d", w),
+					StepID:  fmt.Sprintf("step-%d", i),
+					Attempt: 1,
+					Type:    runstore.StepDispatched,
+					At:      time.Now().UTC(),
+				})
+				if err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	seen := map[uint64]string{}
+	for w := range writers {
+		runID := fmt.Sprintf("run-%d", w)
+		events, err := s.Replay(ctx, tenant, runID)
+		require.NoError(t, err)
+		require.Len(t, events, each, "every append must be written, not silently deduplicated")
+		for _, e := range events {
+			where := runID + "/" + e.StepID
+			if other, clash := seen[e.Sequence]; clash {
+				t.Fatalf("sequence %d was handed to both %s and %s: the per-tenant log has no total order",
+					e.Sequence, other, where)
+			}
+			seen[e.Sequence] = where
+		}
+	}
+	require.Len(t, seen, writers*each)
+
+	last, err := s.LastSequence(ctx, tenant)
+	require.NoError(t, err)
+	require.Equal(t, uint64(writers*each), last,
+		"the sequences handed out must be contiguous: a gap is an event somebody lost")
+}
+
+// contractOpenRuns is ADR 0003 made checkable. Its whole claim is that a
+// control-plane restart is a REPLAY rather than a loss — and a replay needs a
+// run id, which until this index existed only the process that submitted the
+// run had. The set of runs still to advance lived in one server's memory, so a
+// plane that restarted could never rediscover a run that was merely waiting:
+// one whose step could not be placed, or one waiting on a timer. That run was
+// lost in the only way this design promises is impossible.
+//
+// The index is therefore held to three things: a created run is in it, a run
+// that reached either terminal event is not, and one tenant never sees
+// another's.
+func contractOpenRuns(t *testing.T, s runstore.Store) {
+	ctx := context.Background()
+	tenant := uniqueTenant(t)
+	other := uniqueTenant(t)
+
+	at := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	create := func(tenantID, runID string, sequence uint64) {
+		require.NoError(t, s.Append(ctx, tenantID, runstore.Event{
+			RunID: runID, Sequence: sequence, Type: runstore.RunCreated, At: at,
+		}))
+	}
+	create(tenant, "run-open", 1)
+	create(tenant, "run-done", 2)
+	create(tenant, "run-failed", 3)
+	create(other, "run-elsewhere", 1)
+
+	open, err := s.OpenRuns(ctx, tenant)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"run-open", "run-done", "run-failed"}, open,
+		"every created run is open until something closes it")
+
+	require.NoError(t, s.Append(ctx, tenant, runstore.Event{
+		RunID: "run-done", Sequence: 4, Type: runstore.RunCompleted, At: at,
+	}))
+	require.NoError(t, s.Append(ctx, tenant, runstore.Event{
+		RunID: "run-failed", Sequence: 5, Type: runstore.RunFailed, At: at,
+	}))
+
+	open, err = s.OpenRuns(ctx, tenant)
+	require.NoError(t, err)
+	require.Equal(t, []string{"run-open"}, open,
+		"a run that completed or failed is finished; only the unfinished ones are still to advance")
+
+	// A run that closed and is replayed must not come back to life.
+	// At-least-once delivery means an event the store already holds is
+	// re-presented, and the one that would resurrect a finished run is its own
+	// RUN_CREATED: the log ignores it, so the index must ignore it too.
+	require.NoError(t, s.Append(ctx, tenant, runstore.Event{
+		RunID: "run-done", Sequence: 2, Type: runstore.RunCreated, At: at,
+	}))
+	open, err = s.OpenRuns(ctx, tenant)
+	require.NoError(t, err)
+	require.Equal(t, []string{"run-open"}, open,
+		"an event the log already holds must not move the index either")
+
+	require.NoError(t, s.Append(ctx, tenant, runstore.Event{
+		RunID: "run-done", Sequence: 6, Type: runstore.RunCompleted, At: at,
+	}))
+	open, err = s.OpenRuns(ctx, tenant)
+	require.NoError(t, err)
+	require.Equal(t, []string{"run-open"}, open)
+
+	// There is no unscoped read: one tenant's open runs are not another's.
+	open, err = s.OpenRuns(ctx, other)
+	require.NoError(t, err)
+	require.Equal(t, []string{"run-elsewhere"}, open)
+
+	_, err = s.OpenRuns(ctx, "")
+	require.ErrorIs(t, err, runstore.ErrTenantRequired)
 }
 
 // contractWithTxIsAtomic is what the outbox is built on. A run event and the

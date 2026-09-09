@@ -30,11 +30,32 @@ const (
 	StepSucceeded  EventType = "STEP_SUCCEEDED"
 	StepFailed     EventType = "STEP_FAILED"
 	RunCompleted   EventType = "RUN_COMPLETED"
+	// RunFailed closes a run whose step used up its attempts. It lives here
+	// beside RunCompleted because the store has to know both: they are the two
+	// events that take a run out of the open-run index, and an index that knew
+	// only one of them would offer every failed run for advancement forever.
+	RunFailed EventType = "RUN_FAILED"
 )
 
-// Event is one immutable entry in the log. Sequence is per-tenant and
-// monotonic; it is what the scheduler resumes from. Payload carries the
-// type-specific detail, opaque to the store.
+// closesRun reports whether an event ends a run's life. It is the store's own
+// rule rather than the scheduler's, because the open-run index is maintained
+// on the append path: a writer that forgot to tell the store would leave a
+// finished run in the index or an open one out of it.
+func closesRun(t EventType) bool {
+	return t == RunCompleted || t == RunFailed
+}
+
+// Event is one immutable entry in the log.
+//
+// Sequence is the event's position in its TENANT's log, and it is a total
+// order: the store hands out each number once, inside the transaction that
+// writes the event, so two runs of one tenant can never share one. Leave it
+// ZERO and the store allocates the next position — which is what every writer
+// should do. Setting it explicitly is for replaying a log whose order is
+// already decided, and a caller that computes its own next position
+// reintroduces the collision this design removed.
+//
+// Payload carries the type-specific detail, opaque to the store.
 type Event struct {
 	RunID    string
 	StepID   string
@@ -50,10 +71,10 @@ type Event struct {
 // Every method takes an explicit tenant and rejects an empty one with
 // ErrTenantRequired.
 type Store interface {
-	// Append records an event. It is idempotent on
-	// (RunID, StepID, Attempt, Sequence): re-appending an event the store
-	// already holds is a no-op returning nil, so a redelivered command
-	// cannot duplicate history.
+	// Append records an event, allocating its Sequence when it is zero. It
+	// is idempotent on (RunID, StepID, Attempt, Sequence): re-appending an
+	// event the store already holds — sequence included — is a no-op
+	// returning nil, so a replayed command cannot duplicate history.
 	Append(ctx context.Context, tenantID string, e Event) error
 
 	// Replay returns every event of one run in ascending sequence order.
@@ -62,6 +83,16 @@ type Store interface {
 	// LastSequence returns the highest sequence written for the tenant, or 0
 	// if the tenant has no events yet.
 	LastSequence(ctx context.Context, tenantID string) (uint64, error)
+
+	// OpenRuns lists the tenant's unfinished runs, oldest first: every run
+	// that has been created and has neither completed nor failed.
+	//
+	// This is what makes ADR 0003's claim true. A restart is a replay, and a
+	// replay needs a run id — so without this the set of runs still to advance
+	// exists only in the memory of the process that submitted them, and a
+	// plane that restarts silently abandons every run that was merely waiting
+	// rather than in flight.
+	OpenRuns(ctx context.Context, tenantID string) ([]string, error)
 
 	// WithTx runs fn inside one database transaction and commits only if fn
 	// returns nil, rolling back and returning fn's error otherwise.

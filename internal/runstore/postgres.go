@@ -88,15 +88,34 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 // Append records an event, ignoring a duplicate of one already stored. The log
 // is append-only: a redelivered command finds its row already there and
 // changes nothing, rather than duplicating or rewriting history.
+// It runs in a transaction because it writes two things: the event, and the
+// open-run index entry the event implies.
 func (s *PostgresStore) Append(ctx context.Context, tenantID string, e Event) error {
 	if err := checkAppendable(tenantID, e); err != nil {
 		return err
 	}
-	if _, err := s.pool.Exec(ctx, postgresAppend, postgresAppendArgs(tenantID, e)...); err != nil {
-		return fmt.Errorf("append run event: %w", err)
-	}
-	return nil
+	return s.WithTx(ctx, func(tx Tx) error { return tx.Append(ctx, tenantID, e) })
 }
+
+// postgresOpenRun and postgresCloseRun maintain the open-run index in the same
+// transaction as the event that justifies them.
+// postgresNextSequence hands out the tenant's next log position, atomically:
+// concurrent planes serialise on the row lock the upsert takes. It is the
+// counter's successor or the log's high-water mark, whichever is higher, so a
+// caller that supplies an explicit sequence cannot be overtaken by the
+// allocator later. See sqliteNextSequence.
+const postgresNextSequence = `INSERT INTO run_sequences (tenant_id, next)
+	VALUES ($1, COALESCE((SELECT MAX(sequence) FROM run_events WHERE tenant_id = $1), 0) + 1)
+	ON CONFLICT (tenant_id) DO UPDATE SET next = GREATEST(
+		run_sequences.next + 1,
+		COALESCE((SELECT MAX(sequence) FROM run_events WHERE tenant_id = $1), 0) + 1)
+	RETURNING next`
+
+const (
+	postgresOpenRun = `INSERT INTO open_runs (tenant_id, run_id, created_at)
+		VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`
+	postgresCloseRun = `DELETE FROM open_runs WHERE tenant_id = $1 AND run_id = $2`
+)
 
 // postgresAppend is the one INSERT both the store and its transactions use. A
 // transactional append that drifted from the plain one would break the single
@@ -168,8 +187,30 @@ func (t *postgresTx) Append(ctx context.Context, tenantID string, e Event) error
 	if err := checkAppendable(tenantID, e); err != nil {
 		return err
 	}
-	if _, err := t.tx.Exec(ctx, postgresAppend, postgresAppendArgs(tenantID, e)...); err != nil {
+	if e.Sequence == 0 {
+		var next int64
+		if err := t.tx.QueryRow(ctx, postgresNextSequence, tenantID).Scan(&next); err != nil {
+			return fmt.Errorf("append run event: allocating a sequence: %w", err)
+		}
+		e.Sequence = uint64(next) //nolint:gosec // allocated from a positive counter
+	}
+	tag, err := t.tx.Exec(ctx, postgresAppend, postgresAppendArgs(tenantID, e)...)
+	if err != nil {
 		return fmt.Errorf("append run event: %w", err)
+	}
+	// The index moves only when the log moved: a redelivered event writes
+	// nothing, so a replayed RUN_CREATED cannot resurrect a finished run.
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	switch {
+	case e.Type == RunCreated:
+		_, err = t.tx.Exec(ctx, postgresOpenRun, tenantID, e.RunID, e.At.UTC().Format(TimeFormat))
+	case closesRun(e.Type):
+		_, err = t.tx.Exec(ctx, postgresCloseRun, tenantID, e.RunID)
+	}
+	if err != nil {
+		return fmt.Errorf("append run event: open-run index: %w", err)
 	}
 	return nil
 }
@@ -252,6 +293,33 @@ func (s *PostgresStore) LastSequence(ctx context.Context, tenantID string) (uint
 		return 0, fmt.Errorf("last sequence: %w", err)
 	}
 	return uint64(last), nil //nolint:gosec // sequences are written from uint64
+}
+
+// OpenRuns lists the tenant's unfinished runs, oldest first.
+func (s *PostgresStore) OpenRuns(ctx context.Context, tenantID string) ([]string, error) {
+	if tenantID == "" {
+		return nil, ErrTenantRequired
+	}
+	const q = `SELECT run_id FROM open_runs WHERE tenant_id = $1
+		ORDER BY created_at ASC, run_id ASC`
+	rows, err := s.pool.Query(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("open runs: %w", err)
+	}
+	defer rows.Close()
+
+	var runs []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, fmt.Errorf("open runs: %w", err)
+		}
+		runs = append(runs, runID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("open runs: %w", err)
+	}
+	return runs, nil
 }
 
 // Close releases the connection pool.

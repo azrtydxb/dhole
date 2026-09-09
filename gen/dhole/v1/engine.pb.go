@@ -911,6 +911,106 @@ func (x *EngineHeartbeat) GetInFlight() []*InFlight {
 	return nil
 }
 
+// EngineMessage is the frame every engine-to-plane message travels in, and it
+// exists because a bare payload cannot say what it is.
+//
+// An EngineHeartbeat decodes cleanly as an EngineRegistration: both begin with
+// engine_id, and protobuf cannot tell a packed `repeated uint32` from a
+// `repeated message` on the wire, so a decoder guessing by content registers
+// an engine that advertises no platform and no capabilities — which makes
+// every step unschedulable, with nothing in any log saying why. The subject
+// carries the type today, and a subject is a routing decision that can be
+// forwarded, bridged or renamed. This frame puts the type in the BYTES, where
+// it travels with the message whatever carries it.
+//
+// The field numbers start at 100, above every number either payload uses. That
+// is deliberate: a payload sent bare — by an engine written against the
+// earlier framing — parses as an EngineMessage whose body is simply unset,
+// rather than as a framed message with a garbled body. The absence of a body
+// is therefore unambiguous evidence of an older engine, and never a corrupted
+// newer one.
+type EngineMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Body:
+	//
+	//	*EngineMessage_Registration
+	//	*EngineMessage_Heartbeat
+	Body          isEngineMessage_Body `protobuf_oneof:"body"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EngineMessage) Reset() {
+	*x = EngineMessage{}
+	mi := &file_dhole_v1_engine_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EngineMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EngineMessage) ProtoMessage() {}
+
+func (x *EngineMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_engine_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EngineMessage.ProtoReflect.Descriptor instead.
+func (*EngineMessage) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *EngineMessage) GetBody() isEngineMessage_Body {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *EngineMessage) GetRegistration() *EngineRegistration {
+	if x != nil {
+		if x, ok := x.Body.(*EngineMessage_Registration); ok {
+			return x.Registration
+		}
+	}
+	return nil
+}
+
+func (x *EngineMessage) GetHeartbeat() *EngineHeartbeat {
+	if x != nil {
+		if x, ok := x.Body.(*EngineMessage_Heartbeat); ok {
+			return x.Heartbeat
+		}
+	}
+	return nil
+}
+
+type isEngineMessage_Body interface {
+	isEngineMessage_Body()
+}
+
+type EngineMessage_Registration struct {
+	Registration *EngineRegistration `protobuf:"bytes,100,opt,name=registration,proto3,oneof"`
+}
+
+type EngineMessage_Heartbeat struct {
+	Heartbeat *EngineHeartbeat `protobuf:"bytes,101,opt,name=heartbeat,proto3,oneof"`
+}
+
+func (*EngineMessage_Registration) isEngineMessage_Body() {}
+
+func (*EngineMessage_Heartbeat) isEngineMessage_Body() {}
+
 // Cancel stops one in-flight job.
 type Cancel struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -924,7 +1024,7 @@ type Cancel struct {
 
 func (x *Cancel) Reset() {
 	*x = Cancel{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[9]
+	mi := &file_dhole_v1_engine_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -936,7 +1036,7 @@ func (x *Cancel) String() string {
 func (*Cancel) ProtoMessage() {}
 
 func (x *Cancel) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[9]
+	mi := &file_dhole_v1_engine_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -949,7 +1049,7 @@ func (x *Cancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cancel.ProtoReflect.Descriptor instead.
 func (*Cancel) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{9}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Cancel) GetRunId() string {
@@ -991,7 +1091,7 @@ type Drain struct {
 
 func (x *Drain) Reset() {
 	*x = Drain{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[10]
+	mi := &file_dhole_v1_engine_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1003,7 +1103,7 @@ func (x *Drain) String() string {
 func (*Drain) ProtoMessage() {}
 
 func (x *Drain) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[10]
+	mi := &file_dhole_v1_engine_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1016,7 +1116,7 @@ func (x *Drain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Drain.ProtoReflect.Descriptor instead.
 func (*Drain) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{10}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Drain) GetDeadlineSeconds() uint32 {
@@ -1040,7 +1140,7 @@ type Attach struct {
 
 func (x *Attach) Reset() {
 	*x = Attach{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[11]
+	mi := &file_dhole_v1_engine_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1052,7 +1152,7 @@ func (x *Attach) String() string {
 func (*Attach) ProtoMessage() {}
 
 func (x *Attach) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[11]
+	mi := &file_dhole_v1_engine_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1065,7 +1165,7 @@ func (x *Attach) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Attach.ProtoReflect.Descriptor instead.
 func (*Attach) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{11}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Attach) GetRunId() string {
@@ -1112,7 +1212,7 @@ type EngineControl struct {
 
 func (x *EngineControl) Reset() {
 	*x = EngineControl{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[12]
+	mi := &file_dhole_v1_engine_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1124,7 +1224,7 @@ func (x *EngineControl) String() string {
 func (*EngineControl) ProtoMessage() {}
 
 func (x *EngineControl) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[12]
+	mi := &file_dhole_v1_engine_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1137,7 +1237,7 @@ func (x *EngineControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineControl.ProtoReflect.Descriptor instead.
 func (*EngineControl) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{12}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *EngineControl) GetKind() isEngineControl_Kind {
@@ -1273,7 +1373,11 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"fenceToken\"_\n" +
 	"\x0fEngineHeartbeat\x12\x1b\n" +
 	"\tengine_id\x18\x01 \x01(\tR\bengineId\x12/\n" +
-	"\tin_flight\x18\x02 \x03(\v2\x12.dhole.v1.InFlightR\binFlight\"s\n" +
+	"\tin_flight\x18\x02 \x03(\v2\x12.dhole.v1.InFlightR\binFlight\"\x96\x01\n" +
+	"\rEngineMessage\x12B\n" +
+	"\fregistration\x18d \x01(\v2\x1c.dhole.v1.EngineRegistrationH\x00R\fregistration\x129\n" +
+	"\theartbeat\x18e \x01(\v2\x19.dhole.v1.EngineHeartbeatH\x00R\theartbeatB\x06\n" +
+	"\x04body\"s\n" +
 	"\x06Cancel\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x18\n" +
@@ -1318,7 +1422,7 @@ func file_dhole_v1_engine_proto_rawDescGZIP() []byte {
 }
 
 var file_dhole_v1_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_dhole_v1_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_dhole_v1_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_dhole_v1_engine_proto_goTypes = []any{
 	(Phase)(0),                 // 0: dhole.v1.Phase
 	(Stream)(0),                // 1: dhole.v1.Stream
@@ -1331,39 +1435,42 @@ var file_dhole_v1_engine_proto_goTypes = []any{
 	(*EngineRegistration)(nil), // 8: dhole.v1.EngineRegistration
 	(*InFlight)(nil),           // 9: dhole.v1.InFlight
 	(*EngineHeartbeat)(nil),    // 10: dhole.v1.EngineHeartbeat
-	(*Cancel)(nil),             // 11: dhole.v1.Cancel
-	(*Drain)(nil),              // 12: dhole.v1.Drain
-	(*Attach)(nil),             // 13: dhole.v1.Attach
-	(*EngineControl)(nil),      // 14: dhole.v1.EngineControl
-	nil,                        // 15: dhole.v1.JobDispatch.EnvEntry
-	nil,                        // 16: dhole.v1.JobDispatch.TraceContextEntry
-	(*Digest)(nil),             // 17: dhole.v1.Digest
-	(*Step)(nil),               // 18: dhole.v1.Step
-	(*Tenant)(nil),             // 19: dhole.v1.Tenant
-	(Capability)(0),            // 20: dhole.v1.Capability
+	(*EngineMessage)(nil),      // 11: dhole.v1.EngineMessage
+	(*Cancel)(nil),             // 12: dhole.v1.Cancel
+	(*Drain)(nil),              // 13: dhole.v1.Drain
+	(*Attach)(nil),             // 14: dhole.v1.Attach
+	(*EngineControl)(nil),      // 15: dhole.v1.EngineControl
+	nil,                        // 16: dhole.v1.JobDispatch.EnvEntry
+	nil,                        // 17: dhole.v1.JobDispatch.TraceContextEntry
+	(*Digest)(nil),             // 18: dhole.v1.Digest
+	(*Step)(nil),               // 19: dhole.v1.Step
+	(*Tenant)(nil),             // 20: dhole.v1.Tenant
+	(Capability)(0),            // 21: dhole.v1.Capability
 }
 var file_dhole_v1_engine_proto_depIdxs = []int32{
-	17, // 0: dhole.v1.InputRef.digest:type_name -> dhole.v1.Digest
-	17, // 1: dhole.v1.OutputRef.digest:type_name -> dhole.v1.Digest
-	18, // 2: dhole.v1.JobDispatch.step:type_name -> dhole.v1.Step
+	18, // 0: dhole.v1.InputRef.digest:type_name -> dhole.v1.Digest
+	18, // 1: dhole.v1.OutputRef.digest:type_name -> dhole.v1.Digest
+	19, // 2: dhole.v1.JobDispatch.step:type_name -> dhole.v1.Step
 	2,  // 3: dhole.v1.JobDispatch.inputs:type_name -> dhole.v1.InputRef
 	4,  // 4: dhole.v1.JobDispatch.secrets:type_name -> dhole.v1.SecretRef
-	19, // 5: dhole.v1.JobDispatch.tenant:type_name -> dhole.v1.Tenant
-	15, // 6: dhole.v1.JobDispatch.env:type_name -> dhole.v1.JobDispatch.EnvEntry
-	16, // 7: dhole.v1.JobDispatch.trace_context:type_name -> dhole.v1.JobDispatch.TraceContextEntry
+	20, // 5: dhole.v1.JobDispatch.tenant:type_name -> dhole.v1.Tenant
+	16, // 6: dhole.v1.JobDispatch.env:type_name -> dhole.v1.JobDispatch.EnvEntry
+	17, // 7: dhole.v1.JobDispatch.trace_context:type_name -> dhole.v1.JobDispatch.TraceContextEntry
 	0,  // 8: dhole.v1.JobStatus.phase:type_name -> dhole.v1.Phase
 	3,  // 9: dhole.v1.JobStatus.outputs:type_name -> dhole.v1.OutputRef
 	1,  // 10: dhole.v1.LogChunk.stream:type_name -> dhole.v1.Stream
-	20, // 11: dhole.v1.EngineRegistration.capabilities:type_name -> dhole.v1.Capability
+	21, // 11: dhole.v1.EngineRegistration.capabilities:type_name -> dhole.v1.Capability
 	9,  // 12: dhole.v1.EngineHeartbeat.in_flight:type_name -> dhole.v1.InFlight
-	11, // 13: dhole.v1.EngineControl.cancel:type_name -> dhole.v1.Cancel
-	12, // 14: dhole.v1.EngineControl.drain:type_name -> dhole.v1.Drain
-	13, // 15: dhole.v1.EngineControl.attach:type_name -> dhole.v1.Attach
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	8,  // 13: dhole.v1.EngineMessage.registration:type_name -> dhole.v1.EngineRegistration
+	10, // 14: dhole.v1.EngineMessage.heartbeat:type_name -> dhole.v1.EngineHeartbeat
+	12, // 15: dhole.v1.EngineControl.cancel:type_name -> dhole.v1.Cancel
+	13, // 16: dhole.v1.EngineControl.drain:type_name -> dhole.v1.Drain
+	14, // 17: dhole.v1.EngineControl.attach:type_name -> dhole.v1.Attach
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_engine_proto_init() }
@@ -1373,7 +1480,11 @@ func file_dhole_v1_engine_proto_init() {
 	}
 	file_dhole_v1_common_proto_init()
 	file_dhole_v1_pipeline_proto_init()
-	file_dhole_v1_engine_proto_msgTypes[12].OneofWrappers = []any{
+	file_dhole_v1_engine_proto_msgTypes[9].OneofWrappers = []any{
+		(*EngineMessage_Registration)(nil),
+		(*EngineMessage_Heartbeat)(nil),
+	}
+	file_dhole_v1_engine_proto_msgTypes[13].OneofWrappers = []any{
 		(*EngineControl_Cancel)(nil),
 		(*EngineControl_Drain)(nil),
 		(*EngineControl_Attach)(nil),
@@ -1384,7 +1495,7 @@ func file_dhole_v1_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_engine_proto_rawDesc), len(file_dhole_v1_engine_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

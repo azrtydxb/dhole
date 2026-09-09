@@ -56,10 +56,16 @@ const (
 // several control planes at once: a drainer claims rows before publishing
 // them, so two planes do not routinely publish the same row twice.
 type Outbox struct {
-	store   runstore.Store
-	bus     bus.Bus
-	onError func(error)
+	store      runstore.Store
+	bus        bus.Bus
+	deployment string
+	onError    func(error)
 }
+
+// ErrDeploymentRequired refuses an outbox that cannot name the control plane
+// it belongs to. An unnamed deployment would be an unscoped claim, which is
+// how one plane comes to publish another plane's messages onto its own bus.
+var ErrDeploymentRequired = errors.New("outbox: deployment id required")
 
 // Option tunes an Outbox.
 type Option func(*Outbox)
@@ -72,9 +78,15 @@ func WithErrorHandler(fn func(error)) Option {
 	return func(o *Outbox) { o.onError = fn }
 }
 
-// New builds an Outbox over a run store and a bus.
-func New(store runstore.Store, b bus.Bus, opts ...Option) *Outbox {
-	o := &Outbox{store: store, bus: b}
+// New builds an Outbox over a run store and a bus, owned by the named
+// deployment.
+//
+// deployment identifies the CONTROL PLANE, not the process: every drainer of
+// one plane passes the same id and they share its rows, which is what makes
+// two planes running for availability work. Two planes that merely share a
+// database pass different ids and never see each other's messages.
+func New(store runstore.Store, b bus.Bus, deployment string, opts ...Option) *Outbox {
+	o := &Outbox{store: store, bus: b, deployment: deployment}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -96,6 +108,9 @@ func (o *Outbox) Enqueue(ctx context.Context, tx runstore.Tx, tenantID, subject 
 	if subject == "" {
 		return errors.New("outbox: subject required")
 	}
+	if o.deployment == "" {
+		return ErrDeploymentRequired
+	}
 	payload, err := proto.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("outbox: marshal for %q: %w", subject, err)
@@ -103,13 +118,14 @@ func (o *Outbox) Enqueue(ctx context.Context, tx runstore.Tx, tenantID, subject 
 
 	switch tx.Dialect() {
 	case runstore.DialectPostgres:
-		const q = `INSERT INTO outbox (tenant_id, subject, payload, created_at, sent_at)
-			VALUES ($1, $2, $3, $4, NULL)`
-		return tx.Exec(ctx, q, tenantID, subject, payload, time.Now().UTC())
+		const q = `INSERT INTO outbox (tenant_id, deployment_id, subject, payload, created_at, sent_at)
+			VALUES ($1, $2, $3, $4, $5, NULL)`
+		return tx.Exec(ctx, q, tenantID, o.deployment, subject, payload, time.Now().UTC())
 	case runstore.DialectSQLite:
-		const q = `INSERT INTO outbox (tenant_id, subject, payload, created_at, sent_at)
-			VALUES (?, ?, ?, ?, NULL)`
-		return tx.Exec(ctx, q, tenantID, subject, payload, time.Now().UTC().Format(runstore.TimeFormat))
+		const q = `INSERT INTO outbox (tenant_id, deployment_id, subject, payload, created_at, sent_at)
+			VALUES (?, ?, ?, ?, ?, NULL)`
+		return tx.Exec(ctx, q, tenantID, o.deployment, subject, payload,
+			time.Now().UTC().Format(runstore.TimeFormat))
 	default:
 		return fmt.Errorf("outbox: unknown store dialect %q", tx.Dialect())
 	}
@@ -123,6 +139,9 @@ func (o *Outbox) Enqueue(ctx context.Context, tx runstore.Tx, tenantID, subject 
 // point: a failed publish stays owed and is retried, so the bus being down
 // delays a step rather than losing it.
 func (o *Outbox) Drain(ctx context.Context) (int, error) {
+	if o.deployment == "" {
+		return 0, ErrDeploymentRequired
+	}
 	var (
 		published  int
 		publishErr error
@@ -206,7 +225,14 @@ type owed struct {
 	payload []byte
 }
 
-// claim takes ownership of a batch of unsent rows for the life of tx.
+// claim takes ownership of a batch of THIS deployment's unsent rows for the
+// life of tx.
+//
+// The deployment scope is not an optimisation. Without it the claim names
+// nothing at all, and two control planes against one database each publish the
+// other's dispatches onto their own bus — which was observed, not theorised.
+// The tenant is deliberately NOT the scope: a plane serves every tenant it is
+// configured for, and one tenant may run two planes.
 //
 // Two control planes drain concurrently by design, and a claim is what stops
 // them publishing the same row as a matter of course. Postgres claims with
@@ -221,16 +247,16 @@ func (o *Outbox) claim(ctx context.Context, tx runstore.Tx) ([]owed, error) {
 	switch tx.Dialect() {
 	case runstore.DialectPostgres:
 		q = `SELECT id, subject, payload FROM outbox
-			WHERE sent_at IS NULL ORDER BY id LIMIT $1
+			WHERE sent_at IS NULL AND deployment_id = $1 ORDER BY id LIMIT $2
 			FOR UPDATE SKIP LOCKED`
 	case runstore.DialectSQLite:
 		q = `SELECT id, subject, payload FROM outbox
-			WHERE sent_at IS NULL ORDER BY id LIMIT ?`
+			WHERE sent_at IS NULL AND deployment_id = ? ORDER BY id LIMIT ?`
 	default:
 		return nil, fmt.Errorf("outbox: unknown store dialect %q", tx.Dialect())
 	}
 
-	rows, err := tx.Query(ctx, q, drainBatch)
+	rows, err := tx.Query(ctx, q, o.deployment, drainBatch)
 	if err != nil {
 		return nil, fmt.Errorf("outbox: claim: %w", err)
 	}

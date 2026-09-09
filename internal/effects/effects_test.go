@@ -246,7 +246,7 @@ func newHarness(
 	require.NoError(t, err)
 
 	recorder := &publishingBus{}
-	ob := outbox.New(store, recorder)
+	ob := outbox.New(store, recorder, "test-plane")
 
 	sched, err := scheduler.New(scheduler.Config{
 		Store:  store,

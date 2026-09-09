@@ -482,7 +482,7 @@ func newDispatchHarness(ctx context.Context, t *testing.T) *dispatchHarness {
 	t.Cleanup(func() { _ = runs.Close() })
 
 	defs := sqliteDefs(t)
-	out := outbox.New(runs, plane)
+	out := outbox.New(runs, plane, "test-plane")
 	fleet := staticFleet{readyEngine()}
 	sched, err := scheduler.New(scheduler.Config{
 		Store: runs, Outbox: out, Leases: leases, Fleet: fleet,

@@ -20,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_engine: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChVkaG9sZS92MS9lbmdpbmUucHJvdG8SCGRob2xlLnYxIkcKCElucHV0UmVmEgwKBHBvcnQYASABKAkSIAoGZGlnZXN0GAIgASgLMhAuZGhvbGUudjEuRGlnZXN0EgsKA2tleRgDIAEoCSJcCglPdXRwdXRSZWYSDAoEcG9ydBgBIAEoCRIgCgZkaWdlc3QYAiABKAsyEC5kaG9sZS52MS5EaWdlc3QSCwoDa2V5GAMgASgJEhIKCnNpemVfYnl0ZXMYBCABKAQiPQoJU2VjcmV0UmVmEgwKBG5hbWUYASABKAkSDgoGaGFuZGxlGAIgASgJEhIKCmV4cGlyZXNfYXQYAyABKAMi7gMKC0pvYkRpc3BhdGNoEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHAoEc3RlcBgFIAEoCzIOLmRob2xlLnYxLlN0ZXASIgoGaW5wdXRzGAYgAygLMhIuZGhvbGUudjEuSW5wdXRSZWYSJAoHc2VjcmV0cxgHIAMoCzITLmRob2xlLnYxLlNlY3JldFJlZhIVCg1vdXRwdXRfcHJlZml4GAggASgJEhgKEHByb3RvY29sX3ZlcnNpb24YCSABKA0SIAoGdGVuYW50GAogASgLMhAuZGhvbGUudjEuVGVuYW50Eg8KB2NvbW1hbmQYCyADKAkSKwoDZW52GAwgAygLMh4uZGhvbGUudjEuSm9iRGlzcGF0Y2guRW52RW50cnkSPgoNdHJhY2VfY29udGV4dBgNIAMoCzInLmRob2xlLnYxLkpvYkRpc3BhdGNoLlRyYWNlQ29udGV4dEVudHJ5GioKCEVudkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEaMwoRVHJhY2VDb250ZXh0RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASLLAQoJSm9iU3RhdHVzEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHgoFcGhhc2UYBSABKA4yDy5kaG9sZS52MS5QaGFzZRIRCglleGl0X2NvZGUYBiABKAUSJAoHb3V0cHV0cxgHIAMoCzITLmRob2xlLnYxLk91dHB1dFJlZhINCgVlcnJvchgIIAEoCRIPCgdsb2dfa2V5GAkgASgJInkKCExvZ0NodW5rEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEgsKA3NlcRgDIAEoBBIMCgRkYXRhGAQgASgMEiAKBnN0cmVhbRgFIAEoDjIQLmRob2xlLnYxLlN0cmVhbRIPCgdhdHRlbXB0GAYgASgNIrsBChJFbmdpbmVSZWdpc3RyYXRpb24SEQoJZW5naW5lX2lkGAEgASgJEhkKEXByb3RvY29sX3ZlcnNpb25zGAIgAygNEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIUCgxlbmdpbmVfdHlwZXMYByADKAkSDAoEdGllchgIIAEoCSJRCghJbkZsaWdodBIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhMKC2ZlbmNlX3Rva2VuGAQgASgJIksKD0VuZ2luZUhlYXJ0YmVhdBIRCgllbmdpbmVfaWQYASABKAkSJQoJaW5fZmxpZ2h0GAIgAygLMhIuZGhvbGUudjEuSW5GbGlnaHQiTwoGQ2FuY2VsEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkiIQoFRHJhaW4SGAoQZGVhZGxpbmVfc2Vjb25kcxgBIAEoDSJRCgZBdHRhY2gSDgoGcnVuX2lkGAEgASgJEg8KB3N0ZXBfaWQYAiABKAkSDwoHYXR0ZW1wdBgDIAEoDRIVCg1yZXBseV9zdWJqZWN0GAQgASgJIoEBCg1FbmdpbmVDb250cm9sEiIKBmNhbmNlbBgBIAEoCzIQLmRob2xlLnYxLkNhbmNlbEgAEiAKBWRyYWluGAIgASgLMg8uZGhvbGUudjEuRHJhaW5IABIiCgZhdHRhY2gYAyABKAsyEC5kaG9sZS52MS5BdHRhY2hIAEIGCgRraW5kKoEBCgVQaGFzZRIVChFQSEFTRV9VTlNQRUNJRklFRBAAEhIKDlBIQVNFX0FDQ0VQVEVEEAESEQoNUEhBU0VfUlVOTklORxACEhMKD1BIQVNFX1NVQ0NFRURFRBADEhAKDFBIQVNFX0ZBSUxFRBAEEhMKD1BIQVNFX0NBTkNFTExFRBAFKkYKBlN0cmVhbRIWChJTVFJFQU1fVU5TUEVDSUZJRUQQABIRCg1TVFJFQU1fU1RET1VUEAESEQoNU1RSRUFNX1NUREVSUhACQowBCgxjb20uZGhvbGUudjFCC0VuZ2luZVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    "ChVkaG9sZS92MS9lbmdpbmUucHJvdG8SCGRob2xlLnYxIkcKCElucHV0UmVmEgwKBHBvcnQYASABKAkSIAoGZGlnZXN0GAIgASgLMhAuZGhvbGUudjEuRGlnZXN0EgsKA2tleRgDIAEoCSJcCglPdXRwdXRSZWYSDAoEcG9ydBgBIAEoCRIgCgZkaWdlc3QYAiABKAsyEC5kaG9sZS52MS5EaWdlc3QSCwoDa2V5GAMgASgJEhIKCnNpemVfYnl0ZXMYBCABKAQiPQoJU2VjcmV0UmVmEgwKBG5hbWUYASABKAkSDgoGaGFuZGxlGAIgASgJEhIKCmV4cGlyZXNfYXQYAyABKAMi7gMKC0pvYkRpc3BhdGNoEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHAoEc3RlcBgFIAEoCzIOLmRob2xlLnYxLlN0ZXASIgoGaW5wdXRzGAYgAygLMhIuZGhvbGUudjEuSW5wdXRSZWYSJAoHc2VjcmV0cxgHIAMoCzITLmRob2xlLnYxLlNlY3JldFJlZhIVCg1vdXRwdXRfcHJlZml4GAggASgJEhgKEHByb3RvY29sX3ZlcnNpb24YCSABKA0SIAoGdGVuYW50GAogASgLMhAuZGhvbGUudjEuVGVuYW50Eg8KB2NvbW1hbmQYCyADKAkSKwoDZW52GAwgAygLMh4uZGhvbGUudjEuSm9iRGlzcGF0Y2guRW52RW50cnkSPgoNdHJhY2VfY29udGV4dBgNIAMoCzInLmRob2xlLnYxLkpvYkRpc3BhdGNoLlRyYWNlQ29udGV4dEVudHJ5GioKCEVudkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEaMwoRVHJhY2VDb250ZXh0RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASLLAQoJSm9iU3RhdHVzEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHgoFcGhhc2UYBSABKA4yDy5kaG9sZS52MS5QaGFzZRIRCglleGl0X2NvZGUYBiABKAUSJAoHb3V0cHV0cxgHIAMoCzITLmRob2xlLnYxLk91dHB1dFJlZhINCgVlcnJvchgIIAEoCRIPCgdsb2dfa2V5GAkgASgJInkKCExvZ0NodW5rEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEgsKA3NlcRgDIAEoBBIMCgRkYXRhGAQgASgMEiAKBnN0cmVhbRgFIAEoDjIQLmRob2xlLnYxLlN0cmVhbRIPCgdhdHRlbXB0GAYgASgNIrsBChJFbmdpbmVSZWdpc3RyYXRpb24SEQoJZW5naW5lX2lkGAEgASgJEhkKEXByb3RvY29sX3ZlcnNpb25zGAIgAygNEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIUCgxlbmdpbmVfdHlwZXMYByADKAkSDAoEdGllchgIIAEoCSJRCghJbkZsaWdodBIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhMKC2ZlbmNlX3Rva2VuGAQgASgJIksKD0VuZ2luZUhlYXJ0YmVhdBIRCgllbmdpbmVfaWQYASABKAkSJQoJaW5fZmxpZ2h0GAIgAygLMhIuZGhvbGUudjEuSW5GbGlnaHQifQoNRW5naW5lTWVzc2FnZRI0CgxyZWdpc3RyYXRpb24YZCABKAsyHC5kaG9sZS52MS5FbmdpbmVSZWdpc3RyYXRpb25IABIuCgloZWFydGJlYXQYZSABKAsyGS5kaG9sZS52MS5FbmdpbmVIZWFydGJlYXRIAEIGCgRib2R5Ik8KBkNhbmNlbBIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhMKC2ZlbmNlX3Rva2VuGAQgASgJIiEKBURyYWluEhgKEGRlYWRsaW5lX3NlY29uZHMYASABKA0iUQoGQXR0YWNoEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SFQoNcmVwbHlfc3ViamVjdBgEIAEoCSKBAQoNRW5naW5lQ29udHJvbBIiCgZjYW5jZWwYASABKAsyEC5kaG9sZS52MS5DYW5jZWxIABIgCgVkcmFpbhgCIAEoCzIPLmRob2xlLnYxLkRyYWluSAASIgoGYXR0YWNoGAMgASgLMhAuZGhvbGUudjEuQXR0YWNoSABCBgoEa2luZCqBAQoFUGhhc2USFQoRUEhBU0VfVU5TUEVDSUZJRUQQABISCg5QSEFTRV9BQ0NFUFRFRBABEhEKDVBIQVNFX1JVTk5JTkcQAhITCg9QSEFTRV9TVUNDRUVERUQQAxIQCgxQSEFTRV9GQUlMRUQQBBITCg9QSEFTRV9DQU5DRUxMRUQQBSpGCgZTdHJlYW0SFgoSU1RSRUFNX1VOU1BFQ0lGSUVEEAASEQoNU1RSRUFNX1NURE9VVBABEhEKDVNUUkVBTV9TVERFUlIQAkKMAQoMY29tLmRob2xlLnYxQgtFbmdpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
     [file_dhole_v1_common, file_dhole_v1_pipeline],
   );
 
@@ -467,6 +467,58 @@ export const EngineHeartbeatSchema: GenMessage<EngineHeartbeat> =
   messageDesc(file_dhole_v1_engine, 8);
 
 /**
+ * EngineMessage is the frame every engine-to-plane message travels in, and it
+ * exists because a bare payload cannot say what it is.
+ *
+ * An EngineHeartbeat decodes cleanly as an EngineRegistration: both begin with
+ * engine_id, and protobuf cannot tell a packed `repeated uint32` from a
+ * `repeated message` on the wire, so a decoder guessing by content registers
+ * an engine that advertises no platform and no capabilities — which makes
+ * every step unschedulable, with nothing in any log saying why. The subject
+ * carries the type today, and a subject is a routing decision that can be
+ * forwarded, bridged or renamed. This frame puts the type in the BYTES, where
+ * it travels with the message whatever carries it.
+ *
+ * The field numbers start at 100, above every number either payload uses. That
+ * is deliberate: a payload sent bare — by an engine written against the
+ * earlier framing — parses as an EngineMessage whose body is simply unset,
+ * rather than as a framed message with a garbled body. The absence of a body
+ * is therefore unambiguous evidence of an older engine, and never a corrupted
+ * newer one.
+ *
+ * @generated from message dhole.v1.EngineMessage
+ */
+export type EngineMessage = Message<"dhole.v1.EngineMessage"> & {
+  /**
+   * @generated from oneof dhole.v1.EngineMessage.body
+   */
+  body:
+    | {
+        /**
+         * @generated from field: dhole.v1.EngineRegistration registration = 100;
+         */
+        value: EngineRegistration;
+        case: "registration";
+      }
+    | {
+        /**
+         * @generated from field: dhole.v1.EngineHeartbeat heartbeat = 101;
+         */
+        value: EngineHeartbeat;
+        case: "heartbeat";
+      }
+    | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dhole.v1.EngineMessage.
+ * Use `create(EngineMessageSchema)` to create a new message.
+ */
+export const EngineMessageSchema: GenMessage<EngineMessage> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_engine, 9);
+
+/**
  * Cancel stops one in-flight job.
  *
  * @generated from message dhole.v1.Cancel
@@ -499,7 +551,7 @@ export type Cancel = Message<"dhole.v1.Cancel"> & {
  */
 export const CancelSchema: GenMessage<Cancel> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 9);
+  messageDesc(file_dhole_v1_engine, 10);
 
 /**
  * Drain tells an engine to accept no new work and exit once idle.
@@ -521,7 +573,7 @@ export type Drain = Message<"dhole.v1.Drain"> & {
  */
 export const DrainSchema: GenMessage<Drain> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 10);
+  messageDesc(file_dhole_v1_engine, 11);
 
 /**
  * Attach asks an engine to open an interactive session against a running job.
@@ -558,7 +610,7 @@ export type Attach = Message<"dhole.v1.Attach"> & {
  */
 export const AttachSchema: GenMessage<Attach> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 11);
+  messageDesc(file_dhole_v1_engine, 12);
 
 /**
  * EngineControl is the only inbound message an engine accepts. Engines are
@@ -601,7 +653,7 @@ export type EngineControl = Message<"dhole.v1.EngineControl"> & {
  */
 export const EngineControlSchema: GenMessage<EngineControl> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 12);
+  messageDesc(file_dhole_v1_engine, 13);
 
 /**
  * Phase is where a job stands. Only terminal phases carry an exit code.

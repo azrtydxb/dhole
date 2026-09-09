@@ -102,7 +102,7 @@ func newTunedHarness(
 	}
 
 	recorder := &recordingBus{}
-	ob := outbox.New(store, recorder)
+	ob := outbox.New(store, recorder, "test-plane")
 	fleet := staticFleet{instances: []registry.Instance{readyEngine("e1")}}
 	defs := staticDefs{pipeline: pipeline}
 

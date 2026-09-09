@@ -321,7 +321,7 @@ func newHarness(ctx context.Context, t *testing.T, open storeOpener) *harness {
 	require.NoError(t, err)
 
 	recorder := &recordingBus{}
-	ob := outbox.New(store, recorder)
+	ob := outbox.New(store, recorder, "test-plane")
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       store,
 		Outbox:      ob,

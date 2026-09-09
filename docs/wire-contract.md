@@ -60,6 +60,53 @@ engine subscribes to the dispatch subjects matching capability sets it can
 satisfy, so filtering happens at the bus rather than by receiving and rejecting
 work it was never eligible for.
 
+### Message framing
+
+The two engine-to-plane subjects carry an `EngineMessage`, not a bare payload:
+
+```proto
+message EngineMessage {
+  oneof body {
+    EngineRegistration registration = 100;
+    EngineHeartbeat heartbeat = 101;
+  }
+}
+```
+
+An engine publishes `EngineMessage{registration}` on `engine.registration` and
+`EngineMessage{heartbeat}` on `engine.heartbeat.<engine-id>`. Everything else
+in this document — `JobDispatch`, `JobStatus`, `LogChunk`, `EngineControl` — is
+published bare, because each of those subjects carries exactly one type and
+that type is not confusable with another.
+
+These two are. **An `EngineHeartbeat` decodes cleanly as an
+`EngineRegistration`**: both begin with `engine_id`, and protobuf cannot tell a
+packed `repeated uint32` from a `repeated message` on the wire. A control
+plane that decided by content therefore admitted engines advertising no
+platform and no capabilities, and every step after that was unschedulable with
+nothing in any log saying why. The subject can distinguish them, but a subject
+is a routing decision — it can be forwarded, bridged, renamed, or mapped by an
+account import — and the type of a message must not depend on how it was
+delivered. The frame puts the type in the bytes.
+
+The body's field numbers start at 100, above every number either payload uses,
+and that is part of the contract rather than an accident of drafting. It means
+a bare payload parses as a frame with an UNSET body rather than as a frame with
+a garbled one. So:
+
+- A frame with a body is an engine speaking this framing, and its type comes
+  from the oneof.
+- A frame with no body is an engine speaking the earlier framing, and its type
+  comes from the subject. The control plane accepts it, because it accepts
+  engines one version behind.
+- A frame read by a plane that predates the framing yields an empty
+  `engine_id`, which is refused outright rather than admitted as a plausible
+  instance.
+
+Engines being written now must frame. An engine that publishes bare payloads is
+relying on the compatibility path and will stop working when this major version
+does.
+
 `job.dispatch.*` is a **work queue**: exactly one engine receives each dispatch,
 and an unacknowledged message is redelivered. `job.status.*` is durable —
 the control plane must not miss one. `job.logs.*` is **ephemeral and

@@ -267,6 +267,96 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 	return nil
 }
 
+// StepAttemptLost records that an attempt's holder died: its lease expired
+// without being renewed, so whatever engine held the step is gone, wedged or
+// unreachable, and nothing will ever report on that attempt.
+//
+// Without this event an orphan is inexpressible. plan() counts any step with
+// attempts > 0 as in flight, and nothing else in the log ever contradicts it,
+// so a run with a dead engine's step in it was neither finished nor
+// progressing and said nothing about why. Stored values are a persistence
+// contract — add types, never rename one.
+const StepAttemptLost runstore.EventType = "STEP_ATTEMPT_LOST"
+
+// SweepOrphans expires the leases nobody renewed and records, in each run's
+// log, that the attempt behind one is dead. It returns how many it recorded.
+//
+// Recording is all it does about the past; what happens NEXT is the ordinary
+// rule. Advance re-reads the log, plan sees a step that is no longer in
+// flight, and the step's effect class decides whether it may run again — so an
+// at-most-once step whose engine died waits for a person rather than being
+// charged to somebody twice (ADR 0002).
+//
+// It is safe to run in several control planes at once: lease.Expire claims
+// each dead lease by deleting it at the revision it read, so the server hands
+// a given orphan to exactly one sweeper.
+func (s *Scheduler) SweepOrphans(ctx context.Context) (int, error) {
+	orphans, err := s.leas.Expire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("scheduler: sweeping orphaned leases: %w", err)
+	}
+
+	recorded := 0
+	for _, orphan := range orphans {
+		ok, err := s.recordOrphan(ctx, orphan)
+		if err != nil {
+			return recorded, err
+		}
+		if !ok {
+			continue
+		}
+		recorded++
+		if err := s.Advance(ctx, orphan.TenantID, orphan.RunID); err != nil {
+			return recorded, err
+		}
+	}
+	return recorded, nil
+}
+
+// recordOrphan writes the STEP_ATTEMPT_LOST event for one dead lease, and
+// reports whether it wrote anything.
+//
+// Three cases write nothing, and each of them is a lease that outlived what it
+// was protecting rather than a step that died: a run that has already closed,
+// a step that reported a terminal status before its holder stopped renewing,
+// and an attempt that has already been superseded by a later one. Recording
+// any of those would fail a step that is finished, or take a step away from
+// the engine currently running it.
+func (s *Scheduler) recordOrphan(ctx context.Context, orphan lease.Orphan) (bool, error) {
+	state, err := s.load(ctx, orphan.TenantID, orphan.RunID)
+	if err != nil {
+		return false, err
+	}
+	if state.completed {
+		return false, nil
+	}
+	if _, done := state.terminal[orphan.StepID]; done {
+		return false, nil
+	}
+	if state.attempts[orphan.StepID] != orphan.Attempt {
+		return false, nil
+	}
+
+	payload, err := MarshalAttemptLost(AttemptLost{
+		Attempt: orphan.Attempt,
+		Fence:   orphan.Fence,
+		Reason:  "the lease expired without being renewed; its holder is gone",
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := s.append(ctx, orphan.TenantID, runstore.Event{
+		RunID:   orphan.RunID,
+		StepID:  orphan.StepID,
+		Attempt: orphan.Attempt,
+		Type:    StepAttemptLost,
+		Payload: payload,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // OnStatus applies an engine's report and advances the run it belongs to.
 //
 // A status whose fence is not the current lease is IGNORED, not applied and
@@ -418,6 +508,15 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		case runstore.StepFailed:
 			state.terminal[e.StepID] = e.Type
 			state.failedAt[e.StepID] = e.At
+		case StepAttemptLost:
+			// An attempt whose holder died is out of flight, and is decided
+			// by the same rule a failure is: its effect class says whether it
+			// may run again at all. failedAt is deliberately NOT set — a
+			// backoff exists to stop hammering a far end that is failing, and
+			// nothing here says the far end failed. The engine did.
+			if e.Attempt >= state.attempts[e.StepID] {
+				state.terminal[e.StepID] = runstore.StepFailed
+			}
 		case StepAwaitingReplay:
 			state.awaiting[e.StepID] = true
 		case StepAwaitingTimer, StepAwaitingApproval:
@@ -633,21 +732,16 @@ func (s *Scheduler) dispatch(
 		return err
 	}
 
-	sequence, err := s.nextSequence(ctx, tenantID)
-	if err != nil {
-		return err
-	}
 	subject := bus.SubjectDispatch(s.tier, engine.CapsHash(step.GetCapabilities()))
 
 	err = s.store.WithTx(ctx, func(tx runstore.Tx) error {
 		if err := tx.Append(ctx, tenantID, runstore.Event{
-			RunID:    runID,
-			StepID:   step.GetId(),
-			Attempt:  attempt,
-			Sequence: sequence,
-			Type:     runstore.StepDispatched,
-			Payload:  payload,
-			At:       s.now().UTC(),
+			RunID:   runID,
+			StepID:  step.GetId(),
+			Attempt: attempt,
+			Type:    runstore.StepDispatched,
+			Payload: payload,
+			At:      s.now().UTC(),
 		}); err != nil {
 			return err
 		}
@@ -825,32 +919,22 @@ func (s *Scheduler) complete(ctx context.Context, tenantID, runID string) error 
 	})
 }
 
-// append stamps an event with the next sequence and the current time, then
-// writes it. Events written here are the ones with nothing to publish
-// alongside them; anything that owes a message goes through WithTx instead.
+// append stamps an event with the current time and writes it. Events written
+// here are the ones with nothing to publish alongside them; anything that owes
+// a message goes through WithTx instead.
+//
+// The SEQUENCE is left to the store. It used to be computed here as
+// `LastSequence + 1`, read outside the transaction that used it, so two planes
+// — or two goroutines of one plane — that read before either wrote chose the
+// same number: the per-tenant log had no total order, and two different events
+// that landed on the same (run, step, attempt, sequence) were silently
+// deduplicated into one.
 func (s *Scheduler) append(ctx context.Context, tenantID string, e runstore.Event) error {
-	sequence, err := s.nextSequence(ctx, tenantID)
-	if err != nil {
-		return err
-	}
-	e.Sequence = sequence
 	e.At = s.now().UTC()
 	if err := s.store.Append(ctx, tenantID, e); err != nil {
 		return fmt.Errorf("scheduler: appending %s for %s/%s: %w", e.Type, e.RunID, e.StepID, err)
 	}
 	return nil
-}
-
-// nextSequence is the tenant's next log position. It is read outside any
-// transaction on purpose: the SQLite store serialises on a single connection,
-// and reading through it while holding a transaction would deadlock against
-// itself.
-func (s *Scheduler) nextSequence(ctx context.Context, tenantID string) (uint64, error) {
-	last, err := s.store.LastSequence(ctx, tenantID)
-	if err != nil {
-		return 0, fmt.Errorf("scheduler: reading sequence for %s: %w", tenantID, err)
-	}
-	return last + 1, nil
 }
 
 // executorLeaseScope maps the scope a step declares on the wire to the one the
@@ -917,6 +1001,24 @@ type Unschedulable struct {
 type AwaitingReplay struct {
 	EffectClass string `json:"effect_class"`
 	Reason      string `json:"reason"`
+}
+
+// AttemptLost is the payload of a STEP_ATTEMPT_LOST event: which attempt died
+// and under which fence. The fence is recorded because the question after an
+// incident is "whose report was it that we discarded", and the answer is only
+// in the log if the dead fence is in the log.
+type AttemptLost struct {
+	Attempt uint32 `json:"attempt"`
+	Fence   uint64 `json:"fence"`
+	Reason  string `json:"reason"`
+}
+
+// MarshalAttemptLost encodes the STEP_ATTEMPT_LOST payload.
+func MarshalAttemptLost(a AttemptLost) ([]byte, error) { return marshalPayload(a) }
+
+// UnmarshalAttemptLost decodes the STEP_ATTEMPT_LOST payload.
+func UnmarshalAttemptLost(b []byte) (AttemptLost, error) {
+	return unmarshalPayload[AttemptLost](b, string(StepAttemptLost))
 }
 
 // RunFailure is the payload of a RUN_FAILED event: which steps ran out of

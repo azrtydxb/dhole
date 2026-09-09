@@ -443,12 +443,43 @@ func (h *harness) logs(ctx context.Context, t *testing.T, run, step string) <-ch
 	return subscribe(ctx, t, h.plane, bus.SubjectLogs(run, step), func() *dholev1.LogChunk { return &dholev1.LogChunk{} })
 }
 
+// registrations and heartbeats UNFRAME what the engine published. Asking for
+// the payload here rather than the frame is itself an assertion: an engine
+// that published a bare payload would deliver a frame with no body, and every
+// case below would receive a nil registration or heartbeat.
 func (h *harness) registrations(ctx context.Context, t *testing.T) <-chan *dholev1.EngineRegistration {
-	return subscribe(ctx, t, h.plane, bus.SubjectEngineRegistration(), func() *dholev1.EngineRegistration { return &dholev1.EngineRegistration{} })
+	framed := subscribe(ctx, t, h.plane, bus.SubjectEngineRegistration(),
+		func() *dholev1.EngineMessage { return &dholev1.EngineMessage{} })
+	return unframe(framed, func(m *dholev1.EngineMessage) *dholev1.EngineRegistration {
+		return m.GetRegistration()
+	})
 }
 
 func (h *harness) heartbeats(ctx context.Context, t *testing.T, engineID string) <-chan *dholev1.EngineHeartbeat {
-	return subscribe(ctx, t, h.plane, bus.SubjectEngineHeartbeat(engineID), func() *dholev1.EngineHeartbeat { return &dholev1.EngineHeartbeat{} })
+	framed := subscribe(ctx, t, h.plane, bus.SubjectEngineHeartbeat(engineID),
+		func() *dholev1.EngineMessage { return &dholev1.EngineMessage{} })
+	return unframe(framed, func(m *dholev1.EngineMessage) *dholev1.EngineHeartbeat {
+		return m.GetHeartbeat()
+	})
+}
+
+// unframe takes one arm of the frame's oneof, dropping anything that does not
+// carry it.
+func unframe[T proto.Message](in <-chan *dholev1.EngineMessage, body func(*dholev1.EngineMessage) T) <-chan T {
+	out := make(chan T, 256)
+	go func() {
+		for msg := range in {
+			payload := body(msg)
+			if payload.ProtoReflect() == nil || !payload.ProtoReflect().IsValid() {
+				continue
+			}
+			select {
+			case out <- payload:
+			default:
+			}
+		}
+	}()
+	return out
 }
 
 // subscribe collects messages off an ephemeral subscription into a buffered

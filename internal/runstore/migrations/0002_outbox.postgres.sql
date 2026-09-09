@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS outbox (
     -- caller supplying one.
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     tenant_id  TEXT        NOT NULL,
+    -- The control plane that owes this message; see 0002_outbox.sql. 0015 adds
+    -- it to databases created before it existed.
+    deployment_id TEXT     NOT NULL DEFAULT '',
     subject    TEXT        NOT NULL,
     payload    BYTEA       NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,

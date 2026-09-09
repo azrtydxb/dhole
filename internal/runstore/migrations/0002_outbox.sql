@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS outbox (
     -- counter rather than an extra one.
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id  TEXT NOT NULL,
+    -- The control plane that owes this message. A row is addressed to ONE
+    -- deployment's bus, so the drainer's claim names it: two planes sharing a
+    -- database are not a misconfiguration, and an unscoped claim makes each of
+    -- them publish the other's dispatches to engines that never heard of the
+    -- run. Added to this table's definition rather than by an ALTER because
+    -- SQLite cannot add a column idempotently and every migration here is
+    -- re-applied on every open; 0015 carries the in-place upgrade for
+    -- databases that already exist.
+    deployment_id TEXT NOT NULL DEFAULT '',
     subject    TEXT NOT NULL,
     -- The marshalled protobuf, opaque here. The store never interprets it.
     payload    BLOB NOT NULL,

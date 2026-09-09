@@ -37,7 +37,7 @@ func TestEventAndPublishCommitTogether(t *testing.T) {
 		ctx := context.Background()
 		store := open(t)
 		recorder := &recordingBus{}
-		ob := outbox.New(store, recorder)
+		ob := outbox.New(store, recorder, thisPlane)
 		tenant := uniqueTenant(t)
 
 		sentinel := errors.New("caller aborted the transaction")
@@ -97,7 +97,7 @@ func TestEventAndPublishCommitTogether(t *testing.T) {
 func TestEnqueueRejectsAnUnscopedTenant(t *testing.T) {
 	ctx := context.Background()
 	store := openSQLite(t, t.TempDir())
-	ob := outbox.New(store, &recordingBus{})
+	ob := outbox.New(store, &recordingBus{}, thisPlane)
 
 	err := store.WithTx(ctx, func(tx runstore.Tx) error {
 		return ob.Enqueue(ctx, tx, "", bus.SubjectDispatch("trusted", "caps"), dispatch("run-1", "build", "f"))
@@ -123,7 +123,7 @@ func TestDrainPublishesThenMarksSent(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, sub.Close()) })
 
-		ob := outbox.New(store, b)
+		ob := outbox.New(store, b, thisPlane)
 		tenant := uniqueTenant(t)
 		subject := bus.SubjectDispatch("trusted", "caps")
 		want := dispatch("run-1", "build", "fence-7")
@@ -172,7 +172,7 @@ func TestDrainRetriesAfterBusFailure(t *testing.T) {
 		downBus := connectEmbedded(t, down)
 		require.NoError(t, downBus.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
 
-		ob := outbox.New(store, downBus)
+		ob := outbox.New(store, downBus, thisPlane)
 		tenant := uniqueTenant(t)
 		subject := bus.SubjectDispatch("trusted", "caps")
 		want := dispatch("run-1", "build", "fence-9")
@@ -196,7 +196,7 @@ func TestDrainRetriesAfterBusFailure(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, sub.Close()) })
 
-		retried := outbox.New(store, upBus)
+		retried := outbox.New(store, upBus, thisPlane)
 		drained, err = retried.Drain(ctx)
 		require.NoError(t, err)
 		require.Equal(t, 1, drained, "a row left unsent by a failed publish must still be owed")
@@ -235,7 +235,7 @@ func TestDrainLeavesAFailedPublishOwed(t *testing.T) {
 		subject := bus.SubjectDispatch("trusted", "caps")
 		enqueue := func() {
 			require.NoError(t, store.WithTx(ctx, func(tx runstore.Tx) error {
-				return outbox.New(store, &recordingBus{}).
+				return outbox.New(store, &recordingBus{}, thisPlane).
 					Enqueue(ctx, tx, tenant, subject, dispatch("run-1", "build", "fence-1"))
 			}))
 		}
@@ -243,13 +243,13 @@ func TestDrainLeavesAFailedPublishOwed(t *testing.T) {
 
 		// The bus refuses instantly and the context stays healthy, so nothing
 		// but the implementation's own ordering decides what happens next.
-		down := outbox.New(store, &failingBus{})
+		down := outbox.New(store, &failingBus{}, thisPlane)
 		drained, err := down.Drain(ctx)
 		require.Error(t, err, "a publish the bus refused is not a drain that succeeded")
 		require.Zero(t, drained, "a row is only drained once the bus has accepted it")
 
 		back := &recordingBus{}
-		drained, err = outbox.New(store, back).Drain(ctx)
+		drained, err = outbox.New(store, back, thisPlane).Drain(ctx)
 		require.NoError(t, err)
 		require.Equal(t, 1, drained, "a row whose publish failed must still be owed")
 		require.Equal(t, []string{subject}, back.subjects())
@@ -265,7 +265,7 @@ func TestDrainStopsAtTheFirstFailureAndOwesTheRest(t *testing.T) {
 	flaky := &flakyBus{failAfter: 2}
 
 	require.NoError(t, store.WithTx(ctx, func(tx runstore.Tx) error {
-		ob := outbox.New(store, flaky)
+		ob := outbox.New(store, flaky, thisPlane)
 		tenant := uniqueTenant(t)
 		for i := range 5 {
 			if err := ob.Enqueue(ctx, tx, tenant, bus.SubjectDispatch("trusted", "caps"),
@@ -276,12 +276,12 @@ func TestDrainStopsAtTheFirstFailureAndOwesTheRest(t *testing.T) {
 		return nil
 	}))
 
-	drained, err := outbox.New(store, flaky).Drain(ctx)
+	drained, err := outbox.New(store, flaky, thisPlane).Drain(ctx)
 	require.Error(t, err)
 	require.Equal(t, 2, drained, "the rows the bus accepted are drained")
 
 	back := &recordingBus{}
-	drained, err = outbox.New(store, back).Drain(ctx)
+	drained, err = outbox.New(store, back, thisPlane).Drain(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 3, drained, "the rows the bus refused are still owed, and only those")
 }
@@ -300,7 +300,7 @@ func TestConcurrentDrainersPublishEachRowOnce(t *testing.T) {
 		const rows = 40
 		tenant := uniqueTenant(t)
 		require.NoError(t, writer.WithTx(ctx, func(tx runstore.Tx) error {
-			ob := outbox.New(writer, &recordingBus{})
+			ob := outbox.New(writer, &recordingBus{}, thisPlane)
 			for i := range rows {
 				if err := ob.Enqueue(ctx, tx, tenant,
 					bus.SubjectDispatch("trusted", "caps"),
@@ -326,7 +326,7 @@ func TestConcurrentDrainersPublishEachRowOnce(t *testing.T) {
 		)
 		for range 4 {
 			store := open(t)
-			ob := outbox.New(store, shared)
+			ob := outbox.New(store, shared, thisPlane)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -360,7 +360,7 @@ func TestConcurrentDrainersPublishEachRowOnce(t *testing.T) {
 // down rather than outlive it.
 func TestRunStopsOnContextCancellation(t *testing.T) {
 	store := openSQLite(t, t.TempDir())
-	ob := outbox.New(store, &recordingBus{})
+	ob := outbox.New(store, &recordingBus{}, thisPlane)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -382,7 +382,7 @@ func TestRunDoesNotSpinWhenTheBusIsDown(t *testing.T) {
 	ctx := context.Background()
 	store := openSQLite(t, t.TempDir())
 	failing := &failingBus{}
-	ob := outbox.New(store, failing)
+	ob := outbox.New(store, failing, thisPlane)
 
 	require.NoError(t, store.WithTx(ctx, func(tx runstore.Tx) error {
 		return ob.Enqueue(ctx, tx, uniqueTenant(t), bus.SubjectDispatch("trusted", "caps"),
@@ -454,7 +454,7 @@ func openSQLite(t *testing.T, dir string) runstore.Store {
 // behind is not testing what it claims to.
 func drainAll(ctx context.Context, t *testing.T, store runstore.Store) {
 	t.Helper()
-	ob := outbox.New(store, &recordingBus{})
+	ob := outbox.New(store, &recordingBus{}, thisPlane)
 	for {
 		n, err := ob.Drain(ctx)
 		require.NoError(t, err)
@@ -558,4 +558,78 @@ type failingBus struct {
 func (f *failingBus) Publish(context.Context, string, proto.Message) error {
 	f.calls.Add(1)
 	return errors.New("bus: down")
+}
+
+// thisPlane is the deployment every Outbox in this file belongs to unless a
+// case deliberately makes a second one. It is a named constant rather than a
+// literal at nineteen call sites because the whole point of the scope is that
+// two planes have DIFFERENT ids and every drainer of ONE plane has the same.
+const thisPlane = "plane-under-test"
+
+// TestTwoPlanesSharingAStoreDoNotStealEachOthersMessages is the failure this
+// package shipped with, observed for real: the server's outbox drainer claimed
+// this package's own test fixtures out of a shared database and published them
+// onto its own bus.
+//
+// `SELECT ... WHERE sent_at IS NULL` names nothing. Two control planes against
+// one database are not a misconfiguration — a tenant may well run two, and the
+// concurrent-drainer case above depends on several drainers of ONE plane
+// sharing rows — so the claim cannot be scoped by tenant alone either. It has
+// to name the deployment the row was enqueued by, because that deployment's
+// bus is the only bus the message means anything on.
+//
+// One plane cannot prove this. The assertion is about what the SECOND plane
+// does not see, so both have to exist, each with its own bus, and the row has
+// to be observed arriving on exactly one of them.
+func TestTwoPlanesSharingAStoreDoNotStealEachOthersMessages(t *testing.T) {
+	eachStore(t, func(t *testing.T, open storeOpener) {
+		ctx := context.Background()
+		tenant := uniqueTenant(t)
+
+		// Two planes, one database, one bus each. The stores are separate
+		// handles on the same file or the same Postgres, exactly as two
+		// processes would hold them.
+		alphaStore, betaStore := open(t), open(t)
+		alphaBus, betaBus := &recordingBus{}, &recordingBus{}
+		alpha := outbox.New(alphaStore, alphaBus, "plane-alpha")
+		beta := outbox.New(betaStore, betaBus, "plane-beta")
+
+		require.NoError(t, alphaStore.WithTx(ctx, func(tx runstore.Tx) error {
+			return alpha.Enqueue(ctx, tx, tenant,
+				bus.SubjectDispatch("trusted", "caps"), dispatch("run-alpha", "build", "fence-a"))
+		}))
+
+		// Beta drains first, and must find nothing: the row is not addressed
+		// to its bus, and publishing it there sends work to engines that have
+		// never heard of the run.
+		drained, err := beta.Drain(ctx)
+		require.NoError(t, err)
+		require.Zero(t, drained, "a plane must not claim another plane's owed messages")
+		require.Empty(t, betaBus.subjects(), "another plane's dispatch must never reach this bus")
+
+		// And alpha still owes it: a row a foreign drainer walked past is not
+		// a row that was delivered.
+		drained, err = alpha.Drain(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, drained, "the plane that enqueued the row is the one that publishes it")
+		require.Len(t, alphaBus.subjects(), 1)
+	})
+}
+
+// TestDrainRefusesAnUnnamedDeployment: an empty deployment id is the unscoped
+// claim this file exists to make impossible, so it is refused rather than
+// treated as a wildcard that sweeps every plane's rows.
+func TestDrainRefusesAnUnnamedDeployment(t *testing.T) {
+	ctx := context.Background()
+	store := openSQLite(t, t.TempDir())
+	ob := outbox.New(store, &recordingBus{}, "")
+
+	_, err := ob.Drain(ctx)
+	require.ErrorIs(t, err, outbox.ErrDeploymentRequired)
+
+	err = store.WithTx(ctx, func(tx runstore.Tx) error {
+		return ob.Enqueue(ctx, tx, uniqueTenant(t),
+			bus.SubjectDispatch("trusted", "caps"), dispatch("run-1", "build", "f"))
+	})
+	require.ErrorIs(t, err, outbox.ErrDeploymentRequired)
 }

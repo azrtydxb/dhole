@@ -23,7 +23,7 @@ import (
 // same control plane and puts it in front of somebody else's Postgres, NATS
 // and engines.
 func serveCmd(o *options) *cobra.Command {
-	var mode, storeDSN, busURL, blobRoot string
+	var mode, storeDSN, busURL, blobRoot, deploymentID string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "run the control plane",
@@ -34,6 +34,8 @@ func serveCmd(o *options) *cobra.Command {
 				StoreDSN: storeDSN,
 				BusURL:   busURL,
 				BlobRoot: blobRoot,
+
+				DeploymentID: deploymentID,
 			})
 			if err != nil {
 				return err
@@ -67,6 +69,12 @@ func serveCmd(o *options) *cobra.Command {
 	flags.StringVar(&busURL, "bus-url", "", "NATS server to dial; ignored in embedded mode")
 	flags.StringVar(&blobRoot, "blob-root", defaultStateDir(),
 		"directory the object stores and the embedded bus keep their data under")
+	// Two control planes sharing a database must not share this. It is what
+	// scopes the outbox claim, and an unscoped claim makes each plane publish
+	// the other's dispatches onto its own bus.
+	flags.StringVar(&deploymentID, "deployment-id", os.Getenv("DHOLE_DEPLOYMENT_ID"),
+		"name of this control plane; two planes sharing a database must not share it "+
+			"(derived from --blob-root when unset)")
 	return cmd
 }
 

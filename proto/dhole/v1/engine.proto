@@ -144,6 +144,31 @@ message EngineHeartbeat {
   repeated InFlight in_flight = 2;
 }
 
+// EngineMessage is the frame every engine-to-plane message travels in, and it
+// exists because a bare payload cannot say what it is.
+//
+// An EngineHeartbeat decodes cleanly as an EngineRegistration: both begin with
+// engine_id, and protobuf cannot tell a packed `repeated uint32` from a
+// `repeated message` on the wire, so a decoder guessing by content registers
+// an engine that advertises no platform and no capabilities — which makes
+// every step unschedulable, with nothing in any log saying why. The subject
+// carries the type today, and a subject is a routing decision that can be
+// forwarded, bridged or renamed. This frame puts the type in the BYTES, where
+// it travels with the message whatever carries it.
+//
+// The field numbers start at 100, above every number either payload uses. That
+// is deliberate: a payload sent bare — by an engine written against the
+// earlier framing — parses as an EngineMessage whose body is simply unset,
+// rather than as a framed message with a garbled body. The absence of a body
+// is therefore unambiguous evidence of an older engine, and never a corrupted
+// newer one.
+message EngineMessage {
+  oneof body {
+    EngineRegistration registration = 100;
+    EngineHeartbeat heartbeat = 101;
+  }
+}
+
 // Cancel stops one in-flight job.
 message Cancel {
   string run_id = 1;
