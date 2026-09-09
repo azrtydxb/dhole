@@ -86,6 +86,88 @@ func Contract(t *testing.T, e executor.Executor) {
 		}, 2*time.Second, 20*time.Millisecond, "SIGTERM did not stop the command tree within 2s")
 	})
 
+	t.Run("cancelling a step terminates everything it spawned", func(t *testing.T) {
+		sb := acquire(t, e)
+		// Cancellation is how a job is actually stopped: the control plane
+		// cancels the context the step runs under. Signal is the operator's
+		// door, not the scheduler's, so a backend that terminates a tree on
+		// Signal and leaks it on cancel leaks it in production.
+		ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+		defer cancel()
+
+		// A pooled sandbox may carry an earlier case's heartbeat file, so
+		// what counts is GROWTH from where this case found it, never mere
+		// existence: a stale file would let this pass without the grandchild
+		// ever having run.
+		base := Heartbeat(t, sb)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = sb.Exec(ctx, executor.Cmd{
+				Args:   []string{"sh", "-c", OrphanScript},
+				Stdout: &syncBuffer{},
+			})
+		}()
+
+		// Cancelling a tree that never started proves nothing.
+		require.Eventually(t, func() bool { return Heartbeat(t, sb) > base }, 30*time.Second, 100*time.Millisecond,
+			"the orphaned grandchild never started writing its heartbeat")
+
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Exec did not return within 10s of cancellation")
+		}
+
+		// Returning is not the property. The property is that nothing the
+		// step spawned is still running, and a leaked grandchild goes on
+		// writing its heartbeat.
+		before := Heartbeat(t, sb)
+		time.Sleep(750 * time.Millisecond)
+		require.Equal(t, before, Heartbeat(t, sb),
+			"a grandchild is still running after cancellation: the step's process tree leaked")
+	})
+
+	t.Run("a step killed the way an out-of-memory kill arrives reports 137", func(t *testing.T) {
+		sb := acquire(t, e)
+		// This is how memory exhaustion reaches a step everywhere Dhole runs:
+		// SIGKILL from Linux's OOM killer or macOS's Jetsam, a Windows job
+		// terminating, a container OOMKilled. What must never happen is that
+		// it reads as a success — a step reported exit 0 is a step whose
+		// result may be cached and shipped. docs/wire-contract.md documents
+		// 137 as the one number for all of them.
+		done := make(chan int32, 1)
+		go func() {
+			code, _ := sb.Exec(context.WithoutCancel(t.Context()), executor.Cmd{
+				// Ignores SIGTERM, exactly as an OOM kill ignores politeness.
+				Args:   []string{"sh", "-c", `trap "" TERM; while :; do sleep 0.05; done`},
+				Stdout: &syncBuffer{},
+			})
+			done <- code
+		}()
+
+		var code int32
+		require.Eventually(t, func() bool {
+			if err := sb.Signal(t.Context(), executor.SIGKILL); err != nil {
+				return false
+			}
+			select {
+			case code = <-done:
+				return true
+			default:
+				return false
+			}
+		}, 30*time.Second, 100*time.Millisecond, "SIGKILL did not stop the step")
+
+		require.NotEqual(t, int32(0), code, "a killed step must never be reported as a success")
+		require.Positive(t, code,
+			"a negative exit code sign-extends to ten bytes on the wire and hangs a varint decoder")
+		require.Equal(t, int32(137), code,
+			"a killed step reports 137 on every backend and platform, so one number means one thing")
+	})
+
 	t.Run("put then get round-trips bytes", func(t *testing.T) {
 		sb := acquire(t, e)
 		payload := []byte("dhole\x00binary\nbytes")
@@ -146,4 +228,45 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
+}
+
+// OrphanScript is a step that spawns a grandchild which OUTLIVES its parent,
+// ignores SIGTERM, and proves it is alive by appending to HeartbeatFile every
+// 50ms. Three properties are load-bearing:
+//
+//   - the direct child exits at once, so a backend that terminates only the
+//     process it started terminates something that is already gone;
+//   - the grandchild traps SIGTERM, so a backend that never escalates to an
+//     unignorable kill leaves it running;
+//   - it holds the inherited stdout pipe, so a backend cannot report the step
+//     finished while it is still there.
+//
+// The obvious `sh -c "sleep 30"` tests none of this: a shell given a single
+// command execs into it and leaves no grandchild at all. That version of this
+// test was written once already, and caught nothing.
+const OrphanScript = `(trap "" TERM; while :; do printf . >> ` + HeartbeatFile + `; sleep 0.05; done) & exit 0`
+
+// HeartbeatFile is where OrphanScript's grandchild proves it is still alive.
+// It is a path inside the sandbox, so its growth is readable through Get on
+// any backend rather than off the host the step happens to run on.
+const HeartbeatFile = "heartbeat"
+
+// Heartbeat is how many bytes the grandchild has written so far. A file that
+// is not there yet is zero, not a failure: the step may not have started.
+func Heartbeat(t *testing.T, sb executor.Sandbox) int {
+	t.Helper()
+	r, err := sb.Get(context.WithoutCancel(t.Context()), HeartbeatFile)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = r.Close() }()
+	// A backend that streams the file reports "not there" when the bytes are
+	// read rather than when Get is called, and "not there yet" is a real
+	// answer here: the step may not have written anything so far. It is never
+	// a false pass, because the caller waits for the count to GROW.
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return 0
+	}
+	return len(b)
 }

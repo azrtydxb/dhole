@@ -1,4 +1,4 @@
-//go:build unix && !darwin
+//go:build darwin
 
 package process
 
@@ -13,16 +13,29 @@ import (
 	"github.com/azrtydxb/dhole/internal/executor"
 )
 
-// processTree is the Linux and BSD process tree: one process group, led by the
-// command this sandbox started. Every process the step spawns inherits the
-// group, which is what lets one signal reach the whole tree rather than only
-// the shell at its root.
+// processTree is the macOS process tree: one process group led by the command
+// this sandbox started. Every process the step spawns inherits the group,
+// which is what lets one signal reach the whole tree rather than only the
+// shell at its root.
 //
-// macOS gets its own copy of this in process_darwin.go rather than sharing
-// this file. The system calls are the same; what a step means by "out of
-// memory", and how it is reported, is not (see that file), and a first-class
-// macOS target that silently inherited Linux's answers would be wrong in a way
-// nothing here would show.
+// This is a separate file from process_unix.go rather than a shared `unix`
+// build tag, and the duplication is deliberate. From Task 54 macOS is a
+// supported engine platform, not a unix that happens to compile, and the two
+// places where it differs from Linux are both invisible in the system calls:
+//
+//   - There is no OOM killer. Linux picks a victim and sends SIGKILL when the
+//     cgroup or the machine is out of memory; macOS refuses the allocation and
+//     lets the program fail, and only under real system-wide pressure does
+//     Jetsam kill a process — with SIGKILL, which arrives here as 137, the
+//     same number Linux's OOM killer produces. A memory-exhausted step on
+//     macOS therefore usually reports the program's OWN non-zero status, and
+//     only sometimes 137. docs/wire-contract.md documents both.
+//   - Resource accounting differs: ru_maxrss is bytes here and kilobytes on
+//     Linux (see usage_unix.go).
+//
+// Sharing one file would mean macOS silently inheriting Linux's answers to
+// those questions, with nothing in the tree to notice when one of them stops
+// being true.
 type processTree struct {
 	mu sync.Mutex
 	// pgid is zero until the command has started: there is no group before
