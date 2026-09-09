@@ -42,6 +42,14 @@ decide what may be cached and what may be retried.
   `protoimpl.MessageState`, which contains a `sync.Mutex` via `DoNotCopy`, so
   a value copy trips `go vet`'s copylocks check — which has no inline
   suppression and is part of the gate. Discovered building Task 6.
+- Migration files are numbered ONCE, here, because tasks build in parallel and
+  two branches picking "the next free number" collide at merge. Reserved:
+  0001 init (Task 4), 0002 outbox (11), 0003 blob_refs (17), 0004 identity
+  (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
+  0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15). A task
+  needing a new table takes the next number after 0010 and adds it to this
+  list in the same commit. The runner must tolerate gaps — a branch carries
+  only its own migration until it merges.
 
 ## Task 1: Repository scaffold and quality gate
 
