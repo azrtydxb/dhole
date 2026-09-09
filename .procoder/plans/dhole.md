@@ -767,12 +767,12 @@ Interfaces: produces `llm.Step` implementing the step-type interface; `llm.Confi
 Files: `internal/steps/loop/loop.go`, `internal/steps/agent/agent.go`, `internal/steps/agent/actionspace.go`, `internal/steps/loop/loop_test.go`, `internal/steps/agent/agent_test.go`
 Interfaces: produces `loop.Node{Subgraph *dholev1.Pipeline; MaxIterations int; ExitCondition string}` evaluated by CEL; `agent.Step{GrantedSteps []string; MaxSteps int}` exposing granted steps through `agent.AsTool`.
 
-- [ ] Write `internal/steps/loop/loop_test.go` asserting `TestBoundedLoopCeilingAndActionSpaceRefusal`: a loop whose exit condition never holds stops at `MaxIterations` and records an event whose payload contains "iteration ceiling reached". Run — expect FAIL with "undefined: loop.New".
-- [ ] Add `TestTopLevelGraphRemainsAcyclicWithLoopNode` asserting `dag.Build` succeeds on a pipeline containing a loop node and that the loop's subgraph is validated independently.
-- [ ] Write `internal/steps/agent/agent_test.go` asserting `TestAgentCannotInvokeStepOutsideGrantedSet`: an agent granted only `format` attempting `deploy` is refused with an error naming both.
-- [ ] Add `TestAgentCannotInvokeAtMostOnceStepWithoutApproval` asserting the call is routed through the Task 20 approval gate rather than executing.
-- [ ] Implement `loop.go` unrolling iterations into the run's event log so the run view can expand them, and `agent.go` wrapping `go-ai-sdk`'s `agent` package — `maxSteps` bounding iteration, `AsTool` exposing only granted steps, and its tool-call approval hook delegating to the approval step.
-- [ ] Run `go test ./internal/steps/...` — expect PASS. Commit.
+- [x] Write `internal/steps/loop/loop_test.go` asserting `TestBoundedLoopCeilingAndActionSpaceRefusal`: a loop whose exit condition never holds stops at `MaxIterations` and records an event whose payload contains "iteration ceiling reached". Run — expect FAIL with "undefined: loop.New".
+- [x] Add `TestTopLevelGraphRemainsAcyclicWithLoopNode` asserting `dag.Build` succeeds on a pipeline containing a loop node and that the loop's subgraph is validated independently.
+- [x] Write `internal/steps/agent/agent_test.go` asserting `TestAgentCannotInvokeStepOutsideGrantedSet`: an agent granted only `format` attempting `deploy` is refused with an error naming both.
+- [x] Add `TestAgentCannotInvokeAtMostOnceStepWithoutApproval` asserting the call is routed through the Task 20 approval gate rather than executing.
+- [x] Implement `loop.go` unrolling iterations into the run's event log so the run view can expand them, and `agent.go` wrapping `go-ai-sdk`'s `agent` package — `maxSteps` bounding iteration, `AsTool` exposing only granted steps, and its tool-call approval hook delegating to the approval step.
+- [x] Run `go test ./internal/steps/...` — expect PASS. Commit.
 
 ## Task 51: Taint tracking
 
