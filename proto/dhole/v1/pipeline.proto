@@ -50,6 +50,10 @@ message Step {
   repeated Port inputs = 5;
   repeated Port outputs = 6;
   repeated Capability capabilities = 7;
+  // How long the sandbox this step runs in lives. Unspecified means
+  // LEASE_SCOPE_STEP: a fresh sandbox, which is the only safe default because
+  // every other scope carries state a cache key cannot see.
+  LeaseScope lease_scope = 8;
 }
 
 // Edge connects one step's output port to another step's input port. The DAG

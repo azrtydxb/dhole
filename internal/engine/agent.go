@@ -303,11 +303,9 @@ func (a *Agent) checkSecrets(d *dholev1.JobDispatch) error {
 func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobStatus {
 	tenantID := d.GetTenant().GetId()
 
-	// The wire carries no lease scope, so the only honest choice is the one
-	// with no unhashable carried state: the sandbox dies with the step.
 	sandbox, err := a.cfg.Executor.Acquire(ctx, executor.Spec{
 		Env:   d.GetEnv(),
-		Lease: executor.LeaseStep,
+		Lease: leaseScopeFrom(d.GetStep().GetLeaseScope()),
 		Requirements: executor.Requirements{
 			Capabilities: d.GetStep().GetCapabilities(),
 		},

@@ -270,11 +270,15 @@ type Step struct {
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name  string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Scheme-addressed reference to the plugin that implements this step.
-	PluginRef     string       `protobuf:"bytes,3,opt,name=plugin_ref,json=pluginRef,proto3" json:"plugin_ref,omitempty"`
-	EffectClass   EffectClass  `protobuf:"varint,4,opt,name=effect_class,json=effectClass,proto3,enum=dhole.v1.EffectClass" json:"effect_class,omitempty"`
-	Inputs        []*Port      `protobuf:"bytes,5,rep,name=inputs,proto3" json:"inputs,omitempty"`
-	Outputs       []*Port      `protobuf:"bytes,6,rep,name=outputs,proto3" json:"outputs,omitempty"`
-	Capabilities  []Capability `protobuf:"varint,7,rep,packed,name=capabilities,proto3,enum=dhole.v1.Capability" json:"capabilities,omitempty"`
+	PluginRef    string       `protobuf:"bytes,3,opt,name=plugin_ref,json=pluginRef,proto3" json:"plugin_ref,omitempty"`
+	EffectClass  EffectClass  `protobuf:"varint,4,opt,name=effect_class,json=effectClass,proto3,enum=dhole.v1.EffectClass" json:"effect_class,omitempty"`
+	Inputs       []*Port      `protobuf:"bytes,5,rep,name=inputs,proto3" json:"inputs,omitempty"`
+	Outputs      []*Port      `protobuf:"bytes,6,rep,name=outputs,proto3" json:"outputs,omitempty"`
+	Capabilities []Capability `protobuf:"varint,7,rep,packed,name=capabilities,proto3,enum=dhole.v1.Capability" json:"capabilities,omitempty"`
+	// How long the sandbox this step runs in lives. Unspecified means
+	// LEASE_SCOPE_STEP: a fresh sandbox, which is the only safe default because
+	// every other scope carries state a cache key cannot see.
+	LeaseScope    LeaseScope `protobuf:"varint,8,opt,name=lease_scope,json=leaseScope,proto3,enum=dhole.v1.LeaseScope" json:"lease_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -356,6 +360,13 @@ func (x *Step) GetCapabilities() []Capability {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *Step) GetLeaseScope() LeaseScope {
+	if x != nil {
+		return x.LeaseScope
+	}
+	return LeaseScope_LEASE_SCOPE_UNSPECIFIED
 }
 
 // Edge connects one step's output port to another step's input port. The DAG
@@ -518,7 +529,7 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\x04kind\"B\n" +
 	"\x04Port\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
-	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\x8f\x02\n" +
+	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\xc6\x02\n" +
 	"\x04Step\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -527,7 +538,9 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\feffect_class\x18\x04 \x01(\x0e2\x15.dhole.v1.EffectClassR\veffectClass\x12&\n" +
 	"\x06inputs\x18\x05 \x03(\v2\x0e.dhole.v1.PortR\x06inputs\x12(\n" +
 	"\aoutputs\x18\x06 \x03(\v2\x0e.dhole.v1.PortR\aoutputs\x128\n" +
-	"\fcapabilities\x18\a \x03(\x0e2\x14.dhole.v1.CapabilityR\fcapabilities\"r\n" +
+	"\fcapabilities\x18\a \x03(\x0e2\x14.dhole.v1.CapabilityR\fcapabilities\x125\n" +
+	"\vlease_scope\x18\b \x01(\x0e2\x14.dhole.v1.LeaseScopeR\n" +
+	"leaseScope\"r\n" +
 	"\x04Edge\x12\x1b\n" +
 	"\tfrom_step\x18\x01 \x01(\tR\bfromStep\x12\x1b\n" +
 	"\tfrom_port\x18\x02 \x01(\tR\bfromPort\x12\x17\n" +
@@ -563,7 +576,8 @@ var file_dhole_v1_pipeline_proto_goTypes = []any{
 	(*Pipeline)(nil),   // 6: dhole.v1.Pipeline
 	(EffectClass)(0),   // 7: dhole.v1.EffectClass
 	(Capability)(0),    // 8: dhole.v1.Capability
-	(*Tenant)(nil),     // 9: dhole.v1.Tenant
+	(LeaseScope)(0),    // 9: dhole.v1.LeaseScope
+	(*Tenant)(nil),     // 10: dhole.v1.Tenant
 }
 var file_dhole_v1_pipeline_proto_depIdxs = []int32{
 	0,  // 0: dhole.v1.PortType.blob:type_name -> dhole.v1.BlobType
@@ -573,14 +587,15 @@ var file_dhole_v1_pipeline_proto_depIdxs = []int32{
 	3,  // 4: dhole.v1.Step.inputs:type_name -> dhole.v1.Port
 	3,  // 5: dhole.v1.Step.outputs:type_name -> dhole.v1.Port
 	8,  // 6: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
-	9,  // 7: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
-	4,  // 8: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
-	5,  // 9: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	9,  // 7: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
+	10, // 8: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
+	4,  // 9: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
+	5,  // 10: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_pipeline_proto_init() }

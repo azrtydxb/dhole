@@ -143,6 +143,77 @@ func (Capability) EnumDescriptor() ([]byte, []int) {
 	return file_dhole_v1_common_proto_rawDescGZIP(), []int{1}
 }
 
+// LeaseScope is how long the sandbox a step runs in lives, and it is declared
+// rather than inferred because the alternative is guessing. A step-scoped
+// sandbox is created and destroyed for one step and carries no state anything
+// else could observe; a pooled or service-scoped one deliberately outlives the
+// step, which is exactly why a step running in one cannot be cached — the
+// reused state is not part of any hash (see internal/cache eligibility).
+type LeaseScope int32
+
+const (
+	LeaseScope_LEASE_SCOPE_UNSPECIFIED LeaseScope = 0
+	// A fresh sandbox per step, destroyed when it ends. The default, and the
+	// only scope with no carried state.
+	LeaseScope_LEASE_SCOPE_STEP LeaseScope = 1
+	// Shared by the steps of one job.
+	LeaseScope_LEASE_SCOPE_JOB LeaseScope = 2
+	// Shared across a whole pipeline run.
+	LeaseScope_LEASE_SCOPE_PIPELINE LeaseScope = 3
+	// Drawn from a warm pool and returned to it, reusing whatever the previous
+	// occupant left behind.
+	LeaseScope_LEASE_SCOPE_POOL LeaseScope = 4
+	// A long-lived sandbox serving many runs, torn down on operator action.
+	LeaseScope_LEASE_SCOPE_SERVICE LeaseScope = 5
+)
+
+// Enum value maps for LeaseScope.
+var (
+	LeaseScope_name = map[int32]string{
+		0: "LEASE_SCOPE_UNSPECIFIED",
+		1: "LEASE_SCOPE_STEP",
+		2: "LEASE_SCOPE_JOB",
+		3: "LEASE_SCOPE_PIPELINE",
+		4: "LEASE_SCOPE_POOL",
+		5: "LEASE_SCOPE_SERVICE",
+	}
+	LeaseScope_value = map[string]int32{
+		"LEASE_SCOPE_UNSPECIFIED": 0,
+		"LEASE_SCOPE_STEP":        1,
+		"LEASE_SCOPE_JOB":         2,
+		"LEASE_SCOPE_PIPELINE":    3,
+		"LEASE_SCOPE_POOL":        4,
+		"LEASE_SCOPE_SERVICE":     5,
+	}
+)
+
+func (x LeaseScope) Enum() *LeaseScope {
+	p := new(LeaseScope)
+	*p = x
+	return p
+}
+
+func (x LeaseScope) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LeaseScope) Descriptor() protoreflect.EnumDescriptor {
+	return file_dhole_v1_common_proto_enumTypes[2].Descriptor()
+}
+
+func (LeaseScope) Type() protoreflect.EnumType {
+	return &file_dhole_v1_common_proto_enumTypes[2]
+}
+
+func (x LeaseScope) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LeaseScope.Descriptor instead.
+func (LeaseScope) EnumDescriptor() ([]byte, []int) {
+	return file_dhole_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
 // Tenant scopes every stored record and every bus subject. There is no
 // unscoped query and no unscoped subject, even while only one tenant exists.
 type Tenant struct {
@@ -266,7 +337,15 @@ const file_dhole_v1_common_proto_rawDesc = "" +
 	"\x12CAPABILITY_NETWORK\x10\x01\x12\x16\n" +
 	"\x12CAPABILITY_SECRETS\x10\x02\x12\x19\n" +
 	"\x15CAPABILITY_PRIVILEGED\x10\x03\x12\x19\n" +
-	"\x15CAPABILITY_HOST_MOUNT\x10\x04B\x8c\x01\n" +
+	"\x15CAPABILITY_HOST_MOUNT\x10\x04*\x9d\x01\n" +
+	"\n" +
+	"LeaseScope\x12\x1b\n" +
+	"\x17LEASE_SCOPE_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10LEASE_SCOPE_STEP\x10\x01\x12\x13\n" +
+	"\x0fLEASE_SCOPE_JOB\x10\x02\x12\x18\n" +
+	"\x14LEASE_SCOPE_PIPELINE\x10\x03\x12\x14\n" +
+	"\x10LEASE_SCOPE_POOL\x10\x04\x12\x17\n" +
+	"\x13LEASE_SCOPE_SERVICE\x10\x05B\x8c\x01\n" +
 	"\fcom.dhole.v1B\vCommonProtoP\x01Z.github.com/azrtydxb/dhole/gen/dhole/v1;dholev1\xa2\x02\x03DXX\xaa\x02\bDhole.V1\xca\x02\bDhole\\V1\xe2\x02\x14Dhole\\V1\\GPBMetadata\xea\x02\tDhole::V1b\x06proto3"
 
 var (
@@ -281,13 +360,14 @@ func file_dhole_v1_common_proto_rawDescGZIP() []byte {
 	return file_dhole_v1_common_proto_rawDescData
 }
 
-var file_dhole_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_dhole_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_dhole_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_dhole_v1_common_proto_goTypes = []any{
 	(EffectClass)(0), // 0: dhole.v1.EffectClass
 	(Capability)(0),  // 1: dhole.v1.Capability
-	(*Tenant)(nil),   // 2: dhole.v1.Tenant
-	(*Digest)(nil),   // 3: dhole.v1.Digest
+	(LeaseScope)(0),  // 2: dhole.v1.LeaseScope
+	(*Tenant)(nil),   // 3: dhole.v1.Tenant
+	(*Digest)(nil),   // 4: dhole.v1.Digest
 }
 var file_dhole_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -307,7 +387,7 @@ func file_dhole_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_common_proto_rawDesc), len(file_dhole_v1_common_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,

@@ -82,6 +82,7 @@ Interfaces: produces messages `Pipeline`, `Step`, `Port`, `PortType`, `Edge`, `T
 
 - [x] Write `internal/schema/schema_test.go` asserting `TestEffectClassEnumValues`: `require.Equal(t, 1, int(dholev1.EffectClass_EFFECT_CLASS_PURE))` and that `EffectClass_name` has exactly four entries including the zero `EFFECT_CLASS_UNSPECIFIED`. Run `go test ./internal/schema` — expect FAIL with "no required module provides package .../gen/dhole/v1".
 - [x] Write `proto/dhole/v1/common.proto` defining `Tenant{string id}`, `Digest{string algo; string hex}`, `EffectClass`, `Capability` (`NETWORK`, `SECRETS`, `PRIVILEGED`, `HOST_MOUNT`).
+- [x] Add `LeaseScope` to `common.proto` and a `lease_scope` field to `Step`. The plan told Task 12 to "acquire a sandbox per the step's lease scope", but no message carried one and no later task added it, so the engine could only hardcode `LeaseStep` — a step asking for a pooled sandbox silently got a fresh one. Additive, so `buf breaking` stays clean.
 - [x] Write `proto/dhole/v1/pipeline.proto` defining `Pipeline{string id; Tenant tenant; repeated Step steps; repeated Edge edges}`, `Step{string id; string name; string plugin_ref; EffectClass effect_class; repeated Port inputs; repeated Port outputs; repeated Capability capabilities}`, `Port{string name; PortType type}`, `PortType{oneof{BlobType blob; StructType structured}}`, `Edge{string from_step; string from_port; string to_step; string to_port}`.
 - [x] Write `buf.yaml` (lint `DEFAULT`, breaking `WIRE_JSON`) and `buf.gen.yaml` emitting `protocolbuffers/go` and `connectrpc/go` into `gen/`. Run `buf generate`.
 - [x] Run `go test ./internal/schema` — expect PASS. Add `buf lint` and `buf breaking --against '.git#branch=main'` to `make check`. Commit.
@@ -196,13 +197,13 @@ Interfaces: produces `outbox.Outbox` with `Enqueue(ctx, tx runstore.Tx, tenantID
 Files: `internal/engine/agent.go`, `internal/engine/registry_client.go`, `internal/engine/agent_test.go`, `cmd/dhole-engine/main.go`
 Interfaces: produces `engine.Agent` with `Run(ctx) error`, `engine.Config{EngineID, Tier string; Bus bus.Bus; Executor executor.Executor; Blobs blobstore.Store; CAS cas.Store; Slots int}`; publishes `EngineRegistration` on start and `EngineHeartbeat` every 5s.
 
-- [ ] Write `internal/engine/agent_test.go` asserting `TestOutboundOnlyEngineRegistersAndExecutes`: start an embedded bus, run an agent with the process executor, publish a `JobDispatch` running `echo hi`, and require a `JobStatus` with `Phase_SUCCEEDED` and exit 0 arrives on `job.status.<run>.<step>`. Run — expect FAIL with "undefined: engine.Agent".
-- [ ] Add `TestAgentStreamsLogsToEphemeralSubjectAndWritesAuthoritativeCopy`: run `printf 'a\nb\n'`, require two `LogChunk` messages on `job.logs.<run>.<step>` and that the blobstore holds the full output at the key named in `JobStatus`.
-- [ ] Add `TestAgentHeartbeatsListInFlightSteps` asserting a heartbeat during a `sleep 5` step includes that step in `in_flight`.
-- [ ] Add `TestAgentRefusesDispatchWithUnsupportedProtocolVersion` asserting a `JobDispatch` with `protocol_version: 99` yields a `JobStatus` with `Phase_FAILED` and error containing "unsupported protocol".
-- [ ] Implement `internal/engine/agent.go`: pull consumer on the dispatch subject filtered by capability hash, acquire a sandbox per the step's lease scope, stream stdout/stderr to both the ephemeral log subject and the blobstore, publish `JobStatus`, ack only after status is published.
-- [ ] Implement `cmd/dhole-engine/main.go` reading `DHOLE_BUS_URL`, `DHOLE_ENGINE_ID`, `DHOLE_TIER` and starting the agent.
-- [ ] Run `go test ./internal/engine` — expect PASS. Commit.
+- [x] Write `internal/engine/agent_test.go` asserting `TestOutboundOnlyEngineRegistersAndExecutes`: start an embedded bus, run an agent with the process executor, publish a `JobDispatch` running `echo hi`, and require a `JobStatus` with `Phase_SUCCEEDED` and exit 0 arrives on `job.status.<run>.<step>`. Run — expect FAIL with "undefined: engine.Agent".
+- [x] Add `TestAgentStreamsLogsToEphemeralSubjectAndWritesAuthoritativeCopy`: run `printf 'a\nb\n'`, require two `LogChunk` messages on `job.logs.<run>.<step>` and that the blobstore holds the full output at the key named in `JobStatus`.
+- [x] Add `TestAgentHeartbeatsListInFlightSteps` asserting a heartbeat during a `sleep 5` step includes that step in `in_flight`.
+- [x] Add `TestAgentRefusesDispatchWithUnsupportedProtocolVersion` asserting a `JobDispatch` with `protocol_version: 99` yields a `JobStatus` with `Phase_FAILED` and error containing "unsupported protocol".
+- [x] Implement `internal/engine/agent.go`: pull consumer on the dispatch subject filtered by capability hash, acquire a sandbox per the step's lease scope, stream stdout/stderr to both the ephemeral log subject and the blobstore, publish `JobStatus`, ack only after status is published.
+- [x] Implement `cmd/dhole-engine/main.go` reading `DHOLE_BUS_URL`, `DHOLE_ENGINE_ID`, `DHOLE_TIER` and starting the agent.
+- [x] Run `go test ./internal/engine` — expect PASS. Commit.
 
 ## Task 13: Leases, fencing tokens and orphan detection
 
@@ -337,11 +338,11 @@ Interfaces: produces `identity.Provider` with `Authenticate(ctx, credential stri
 Files: `internal/identity/oidc.go`, `internal/identity/oidc_test.go`, `internal/identity/chain.go`
 Interfaces: produces `identity.NewOIDC(cfg OIDCConfig) (identity.Provider, error)`, `identity.Chain(providers ...identity.Provider) identity.Provider`.
 
-- [ ] Write `internal/identity/oidc_test.go` asserting `TestOIDCAndServiceTokenWithIdPDown`: a chain of OIDC and local providers authenticates an OIDC id token while the mock IdP is up, and still authenticates a local service token after the IdP is stopped. Run — expect FAIL with "undefined: identity.NewOIDC".
-- [ ] Add `TestOIDCTokenWithWrongAudienceIsRejected` asserting an id token whose `aud` does not match configuration returns an error containing "audience".
-- [ ] Add `TestOIDCFailureDoesNotFallBackToWeakerAuth` asserting that when the IdP is unreachable, an OIDC credential returns an error rather than being accepted by the local provider.
-- [ ] Implement `internal/identity/oidc.go` with `github.com/coreos/go-oidc/v3` verifying issuer, audience, expiry and signature against cached JWKS, and `internal/identity/chain.go` selecting a provider by credential shape.
-- [ ] Run `go test ./internal/identity` — expect PASS. Commit.
+- [x] Write `internal/identity/oidc_test.go` asserting `TestOIDCAndServiceTokenWithIdPDown`: a chain of OIDC and local providers authenticates an OIDC id token while the mock IdP is up, and still authenticates a local service token after the IdP is stopped. Run — expect FAIL with "undefined: identity.NewOIDC".
+- [x] Add `TestOIDCTokenWithWrongAudienceIsRejected` asserting an id token whose `aud` does not match configuration returns an error containing "audience".
+- [x] Add `TestOIDCFailureDoesNotFallBackToWeakerAuth` asserting that when the IdP is unreachable, an OIDC credential returns an error rather than being accepted by the local provider.
+- [x] Implement `internal/identity/oidc.go` with `github.com/coreos/go-oidc/v3` verifying issuer, audience, expiry and signature against cached JWKS, and `internal/identity/chain.go` selecting a provider by credential shape.
+- [x] Run `go test ./internal/identity` — expect PASS. Commit.
 
 ## Task 25: Definition store, revisions and approval state
 
@@ -408,13 +409,13 @@ Interfaces: produces commands `dhole pipeline get|apply|validate|plan|revisions|
 Files: `internal/catalog/catalog.go`, `internal/catalog/manifest.go`, `internal/catalog/catalog_test.go`, `internal/runstore/migrations/0006_catalog.sql`
 Interfaces: produces `catalog.Store` with `Publish(ctx, tenantID string, m catalog.Manifest) error`, `Resolve(ctx, tenantID, ref string) (catalog.Entry, error)`, `List(ctx, tenantID string) ([]catalog.Entry, error)`; `Manifest{Namespace, Name, Version string; Digest *dholev1.Digest; Kind step|trigger|engine; EffectClass dholev1.EffectClass; Capabilities []dholev1.Capability; InputSchema, OutputSchema []byte; EngineTypes []string}`.
 
-- [ ] Write `internal/catalog/catalog_test.go` asserting `TestManifestDeclaresEffectClassAndCapabilities`: publishing a manifest and resolving it returns the declared effect class and capability set unchanged. Run — expect FAIL with "undefined: catalog.New".
-- [ ] Add `TestStepInheritsEffectClassFromManifest` asserting a step with no explicit effect class resolves to its plugin's, and that an explicit widening override is flagged in the returned `Entry.OverrideWarnings`.
-- [ ] Add `TestCatalogSurvivesControlPlaneRestart` asserting entries persist across a store reopen, unlike the runtime registry.
-- [ ] Add `TestManifestWithInvalidJSONSchemaIsRejected` asserting `Publish` returns an error naming the offending schema.
-- [ ] Write `0006_catalog.sql` creating `catalog_entries(tenant_id, namespace, name, version, digest, kind, effect_class, capabilities, input_schema, output_schema, engine_types)`.
-- [ ] Implement `internal/catalog/manifest.go` validating schemas with `santhosh-tekuri/jsonschema/v6` and `catalog.go`.
-- [ ] Run `go test ./internal/catalog` — expect PASS. Commit.
+- [x] Write `internal/catalog/catalog_test.go` asserting `TestManifestDeclaresEffectClassAndCapabilities`: publishing a manifest and resolving it returns the declared effect class and capability set unchanged. Run — expect FAIL with "undefined: catalog.New".
+- [x] Add `TestStepInheritsEffectClassFromManifest` asserting a step with no explicit effect class resolves to its plugin's, and that an explicit widening override is flagged in the returned `Entry.OverrideWarnings`.
+- [x] Add `TestCatalogSurvivesControlPlaneRestart` asserting entries persist across a store reopen, unlike the runtime registry.
+- [x] Add `TestManifestWithInvalidJSONSchemaIsRejected` asserting `Publish` returns an error naming the offending schema.
+- [x] Write `0006_catalog.sql` creating `catalog_entries(tenant_id, namespace, name, version, digest, kind, effect_class, capabilities, input_schema, output_schema, engine_types)`.
+- [x] Implement `internal/catalog/manifest.go` validating schemas with `santhosh-tekuri/jsonschema/v6` and `catalog.go`.
+- [x] Run `go test ./internal/catalog` — expect PASS. Commit.
 
 ## Task 31: Runtime engine registry and lifecycle
 
