@@ -713,11 +713,11 @@ Interfaces: produces `scheduler.Queue` with `Enqueue(ctx, item QueueItem) error`
 Files: `internal/server/partition.go`, `internal/server/partition_test.go`, `internal/bus/backpressure.go`
 Interfaces: produces `server.PartitionFor(runID string, n int) int`, `server.ClaimPartitions(ctx, instanceID string) ([]int, error)`; `bus.WithMaxAckPending(n int) bus.SubOption`.
 
-- [ ] Write `internal/server/partition_test.go` asserting `TestSingleWriterPerRun`: two control-plane instances consuming the same stream never both advance the same run, verified by asserting no duplicate sequence is written for 1000 concurrent runs. Run — expect FAIL with "undefined: server.ClaimPartitions".
-- [ ] Add `TestPartitionRebalanceOnInstanceLoss` asserting that killing one of three instances results in its partitions being claimed by the survivors within 5s.
-- [ ] Add `TestBackpressureStopsPullingWhenAckPendingReached` asserting the consumer stops fetching once `MaxAckPending` is outstanding and resumes after acks.
-- [ ] Implement `internal/server/partition.go` hashing run ids into partitions claimed via NATS KV leases, and `internal/bus/backpressure.go`.
-- [ ] Run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/server/partition_test.go` asserting `TestSingleWriterPerRun`: two control-plane instances consuming the same stream never both advance the same run, verified by asserting no duplicate sequence is written for 1000 concurrent runs. Run — expect FAIL with "undefined: server.ClaimPartitions".
+- [x] Add `TestPartitionRebalanceOnInstanceLoss` asserting that killing one of three instances results in its partitions being claimed by the survivors within 5s.
+- [x] Add `TestBackpressureStopsPullingWhenAckPendingReached` asserting the consumer stops fetching once `MaxAckPending` is outstanding and resumes after acks.
+- [x] Implement `internal/server/partition.go` hashing run ids into partitions claimed via NATS KV leases, and `internal/bus/backpressure.go`.
+- [x] Run `make test-integration` — expect PASS. Commit.
 
 ## Task 44: Observability
 
