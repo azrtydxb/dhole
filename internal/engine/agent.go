@@ -39,6 +39,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/obs"
+	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
 
@@ -72,6 +73,24 @@ const bindTimeout = 60 * time.Second
 // complainEvery is how often an engine repeats that it still cannot bind.
 const complainEvery = 30 * time.Second
 
+// slotYield bounds how long one dispatch consumer may hold a slot while it is
+// only WAITING for work.
+//
+// An engine binds one consumer per capability subset it can serve, and each
+// takes a slot before fetching so it never holds an unacknowledged message it
+// has no room to run. Held for the whole wait, that starves every consumer
+// beyond the slot count permanently: an engine with one slot and two
+// capability sets fetched from the first set forever and never once looked at
+// the second, so steps on that subject sat in the work queue with a warm idle
+// engine subscribed to them and nothing anywhere reporting a fault. It became
+// reachable the moment an engine advertised a capability at all — before that
+// there was one subset, one consumer, and nothing to starve.
+//
+// Yielding turns starvation into a turn each. The cost is latency when slots
+// are scarce, and only then: a consumer that holds a slot and gets a message
+// keeps it for the job.
+const slotYield = 3 * time.Second
+
 // releaseTimeout bounds sandbox teardown. It runs on a context detached from
 // the job's, because a cancelled job still has to leave nothing behind.
 const releaseTimeout = 30 * time.Second
@@ -96,6 +115,18 @@ type Config struct {
 	CAS cas.Store
 	// Slots is how many jobs this engine runs at once.
 	Slots int
+	// Secrets redeems the SecretRefs a dispatch carries. Nil means this engine
+	// has no way to redeem: it then does not advertise CAPABILITY_SECRETS, and
+	// it refuses a dispatch that carries a secret anyway.
+	//
+	// It is here rather than on the Executor because redeeming a short-lived
+	// reference is something the AGENT does, over the bus it already dialled,
+	// before any sandbox exists. NETWORK, PRIVILEGED and HOST_MOUNT are
+	// isolation guarantees a sandbox backend either can or cannot make, and
+	// sourcing SECRETS from the same place meant no shipped backend advertised
+	// it — so every dispatch carrying a secret was refused by every engine,
+	// always, and nothing in the product could redeem anything.
+	Secrets secrets.Redeemer
 
 	// SubscribeBackoff is how long to wait between attempts to bind a dispatch
 	// consumer. Zero means subscribeRetry; a test sets it small so it can
@@ -154,7 +185,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 
-	hashes, err := satisfiableCapsHashes(a.cfg.Executor.Capabilities())
+	hashes, err := satisfiableCapsHashes(advertisedCapabilities(a.cfg))
 	if err != nil {
 		return err
 	}
@@ -260,11 +291,19 @@ func (a *Agent) pump(ctx context.Context, sub bus.Subscription) error {
 		case a.slots <- struct{}{}:
 		}
 
-		msg, err := sub.Next(ctx)
+		// Bounded, so the slot is given back to the other consumers if
+		// nothing arrives. A fetch that times out has taken no message off the
+		// stream, so there is nothing to lose by abandoning it.
+		waitCtx, waited := context.WithTimeout(ctx, slotYield)
+		msg, err := sub.Next(waitCtx)
+		waited()
 		if err != nil {
 			<-a.slots
 			if ctx.Err() != nil || errors.Is(err, bus.ErrSubscriptionClosed) {
 				return nil
+			}
+			if waitCtx.Err() != nil {
+				continue
 			}
 			return fmt.Errorf("engine: next dispatch: %w", err)
 		}
@@ -403,20 +442,54 @@ func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobSta
 // checkSecrets refuses a secret this engine could not redeem. The refusal names
 // the binding, never the handle: a status is durable and archived, and a handle
 // in one is a credential at rest in the run history.
+//
+// It asks the same thing the registration advertises — whether this agent holds
+// a redeemer — rather than asking the executor. Asking the executor was the
+// original bug in both directions at once: no backend advertised the
+// capability, so this refused every dispatch carrying a secret; and the fix
+// that suggests itself, teaching the process backend to advertise it, would
+// have put an agent property back in the sandbox component with the answer
+// merely inverted.
 func (a *Agent) checkSecrets(d *dholev1.JobDispatch) error {
 	if len(d.GetSecrets()) == 0 {
 		return nil
 	}
-	for _, c := range a.cfg.Executor.Capabilities() {
-		if c == dholev1.Capability_CAPABILITY_SECRETS {
-			return nil
-		}
+	if a.cfg.Secrets != nil {
+		return nil
 	}
 	names := make([]string, 0, len(d.GetSecrets()))
 	for _, s := range d.GetSecrets() {
 		names = append(names, s.GetName())
 	}
-	return fmt.Errorf("dispatch carries secrets %v but this engine does not advertise CAPABILITY_SECRETS", names)
+	return fmt.Errorf("dispatch carries secrets %v but this engine has no redemption endpoint "+
+		"and does not advertise CAPABILITY_SECRETS", names)
+}
+
+// redeem exchanges every SecretRef the dispatch carries for its value and
+// returns the environment the step runs with: the dispatch's own env plus one
+// binding per secret.
+//
+// The result goes to Exec and to nothing else. In particular it does not go
+// into the executor.Spec handed to Acquire: the Kubernetes backend turns that
+// into a pod template the API server keeps, which would be the exact
+// secret-at-rest this whole design exists to avoid — in a store nothing in this
+// repository controls.
+func (a *Agent) redeem(ctx context.Context, d *dholev1.JobDispatch) (map[string]string, error) {
+	env := make(map[string]string, len(d.GetEnv())+len(d.GetSecrets()))
+	for k, v := range d.GetEnv() {
+		env[k] = v
+	}
+	for _, ref := range d.GetSecrets() {
+		value, err := a.cfg.Secrets.Redeem(ctx, ref)
+		if err != nil {
+			// Wrapped, not re-worded. The redeemer's error already names the
+			// binding and nothing else, and this string is about to be
+			// published in a JobStatus and written into the run's event log.
+			return nil, fmt.Errorf("redeeming a secret reference: %w", err)
+		}
+		env[ref.GetName()] = value
+	}
+	return env, nil
 }
 
 // execute acquires a sandbox, materialises the declared inputs, runs the
@@ -424,6 +497,11 @@ func (a *Agent) checkSecrets(d *dholev1.JobDispatch) error {
 func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobStatus {
 	tenantID := d.GetTenant().GetId()
 
+	// The dispatch's OWN env, with no redeemed value in it. A backend is free
+	// to persist a Spec — Kubernetes writes one into a pod template the API
+	// server keeps — so a secret placed here would outlive the step in a store
+	// this repository does not control. Secrets reach the process through
+	// Cmd.Env below and nowhere else.
 	sandbox, err := a.cfg.Executor.Acquire(ctx, executor.Spec{
 		Env:   d.GetEnv(),
 		Lease: leaseScopeFrom(d.GetStep().GetLeaseScope()),
@@ -446,6 +524,17 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 		return a.failure(d, err.Error())
 	}
 
+	// Redeemed at the moment they are needed, and after the sandbox exists so
+	// a value is never held across an acquisition that might block. Before the
+	// log sink, so a refusal produces no half-written authoritative log.
+	stepEnv := d.GetEnv()
+	if len(d.GetSecrets()) > 0 {
+		var err error
+		if stepEnv, err = a.redeem(ctx, d); err != nil {
+			return a.failure(d, err.Error())
+		}
+	}
+
 	sink, err := newLogSink(ctx, a.cfg.Bus, d)
 	if err != nil {
 		return a.failure(d, "opening the log: "+err.Error())
@@ -454,7 +543,7 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 
 	exitCode, execErr := sandbox.Exec(ctx, executor.Cmd{
 		Args:   d.GetCommand(),
-		Env:    d.GetEnv(),
+		Env:    stepEnv,
 		Stdout: sink.writer(dholev1.Stream_STREAM_STDOUT),
 		Stderr: sink.writer(dholev1.Stream_STREAM_STDERR),
 	})

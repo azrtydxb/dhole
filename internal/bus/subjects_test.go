@@ -28,3 +28,9 @@ func TestTierWildcardsScopeToOneTier(t *testing.T) {
 	require.Equal(t, "job.dispatch.untrusted.*", bus.SubjectDispatchWildcard("untrusted"))
 	require.Equal(t, "job.dispatch.trusted.*", bus.SubjectDispatchWildcard("trusted"))
 }
+
+// TestSecretRedemptionSubjectIsPinned holds the one subject an engine in
+// another language has to spell exactly right to redeem anything.
+func TestSecretRedemptionSubjectIsPinned(t *testing.T) {
+	require.Equal(t, "secret.redeem", bus.SubjectSecretRedeem())
+}

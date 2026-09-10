@@ -165,6 +165,39 @@ func (n *NATS) Request(ctx context.Context, subject string, msg proto.Message, o
 	return nil
 }
 
+// RequestRaw sends bytes on subject and returns the reply's bytes unchanged.
+//
+// It exists for the one exchange whose payload must not be wrapped in a
+// protobuf message: secret redemption (docs/wire-contract.md, "Secrets"). A
+// redeemed value is opaque bytes, and every field of a wrapper message would
+// be one more copy of it — in a decoder's arena, in a reflection path, in
+// anything that logs an undecodable message by dumping it. The reply carries
+// the value and nothing else.
+//
+// ctx must carry a deadline; without one a dead responder stalls the caller.
+func (n *NATS) RequestRaw(ctx context.Context, subject string, body []byte) ([]byte, error) {
+	reply, err := n.conn.RequestWithContext(ctx, subject, body)
+	if err != nil {
+		return nil, fmt.Errorf("bus: request %q: %w", subject, err)
+	}
+	return reply.Data, nil
+}
+
+// RespondRaw serves byte requests on subject until the returned function is
+// called. It is the receiving half of RequestRaw.
+func (n *NATS) RespondRaw(ctx context.Context, subject string, fn func([]byte) []byte) (func(), error) {
+	sub, err := n.conn.Subscribe(subject, func(m *nats.Msg) {
+		_ = m.Respond(fn(m.Data))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bus: respond on %q: %w", subject, err)
+	}
+	if err := n.confirmSubscribed(ctx, sub, subject); err != nil {
+		return nil, err
+	}
+	return func() { _ = sub.Unsubscribe() }, nil
+}
+
 // Respond serves requests on subject until the returned function is called.
 // This is the receiving half of Request — how an engine answers EngineControl
 // over the connection it dialled.
