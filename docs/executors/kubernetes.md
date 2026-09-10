@@ -49,12 +49,20 @@ A tag is a moving target, so caching against one serves results produced in an
 environment that no longer exists. An image that cannot be resolved to a digest
 yields `ErrNoStableIdentity` and its steps stay uncached — the safe direction.
 
-One caveat worth knowing: the identity describes the executor's **configured
-template**. A `Spec` naming its own image gets that image for its pod, and a
-caller mixing images on one executor is asking a single identity to describe
-several environments. Task 37b moves the identity to the sandbox for exactly
-this reason; until it lands, run one executor per image where cache correctness
-matters.
+There are two of them, and the difference matters. `Executor.EnvironmentIdentity`
+describes the **configured template** — what a sandbox acquired with an empty
+`Spec` would run — and it is what an engine announces on registration
+([ADR 0021](../../.procoder/adr/0021-the-environment-identity-behind-a-cache-key-comes-from-the-engines.md)).
+`Sandbox.EnvironmentIdentity` describes the pod that was actually created, image
+and all.
+
+The cache key is hashed against the second kind of answer. It used to be hashed
+against the first, and one executor running several images then reported the
+template's digest for every one of them: two steps on two different images
+produced ONE cache key, and the second to run was served the first one's
+outputs. A pipeline that names its own image is keyed against that image
+instead — pinned to a digest, or not cached at all, because the control plane
+resolves no tags.
 
 ## Testing against a real cluster
 

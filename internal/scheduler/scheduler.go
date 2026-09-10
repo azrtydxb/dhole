@@ -800,7 +800,7 @@ func (s *Scheduler) cacheKey(
 	step *dholev1.Step,
 	state *runState,
 ) (*dholev1.Digest, bool, error) {
-	identity := s.tierIdentity(ctx, tenantID)
+	identity := cache.StepEnvironment(step, s.tierIdentity(ctx, tenantID))
 	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), identity); !cacheable {
 		return nil, false, nil
 	}
@@ -1605,8 +1605,11 @@ func (s *Scheduler) dispatch(
 		}
 		dispatchMsg.Env[IdempotencyKeyEnv] = idempotencyKey
 	}
+	// StepEnvironment, not the tier identity alone: a step that names its own
+	// image runs in that image and not in the engine's, so keying it against
+	// the tier's digest would hash two different computations to one key.
 	cacheable, reason := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()),
-		s.tierIdentity(ctx, tenantID))
+		cache.StepEnvironment(step, s.tierIdentity(ctx, tenantID)))
 	payload, err := MarshalDispatched(Dispatched{
 		Attempt:               attempt,
 		Fence:                 token.Fence,
@@ -1665,6 +1668,10 @@ func (s *Scheduler) requirements(step *dholev1.Step) executor.Requirements {
 		OS:           s.os,
 		Arch:         s.arch,
 		Capabilities: step.GetCapabilities(),
+		// Straight off the step, in both callers, so the placement the planner
+		// reports and the placement the dispatcher performs are the same
+		// computation over the same field.
+		EngineType: step.GetEngineType(),
 	}
 }
 

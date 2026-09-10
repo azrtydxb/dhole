@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -42,3 +43,21 @@ type declaredEnv struct {
 // backend would have said — including ErrNoStableIdentity, which is the case
 // this exists for.
 func (d *declaredEnv) EnvironmentIdentity() (string, error) { return d.id, nil }
+
+// Acquire wraps the sandbox so it declares the same environment the backend
+// does. The declaration would otherwise stop at registration and never reach a
+// cache key, which is hashed against what the SANDBOX names.
+func (d *declaredEnv) Acquire(ctx context.Context, spec Spec) (Sandbox, error) {
+	sb, err := d.Executor.Acquire(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &declaredSandbox{Sandbox: sb, id: d.id}, nil
+}
+
+type declaredSandbox struct {
+	Sandbox
+	id string
+}
+
+func (d *declaredSandbox) EnvironmentIdentity() (string, error) { return d.id, nil }

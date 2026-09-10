@@ -8,6 +8,7 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/cache"
+	"github.com/azrtydxb/dhole/internal/executor"
 )
 
 // pureStep is the only shape the cache will ever accept, so every key test
@@ -166,4 +167,65 @@ func TestKeyRefusesNilStep(t *testing.T) {
 	k, err := cache.Key(nil, "sha256:image", nil, nil)
 	require.Error(t, err)
 	require.Nil(t, k)
+}
+
+// TestStepEnvironmentPrefersTheImageTheStepNamedOverTheTiers. A tier identity
+// describes the engine's own sandbox image. A step that names its own image
+// runs somewhere else entirely, so keying it against the tier's digest hashes
+// two different computations to one key — and the second one to arrive is
+// served the first one's outputs.
+func TestStepEnvironmentPrefersTheImageTheStepNamedOverTheTiers(t *testing.T) {
+	tier := "docker.io/library/busybox@sha256:" + strings.Repeat("a", 64)
+	pinned := "ghcr.io/dhole/toolchain@sha256:" + strings.Repeat("b", 64)
+
+	step := &dholev1.Step{Id: "build", EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE}
+	require.Equal(t, tier, cache.StepEnvironment(step, tier),
+		"a step that names no image runs in the engine's own environment")
+
+	step.Image = pinned
+	require.Equal(t, pinned, cache.StepEnvironment(step, tier),
+		"a step that names a pinned image is keyed against that image, not the engine's")
+}
+
+// TestTwoStepsDifferingOnlyInTheirImageDoNotShareAKey is the collision the
+// whole change exists to close, expressed where the plane computes it.
+func TestTwoStepsDifferingOnlyInTheirImageDoNotShareAKey(t *testing.T) {
+	tier := "docker.io/library/busybox@sha256:" + strings.Repeat("a", 64)
+	mk := func(image string) *dholev1.Digest {
+		t.Helper()
+		step := &dholev1.Step{
+			Id:          "build",
+			PluginRef:   "builtin:command",
+			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+			Image:       image,
+		}
+		k, err := cache.Key(step, cache.StepEnvironment(step, tier), nil, nil)
+		require.NoError(t, err)
+		return k
+	}
+
+	require.NotEqual(t,
+		mk("ghcr.io/dhole/go@sha256:"+strings.Repeat("b", 64)).GetHex(),
+		mk("ghcr.io/dhole/node@sha256:"+strings.Repeat("c", 64)).GetHex(),
+		"the same command under two different toolchains is two different computations")
+}
+
+// TestAStepNamingAMutableTagHasNoStableEnvironment. The plane resolves
+// nothing: it has no registry credentials and a lookup on the cache path would
+// blow the 10ms budget. So a tag reaches the key as a name whose meaning can
+// change under it, and the only honest answer is no identity at all — which
+// cache.Eligible then turns into "this step is not cacheable", visibly, rather
+// than into a key that silently stops describing the environment.
+func TestAStepNamingAMutableTagHasNoStableEnvironment(t *testing.T) {
+	tier := "docker.io/library/busybox@sha256:" + strings.Repeat("a", 64)
+	step := &dholev1.Step{
+		Id:          "build",
+		EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+		Image:       "ghcr.io/dhole/toolchain:v1",
+	}
+
+	require.Empty(t, cache.StepEnvironment(step, tier))
+	ok, reason := cache.Eligible(step, executor.LeaseStep, cache.StepEnvironment(step, tier))
+	require.False(t, ok)
+	require.Contains(t, reason, "no stable environment identity")
 }

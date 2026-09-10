@@ -92,10 +92,9 @@ type Instance struct {
 	// engine takes this step" from its own local configuration, which is a
 	// different answer on any fleet whose engines are not all alike.
 	//
-	// It is deliberately NOT part of what scheduler.Match filters on. See the
-	// note there: the engine type a step needs is declared by its plugin's
-	// manifest, which the dispatch path does not resolve, so a filter here
-	// would be applied by the planner and not by the dispatcher.
+	// scheduler.Match filters on it: a step naming Step.engine_type may only
+	// be placed on an engine that offered that kind. An engine that advertised
+	// none satisfies no such step — unstated is unknown, not universal.
 	EngineTypes []string
 	// Slots is how many jobs it will run concurrently.
 	Slots int

@@ -839,3 +839,30 @@ func TestPlanReportsTheMatchedEnginesKindNotTheLocalOne(t *testing.T) {
 		"step b needs nothing special and would land on the first engine that matches, "+
 			"which is the process one")
 }
+
+// TestValidateReportsAnEngineTypeNoEngineOffers. The planner and the
+// dispatcher must read the engine type off the same field, or a pipeline
+// validates against engines that will never take its steps — the disagreement
+// this filter was withheld for until a step could name the type itself.
+func TestValidateReportsAnEngineTypeNoEngineOffers(t *testing.T) {
+	fleet := staticFleet{readyEngine()} // ready, and offers no engine kind
+	h := newPlanHarness(t, fleet)
+
+	p := cacheablePipeline(tenantA)
+	stepByID(t, p, "a").EngineType = "kubernetes"
+
+	got, err := h.client.Validate(context.Background(),
+		authed(&dholev1.ValidateRequest{Pipeline: p}, tokenAlice))
+	require.NoError(t, err)
+
+	found := false
+	for _, d := range got.Msg.GetDiagnostics() {
+		if d.GetStepId() == "a" &&
+			strings.Contains(d.GetMessage(), "no ready engine offers engine type kubernetes") {
+			found = true
+		}
+	}
+	require.Truef(t, found,
+		"a step naming an engine type nothing offers must say so before the run: got %v",
+		got.Msg.GetDiagnostics())
+}

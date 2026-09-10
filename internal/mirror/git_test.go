@@ -414,6 +414,12 @@ func fullPipeline() *dholev1.Pipeline {
 				// the one shape a YAML round trip is most likely to reorder
 				// or flatten, so the fixture carries more than one key.
 				Config: map[string]string{"target": "production", "region": "eu-west-1"},
+				// The sandbox this step asks for. Both are part of the
+				// definition — the image is hashed into the cache key and the
+				// engine type decides placement — so a mirror that dropped
+				// either would export a pipeline that runs somewhere else.
+				Image:      "ghcr.io/dhole/toolchain@sha256:" + strings.Repeat("f", 64),
+				EngineType: "kubernetes",
 			},
 		},
 		Edges: []*dholev1.Edge{

@@ -205,6 +205,34 @@ func Contract(t *testing.T, e executor.Executor) {
 		}
 		require.NotEmpty(t, id, "a nil error must mean a real, hashable identity")
 	})
+
+	t.Run("a sandbox names the environment it actually runs in", func(t *testing.T) {
+		// The identity a cache key is hashed against comes from HERE, because
+		// the environment is chosen per sandbox: a backend that answered from
+		// the executor alone gave two steps on two different images one
+		// identity, and therefore one cache key for two computations.
+		sb := acquire(t, e)
+		id, err := sb.EnvironmentIdentity()
+		if err != nil {
+			require.ErrorIs(t, err, executor.ErrNoStableIdentity)
+			require.Empty(t, id, "a sandbox with no stable identity must not return one")
+			return
+		}
+		require.NotEmpty(t, id, "a nil error must mean a real, hashable identity")
+
+		again, err := sb.EnvironmentIdentity()
+		require.NoError(t, err)
+		require.Equal(t, id, again,
+			"one sandbox is one environment: an identity that changes while the sandbox is alive describes nothing")
+
+		// A sandbox acquired with an empty Spec is the backend's own default,
+		// which is exactly what the executor-wide answer describes. They must
+		// agree, or an engine registers one environment and runs another.
+		base, baseErr := e.EnvironmentIdentity()
+		require.NoError(t, baseErr)
+		require.Equal(t, base, id,
+			"the default sandbox and the executor must name the same environment")
+	})
 }
 
 // sigtermWindow is how long a backend has to stop a command tree after a

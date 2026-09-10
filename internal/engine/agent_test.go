@@ -679,3 +679,60 @@ func TestAnEngineWithNoStableEnvironmentAnnouncesNone(t *testing.T) {
 	require.Empty(t, reg.GetEnvironmentIdentity(),
 		"an engine with nothing reproducible to name says nothing rather than something")
 }
+
+// recordingExecutor remembers the Spec it was asked to acquire, so a test can
+// assert what the engine derived from a dispatch rather than only what the
+// step printed.
+type recordingExecutor struct {
+	*process.Executor
+	mu    sync.Mutex
+	specs []executor.Spec
+}
+
+func (r *recordingExecutor) Acquire(ctx context.Context, spec executor.Spec) (executor.Sandbox, error) {
+	r.mu.Lock()
+	r.specs = append(r.specs, spec)
+	r.mu.Unlock()
+	return r.Executor.Acquire(ctx, spec)
+}
+
+func (r *recordingExecutor) acquired() []executor.Spec {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]executor.Spec(nil), r.specs...)
+}
+
+// TestTheImageAPipelineNamedReachesTheSandboxSpec. The image a step runs in
+// was the executor's to decide: one pod template per Kubernetes engine, so
+// every step on that engine ran the same image whatever the pipeline wanted,
+// and an acceptance pipeline needing a toolchain had to carry a Dockerfile's
+// text inside a step. Step.image only means anything if the engine hands it to
+// Acquire, which is the one hop this asserts.
+func TestTheImageAPipelineNamedReachesTheSandboxSpec(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	statuses := h.statuses(ctx, t, "run-image", "build")
+	exec := &recordingExecutor{Executor: process.New()}
+
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-image",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: exec,
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	d := newDispatch("run-image", "build", "echo", "hi")
+	d.Step.Image = "ghcr.io/dhole/toolchain@sha256:" + strings.Repeat("a", 64)
+	h.publishDispatch(ctx, t, d)
+
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, statuses).GetPhase())
+	specs := exec.acquired()
+	require.Len(t, specs, 1)
+	require.Equal(t, d.GetStep().GetImage(), specs[0].Image,
+		"the engine must acquire the sandbox the pipeline asked for, not the one its backend defaults to")
+}

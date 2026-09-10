@@ -83,6 +83,27 @@ YAML
 it may be cached and freely retried. See [effect classes](#effect-classes-in-one-table)
 below before you copy that onto a step that sends a message.
 
+## Saying where a step runs
+
+Two optional fields on a step say what it runs in and what runs it:
+
+```yaml
+- id: build
+  effect_class: EFFECT_CLASS_PURE
+  # The sandbox image. Pin it to a DIGEST if the step is to be cached: the
+  # cache key is hashed against this reference and nothing resolves tags for
+  # you, so a step naming `:latest` is refused by the cache rather than keyed
+  # against a name whose meaning can change under it.
+  image: ghcr.io/acme/toolchain@sha256:0f1e...
+  # The executor kind that must take it. Empty means any engine that fits.
+  engine_type: kubernetes
+```
+
+Without `image`, a step runs in whatever environment its engine provides — for
+a Kubernetes engine, its configured pod template. Without `engine_type`, the
+scheduler places the step on any ready engine whose platform and capabilities
+match, which on a mixed fleet may be a host process one day and a pod the next.
+
 ## Run it on this machine
 
 ```bash

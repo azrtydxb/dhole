@@ -838,3 +838,90 @@ func TestADispatchIsWrittenAtTheHighestVersionEveryMatchedEngineSpeaks(t *testin
 			"the queue may hand this to the older engine, so it must be readable by it")
 	})
 }
+
+// TestMatchFiltersByEngineType. Placement had no lever but capability: a
+// pipeline that needed a pod asked for NETWORK and hoped the only engine
+// advertising it was the Kubernetes one, and a step that had to run as a host
+// process could not be expressed at all. A step now names the executor kind it
+// needs, and an engine that never said which kinds it offers is not credited
+// with any — an unstated engine type is unknown, not universal, the same rule
+// the platform axes already follow.
+func TestMatchFiltersByEngineType(t *testing.T) {
+	req := executor.Requirements{OS: "linux", Arch: "arm64", EngineType: "process"}
+
+	wanted := registry.Instance{
+		ID: "process-engine", State: registry.StateReady,
+		OS: "linux", Arch: "arm64", Slots: 1, EngineTypes: []string{"process"},
+	}
+	fleet := []registry.Instance{
+		wanted,
+		{ID: "kubernetes-engine", State: registry.StateReady,
+			OS: "linux", Arch: "arm64", Slots: 1, EngineTypes: []string{"kubernetes"}},
+		{ID: "says-nothing", State: registry.StateReady,
+			OS: "linux", Arch: "arm64", Slots: 1},
+	}
+
+	require.Equal(t, []registry.Instance{wanted}, scheduler.Match(req, fleet),
+		"only an engine that offers the executor kind the step named may take it")
+	require.Len(t, scheduler.Match(executor.Requirements{OS: "linux", Arch: "arm64"}, fleet), 3,
+		"a step that names no engine type still goes anywhere it fits")
+}
+
+// TestExplainNamesTheEngineTypeNothingOffers. A step that cannot be placed must
+// never be held silently: the run then looks slow rather than stuck, and there
+// is nothing to look at. Explain already names the platform and the capability
+// that nobody has; the engine type has to be named the same way, or the newest
+// reason a step cannot run is the one reason the operator is not told.
+func TestExplainNamesTheEngineTypeNothingOffers(t *testing.T) {
+	fleet := []registry.Instance{
+		{ID: "kubernetes-engine", State: registry.StateReady,
+			OS: "linux", Arch: "arm64", Slots: 1, EngineTypes: []string{"kubernetes"}},
+	}
+	why := scheduler.Explain(
+		executor.Requirements{OS: "linux", Arch: "arm64", EngineType: "process"}, fleet)
+	require.Equal(t, "no ready engine offers engine type process", why)
+}
+
+// TestAStepNamingAnEngineTypeNothingOffersIsUnschedulableNotHeld closes the
+// wiring between the definition and the placement: the type has to be read off
+// the step by the DISPATCHER, not only understood by Match, or a pipeline can
+// name an engine type and be dispatched to something else entirely. And when
+// nothing offers it the step must say so — a step that is silently never sent
+// anywhere makes the run look slow instead of stuck.
+func TestAStepNamingAnEngineTypeNothingOffersIsUnschedulableNotHeld(t *testing.T) {
+	ctx := testContext(t)
+	p := diamond()
+	p.GetSteps()[0].EngineType = "kubernetes"
+	// readyEngine advertises no engine types at all, which is the fleet an
+	// engine written before Step.engine_type existed produces.
+	h := newHarnessWith(ctx, t, p, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Empty(t, h.drain(ctx, t), "a step must not be dispatched to an engine of the wrong kind")
+
+	events, err := h.store.Replay(ctx, testTenant, testRun)
+	require.NoError(t, err)
+	var reasons []string
+	for _, e := range events {
+		if e.Type == scheduler.StepUnschedulable {
+			reasons = append(reasons, string(e.Payload))
+		}
+	}
+	require.Len(t, reasons, 1)
+	require.Contains(t, reasons[0], "no ready engine offers engine type kubernetes")
+}
+
+// TestAStepIsDispatchedToTheEngineKindItNamed is the same wiring from the
+// other side: the step is placed the moment an engine offering that kind is in
+// the fleet, so the filter refuses the wrong engine rather than every engine.
+func TestAStepIsDispatchedToTheEngineKindItNamed(t *testing.T) {
+	ctx := testContext(t)
+	p := diamond()
+	p.GetSteps()[0].EngineType = "kubernetes"
+	engine := readyEngine("e1")
+	engine.EngineTypes = []string{"kubernetes"}
+	h := newHarnessWith(ctx, t, p, engine)
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+}

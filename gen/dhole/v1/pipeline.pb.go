@@ -293,7 +293,32 @@ type Step struct {
 	// the plugin actually takes. The map is part of the definition, so it is
 	// part of the content hash and therefore part of the cache key — two runs
 	// configured differently are two different pieces of work.
-	Config        map[string]string `protobuf:"bytes,9,rep,name=config,proto3" json:"config,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Config map[string]string `protobuf:"bytes,9,rep,name=config,proto3" json:"config,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Image the sandbox this step runs in is built from, as the executor's
+	// backend understands it: an OCI reference for a container backend, ignored
+	// by a backend that has no images at all.
+	//
+	// It exists because a pipeline could not say what its steps run in. The
+	// executor's pod template did, so every step on one Kubernetes engine ran
+	// the same image and the acceptance pipelines had to embed a Dockerfile's
+	// text in a step to get a toolchain in.
+	//
+	// PIN IT TO A DIGEST if the step is to be cached. The cache key is hashed
+	// against this reference, and the plane resolves nothing: a tag is a moving
+	// target, so a step naming one has no stable environment identity and is
+	// refused by cache.Eligible rather than keyed against a name whose meaning
+	// can change under it. Empty means the engine's own environment, whose
+	// digest its tier already reported (ADR 0021).
+	Image string `protobuf:"bytes,10,opt,name=image,proto3" json:"image,omitempty"`
+	// Executor kind this step must run on — "process", "kubernetes",
+	// "containerd" — matched against the engine_types an engine registered.
+	// Empty means any kind will do.
+	//
+	// Capability was the only lever before this: a pipeline that needed a pod
+	// asked for NETWORK and hoped, and a step that had to run as a host process
+	// could not be expressed at all. Both the planner and the dispatcher read
+	// it straight off the step, so the placement they compute cannot disagree.
+	EngineType    string `protobuf:"bytes,11,opt,name=engine_type,json=engineType,proto3" json:"engine_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -389,6 +414,20 @@ func (x *Step) GetConfig() map[string]string {
 		return x.Config
 	}
 	return nil
+}
+
+func (x *Step) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *Step) GetEngineType() string {
+	if x != nil {
+		return x.EngineType
+	}
+	return ""
 }
 
 // Edge connects one step's output port to another step's input port. The DAG
@@ -551,7 +590,7 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\x04kind\"B\n" +
 	"\x04Port\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
-	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\xb5\x03\n" +
+	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\xec\x03\n" +
 	"\x04Step\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -563,7 +602,11 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\fcapabilities\x18\a \x03(\x0e2\x14.dhole.v1.CapabilityR\fcapabilities\x125\n" +
 	"\vlease_scope\x18\b \x01(\x0e2\x14.dhole.v1.LeaseScopeR\n" +
 	"leaseScope\x122\n" +
-	"\x06config\x18\t \x03(\v2\x1a.dhole.v1.Step.ConfigEntryR\x06config\x1a9\n" +
+	"\x06config\x18\t \x03(\v2\x1a.dhole.v1.Step.ConfigEntryR\x06config\x12\x14\n" +
+	"\x05image\x18\n" +
+	" \x01(\tR\x05image\x12\x1f\n" +
+	"\vengine_type\x18\v \x01(\tR\n" +
+	"engineType\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +

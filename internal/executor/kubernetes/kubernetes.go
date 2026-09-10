@@ -159,15 +159,17 @@ func (e *Executor) Capabilities() []dholev1.Capability {
 	return caps
 }
 
-// EnvironmentIdentity implements executor.Executor. It is the digest of the
-// image sandboxes run, never its tag: a tag is a moving target, so caching
-// against one serves results produced in an environment that no longer exists.
-// An image that cannot be resolved to a digest yields ErrNoStableIdentity, and
-// its steps stay uncached, which is the safe direction to be wrong in.
+// EnvironmentIdentity implements executor.Executor: the digest of the image
+// this executor's TEMPLATE runs, which is what a sandbox acquired with an
+// empty Spec would get. It is a digest and never a tag, because a tag is a
+// moving target and caching against one serves results produced in an
+// environment that no longer exists. An image that cannot be resolved yields
+// ErrNoStableIdentity, and its steps stay uncached, which is the safe
+// direction to be wrong in.
 //
-// The identity describes the executor's configured template. A Spec that names
-// its own image gets that image for its pod, and a caller that mixes images on
-// one executor needs a per-sandbox identity the interface does not yet carry.
+// This answer describes the template alone. A step that names its own image
+// runs somewhere else, and the identity of THAT environment comes from the
+// sandbox it ran in — see sandbox.EnvironmentIdentity.
 func (e *Executor) EnvironmentIdentity() (string, error) {
 	e.identityOnce.Do(func() {
 		e.identity, e.identityErr = resolveDigest(e.image(""))
@@ -261,6 +263,7 @@ func (e *Executor) Acquire(ctx context.Context, spec executor.Spec) (executor.Sa
 		pod:     created.Name,
 		env:     spec.Env,
 		workDir: sandboxRoot,
+		image:   pod.Spec.Containers[0].Image,
 	}
 	if spec.WorkDir != "" {
 		if sb.workDir, err = resolve(sandboxRoot, spec.WorkDir); err != nil {
@@ -312,9 +315,33 @@ type sandbox struct {
 	pod     string
 	env     map[string]string
 	workDir string
+	// image is the reference this pod's container was actually created from,
+	// after the Spec, the template and the default have been resolved against
+	// each other. It is kept per sandbox because that is the only place the
+	// answer is right: two sandboxes from one executor can run two different
+	// images, and asking the executor would give both of them the template's.
+	image string
+
+	identityOnce sync.Once
+	identity     string
+	identityErr  error
 
 	mu       sync.Mutex
 	released bool
+}
+
+// EnvironmentIdentity implements executor.Sandbox: the digest of the image
+// THIS pod runs, resolved once and remembered.
+//
+// The pod is already created from it, so the answer cannot drift from what the
+// commands in this sandbox actually see — which is the property the cache
+// needs and the executor-wide answer could not give. A step whose image has no
+// resolvable digest reports ErrNoStableIdentity and stays uncached.
+func (s *sandbox) EnvironmentIdentity() (string, error) {
+	s.identityOnce.Do(func() {
+		s.identity, s.identityErr = resolveDigest(s.image)
+	})
+	return s.identity, s.identityErr
 }
 
 // Exec runs a command inside the sandbox pod. A non-zero exit is an exit code,
