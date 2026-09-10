@@ -298,6 +298,11 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
             // No plugin values yet: a new step names no plugin, so there is
             // nothing it declares to configure.
             config: {},
+            // Nor an image or an engine type: both are step-level overrides,
+            // and empty means "whatever the tier this lands on runs" rather
+            // than a choice this canvas made on the author's behalf.
+            image: "",
+            engineType: "",
             inputs: [...kind.inputs],
             outputs: [...kind.outputs],
           },

@@ -32,6 +32,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/tenancy"
 )
 
 // DefaultPollInterval is how often WatchRun re-reads the run log while it has
@@ -42,6 +43,26 @@ const DefaultPollInterval = 250 * time.Millisecond
 // recorded and never advanced never starts.
 type Advancer interface {
 	Advance(ctx context.Context, tenantID, runID string) error
+}
+
+// Quotas is the tenant admission check, narrowed to the one question the
+// run-creating path asks. *tenancy.Enforcer satisfies it, and so does a fake
+// in a test.
+//
+// It is declared here rather than imported from the scheduler for the same
+// reason scheduler.Quotas is declared there: admission is asked wherever the
+// thing being admitted happens, and the dependency runs one way — this package
+// knows tenancy, and tenancy knows neither this one nor the scheduler.
+//
+// Only AdmitRun. `max_concurrent_steps` is the scheduler's question, asked
+// before every dispatch against the in-flight count the budgets bucket holds;
+// this is `max_runs_per_day`, and until it was asked here it was a column
+// nobody read.
+type Quotas interface {
+	// AdmitRun decides whether a run may start and COUNTS it if it may, so
+	// the limit is applied to the same number the invoice is made from. It
+	// is idempotent on the run id.
+	AdmitRun(ctx context.Context, tenantID, runID string) (tenancy.Decision, error)
 }
 
 // Heads records each pipeline's current editing head, which is what an edit's
@@ -122,6 +143,11 @@ type Config struct {
 	// Advancer is handed each new run. Optional: without one, a run is
 	// recorded and waits for whatever else advances it.
 	Advancer Advancer
+	// Quotas admits a run against the tenant's daily limit before it exists.
+	// Optional: without one, StartRun enforces no limit and writes no
+	// RUN_STARTED row for the ledger to bill from — which is what every
+	// deployment did until it was passed one.
+	Quotas Quotas
 	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads,
 	// which is a check within this process only: a deployment running more
 	// than one control plane MUST pass defstore.NewHeads.
@@ -150,6 +176,11 @@ type Config struct {
 	// step whose plugin is unpublished or whose declaration disagrees with
 	// it. Optional: without one, Validate checks only the definition.
 	Catalog StepResolver
+	// CatalogWriter records a published declaration, which is what
+	// PublishPlugin does and the only supported way anything reaches the
+	// catalog. Optional: without one, PublishPlugin says so rather than
+	// accepting a declaration it drops.
+	CatalogWriter PluginPublisher
 	// OS and Arch are the platform steps are planned for, in Go's
 	// GOOS/GOARCH vocabulary, and must match the scheduler's. Empty means
 	// the deployment does not care.
@@ -183,14 +214,16 @@ type Server struct {
 	// approvers verifies the decider of an approval gate. See approval.go.
 	approvers Approvers
 	adv       Advancer
+	quotas    Quotas
 	heads     Heads
 	cache     CacheReader
 	fleet     Fleet
 	drain     Drainer
 	// control is the one inbound path to an engine. See control.go.
-	control EngineControl
-	tier    string
-	cat     StepResolver
+	control   EngineControl
+	tier      string
+	cat       StepResolver
+	catWriter PluginPublisher
 	// live and archive are the two copies of a step's log: the ephemeral
 	// subject and the durable object. See stream.go for why both exist.
 	live    LiveLogs
@@ -226,6 +259,7 @@ func NewServer(cfg Config) (*Server, error) {
 		runs:        cfg.Runs,
 		approvers:   cfg.Approvers,
 		adv:         cfg.Advancer,
+		quotas:      cfg.Quotas,
 		heads:       cfg.Heads,
 		cache:       cfg.Cache,
 		fleet:       cfg.Fleet,
@@ -233,6 +267,7 @@ func NewServer(cfg Config) (*Server, error) {
 		control:     cfg.Control,
 		tier:        cfg.Tier,
 		cat:         cfg.Catalog,
+		catWriter:   cfg.CatalogWriter,
 		live:        cfg.LiveLogs,
 		archive:     cfg.LogArchive,
 		os:          cfg.OS,
@@ -546,6 +581,16 @@ func (s *Server) StartRun(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+
+	// Admission comes BEFORE the first event, so a refused run leaves nothing
+	// behind: no RUN_CREATED for a client to watch, no revision pinned to a
+	// run that never was. The id is minted first only because admission is
+	// idempotent on it — a re-admission of a run already counted passes, which
+	// is what stops a restart killing work the tenant was already charged for.
+	if err := s.admitRun(ctx, p.TenantID, runID); err != nil {
+		return nil, err
+	}
+
 	payload, err := scheduler.MarshalRunCreated(scheduler.RunCreated{
 		PipelineID: pipelineID, RevisionID: rev.ID,
 	})
@@ -571,6 +616,28 @@ func (s *Server) StartRun(
 		}
 	}
 	return connect.NewResponse(&dholev1.StartRunResponse{RunId: runID, RevisionId: rev.ID}), nil
+}
+
+// admitRun asks the tenant's quota whether one more run may start today, and
+// counts it when it may.
+//
+// A refusal is RESOURCE_EXHAUSTED and carries the enforcer's own reason, which
+// names the quota, the limit and what has already been used. A generic error
+// here would leave the person whose run stopped with nothing to act on and no
+// way to tell "you are over your limit", which they can fix, from "the store
+// is broken", which they cannot.
+func (s *Server) admitRun(ctx context.Context, tenantID, runID string) error {
+	if s.quotas == nil {
+		return nil
+	}
+	decision, err := s.quotas.AdmitRun(ctx, tenantID, runID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("api: admit run: %w", err))
+	}
+	if !decision.Allowed {
+		return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("api: %w", decision.Err()))
+	}
+	return nil
 }
 
 // WatchRun streams a run's event log from the beginning and then follows it,

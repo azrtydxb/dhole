@@ -356,6 +356,30 @@ message GetPluginResponse {
   Plugin plugin = 1;
 }
 
+// PublishPluginRequest puts one type's declaration into the caller's catalog.
+//
+// Publishing is on the contract because it is the only supported way in.
+// Before this RPC nothing anywhere published: not the API, not the CLI, not
+// the git mirror, so a declaration could be READ through GetPlugin and could
+// only be PUT there by a process holding the control plane's own database
+// open — a capability the GUI and an agent can never have, which is exactly
+// what ADR 0013 refuses.
+//
+// The tenant is the credential's, like everywhere else: a caller can say what
+// it publishes, never whose catalog it lands in.
+message PublishPluginRequest {
+  // The declaration. Its `ref` field is ignored on the way in — the reference
+  // is namespace/name@version, and a ref that disagreed with them would be a
+  // second, contradicting identity for the same record.
+  Plugin plugin = 1;
+}
+
+// PublishPluginResponse is the declaration as the catalog now holds it,
+// including the canonical ref it is addressed by from here on.
+message PublishPluginResponse {
+  Plugin plugin = 1;
+}
+
 // CancelRunRequest stops a run.
 //
 // Cancellation is a control-plane act with an engine-side half: the run is
@@ -540,6 +564,10 @@ service PipelineService {
   // properties panel renders, an agent discovers tools from and an editor
   // completes against.
   rpc GetPlugin(GetPluginRequest) returns (GetPluginResponse);
+  // PublishPlugin records a type's declaration in the caller's catalog. It is
+  // the supported way to put one there; without it, GetPlugin read a store
+  // nothing on the contract could write.
+  rpc PublishPlugin(PublishPluginRequest) returns (PublishPluginResponse);
   // ListRevisions returns a pipeline's revision history.
   rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
   // ApproveRevision promotes a revision to active.

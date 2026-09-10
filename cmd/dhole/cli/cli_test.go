@@ -205,6 +205,15 @@ func TestBinaryExitsNonZeroAsAProcess(t *testing.T) {
 	require.NotZero(t, exit.ExitCode())
 }
 
+// publishableManifest is a well-formed dhole.v1.Plugin, inline. The server the
+// credential tests run against has no catalog, so the call is expected to
+// fail — but it has to fail on the SERVER, past authentication, rather than in
+// protojson, or the command would prove nothing about its credential.
+const publishableManifest = `{"namespace":"acme","name":"deploy","version":"1.0.0",` +
+	`"kind":"step","effectClass":"EFFECT_CLASS_PURE",` +
+	`"digest":{"algo":"sha256","hex":"aa"},` +
+	`"inputSchema":"{\"type\":\"object\"}","outputSchema":"{\"type\":\"object\"}"}`
+
 // serverCommands is one invocation per command that talks to a server. It is
 // written out rather than derived, because the arguments differ; the coverage
 // test is what guarantees the set of commands is complete.
@@ -221,6 +230,7 @@ func serverCommands() []struct {
 	}{
 		{"pipeline create", []string{"pipeline", "create", "p2"}, true},
 		{"plugin get", []string{"plugin", "get", "acme/deploy@1.0.0"}, false},
+		{"plugin publish", []string{"plugin", "publish", publishableManifest}, false},
 		{"engine list", []string{"engine", "list"}, false},
 		{"engine drain", []string{"engine", "drain", "e1"}, false},
 		{"run cancel", []string{"run", "cancel", "run_1"}, false},

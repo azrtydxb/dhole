@@ -45,6 +45,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/api"
 	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cas"
@@ -924,6 +925,7 @@ func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	s.mu.Lock()
 	running, sched, defs, store := s.running, s.sched, s.defs, s.storeLocked()
 	parts := s.partitions
+	quotas := s.quotasLocked()
 	s.mu.Unlock()
 	if !running {
 		return "", errors.New("server: not started")
@@ -936,6 +938,25 @@ func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	}
 	if diags := dag.TypeCheck(p); len(diags) > 0 {
 		return "", fmt.Errorf("server: pipeline %q does not type-check: %s", p.GetId(), diagnostics(diags))
+	}
+
+	// The sequence is the store's to allocate: two planes submitting at once
+	// would otherwise read the same last position and write the same one.
+	runID := "run_" + randomID()
+
+	// Admitted before ANYTHING is written, because every trigger — schedule,
+	// http and git — fires into here, and a daily run limit enforced only in
+	// internal/api is a limit any webhook walks past. A refusal leaves no
+	// revision, no run id and no event: the id above exists only in this
+	// frame, and admission is idempotent on it.
+	if quotas != nil {
+		decision, err := quotas.AdmitRun(ctx, tenantID, runID)
+		if err != nil {
+			return "", err
+		}
+		if err := decision.Err(); err != nil {
+			return "", fmt.Errorf("server: submit: %w", err)
+		}
 	}
 
 	revision, err := defs.Save(ctx, tenantID, p, "system")
@@ -955,9 +976,6 @@ func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipelin
 		return "", err
 	}
 
-	// The sequence is the store's to allocate: two planes submitting at once
-	// would otherwise read the same last position and write the same one.
-	runID := "run_" + randomID()
 	if err := store.Append(ctx, tenantID, runstore.Event{
 		RunID:   runID,
 		Type:    runstore.RunCreated,
@@ -1050,6 +1068,17 @@ func (s *Server) storeLocked() runstore.Store {
 		return nil
 	}
 	return s.infra.store
+}
+
+// quotasLocked is the tenant admission check, or nil when there is no
+// infrastructure to read one from. It returns the interface rather than the
+// concrete enforcer so a nil *tenancy.Enforcer cannot become a non-nil
+// interface that panics on the first admission.
+func (s *Server) quotasLocked() api.Quotas {
+	if s.infra == nil || s.infra.quotas == nil {
+		return nil
+	}
+	return s.infra.quotas
 }
 
 func diagnostics(diags []dag.Diagnostic) string {

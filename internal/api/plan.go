@@ -43,6 +43,19 @@ type StepResolver interface {
 	Resolve(ctx context.Context, tenantID, ref string) (catalog.Entry, error)
 }
 
+// PluginPublisher is the catalog, narrowed to the one thing publishing needs.
+// catalog.Store satisfies it.
+//
+// It is a second interface rather than a method on StepResolver because the
+// two are read and write, and the reader is what Plan and Validate take: a
+// resolver that could also publish would let a dry run write to the catalog,
+// which is the property Plan exists to not have.
+type PluginPublisher interface {
+	// Publish records a type. It is idempotent for a byte-identical manifest
+	// and returns catalog.ErrVersionExists for one that differs.
+	Publish(ctx context.Context, tenantID string, m catalog.Manifest) error
+}
+
 // Plan is a dry run: what would execute, in what order, what would be served
 // from cache, and which kind of engine each step would land on.
 //

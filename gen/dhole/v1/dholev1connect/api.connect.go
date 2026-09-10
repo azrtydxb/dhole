@@ -58,6 +58,9 @@ const (
 	// PipelineServiceGetPluginProcedure is the fully-qualified name of the PipelineService's GetPlugin
 	// RPC.
 	PipelineServiceGetPluginProcedure = "/dhole.v1.PipelineService/GetPlugin"
+	// PipelineServicePublishPluginProcedure is the fully-qualified name of the PipelineService's
+	// PublishPlugin RPC.
+	PipelineServicePublishPluginProcedure = "/dhole.v1.PipelineService/PublishPlugin"
 	// PipelineServiceListRevisionsProcedure is the fully-qualified name of the PipelineService's
 	// ListRevisions RPC.
 	PipelineServiceListRevisionsProcedure = "/dhole.v1.PipelineService/ListRevisions"
@@ -208,6 +211,10 @@ type PipelineServiceClient interface {
 	// properties panel renders, an agent discovers tools from and an editor
 	// completes against.
 	GetPlugin(context.Context, *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error)
+	// PublishPlugin records a type's declaration in the caller's catalog. It is
+	// the supported way to put one there; without it, GetPlugin read a store
+	// nothing on the contract could write.
+	PublishPlugin(context.Context, *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error)
 	// ListRevisions returns a pipeline's revision history.
 	ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error)
 	// ApproveRevision promotes a revision to active.
@@ -280,6 +287,12 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("GetPlugin")),
 			connect.WithClientOptions(opts...),
 		),
+		publishPlugin: connect.NewClient[v1.PublishPluginRequest, v1.PublishPluginResponse](
+			httpClient,
+			baseURL+PipelineServicePublishPluginProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("PublishPlugin")),
+			connect.WithClientOptions(opts...),
+		),
 		listRevisions: connect.NewClient[v1.ListRevisionsRequest, v1.ListRevisionsResponse](
 			httpClient,
 			baseURL+PipelineServiceListRevisionsProcedure,
@@ -339,6 +352,7 @@ type pipelineServiceClient struct {
 	validate        *connect.Client[v1.ValidateRequest, v1.ValidateResponse]
 	plan            *connect.Client[v1.PlanRequest, v1.PlanResponse]
 	getPlugin       *connect.Client[v1.GetPluginRequest, v1.GetPluginResponse]
+	publishPlugin   *connect.Client[v1.PublishPluginRequest, v1.PublishPluginResponse]
 	listRevisions   *connect.Client[v1.ListRevisionsRequest, v1.ListRevisionsResponse]
 	approveRevision *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
 	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
@@ -377,6 +391,11 @@ func (c *pipelineServiceClient) Plan(ctx context.Context, req *connect.Request[v
 // GetPlugin calls dhole.v1.PipelineService.GetPlugin.
 func (c *pipelineServiceClient) GetPlugin(ctx context.Context, req *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error) {
 	return c.getPlugin.CallUnary(ctx, req)
+}
+
+// PublishPlugin calls dhole.v1.PipelineService.PublishPlugin.
+func (c *pipelineServiceClient) PublishPlugin(ctx context.Context, req *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error) {
+	return c.publishPlugin.CallUnary(ctx, req)
 }
 
 // ListRevisions calls dhole.v1.PipelineService.ListRevisions.
@@ -439,6 +458,10 @@ type PipelineServiceHandler interface {
 	// properties panel renders, an agent discovers tools from and an editor
 	// completes against.
 	GetPlugin(context.Context, *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error)
+	// PublishPlugin records a type's declaration in the caller's catalog. It is
+	// the supported way to put one there; without it, GetPlugin read a store
+	// nothing on the contract could write.
+	PublishPlugin(context.Context, *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error)
 	// ListRevisions returns a pipeline's revision history.
 	ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error)
 	// ApproveRevision promotes a revision to active.
@@ -507,6 +530,12 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("GetPlugin")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServicePublishPluginHandler := connect.NewUnaryHandler(
+		PipelineServicePublishPluginProcedure,
+		svc.PublishPlugin,
+		connect.WithSchema(pipelineServiceMethods.ByName("PublishPlugin")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pipelineServiceListRevisionsHandler := connect.NewUnaryHandler(
 		PipelineServiceListRevisionsProcedure,
 		svc.ListRevisions,
@@ -569,6 +598,8 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServicePlanHandler.ServeHTTP(w, r)
 		case PipelineServiceGetPluginProcedure:
 			pipelineServiceGetPluginHandler.ServeHTTP(w, r)
+		case PipelineServicePublishPluginProcedure:
+			pipelineServicePublishPluginHandler.ServeHTTP(w, r)
 		case PipelineServiceListRevisionsProcedure:
 			pipelineServiceListRevisionsHandler.ServeHTTP(w, r)
 		case PipelineServiceApproveRevisionProcedure:
@@ -616,6 +647,10 @@ func (UnimplementedPipelineServiceHandler) Plan(context.Context, *connect.Reques
 
 func (UnimplementedPipelineServiceHandler) GetPlugin(context.Context, *connect.Request[v1.GetPluginRequest]) (*connect.Response[v1.GetPluginResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.GetPlugin is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) PublishPlugin(context.Context, *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.PublishPlugin is not implemented"))
 }
 
 func (UnimplementedPipelineServiceHandler) ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error) {

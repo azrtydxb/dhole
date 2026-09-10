@@ -663,7 +663,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `JobDispatch.env` and says so as a gap. The Go engine enforces nothing and holds the slot for
       the step's full runtime. This wants a schema field, additively, rather than the engine adopting
       the harness's environment convention. Found closing the secret-redemption item, 2026-09-10.
-- [ ] **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside tests — not the API, not the CLI, not the git mirror. So a plugin's declaration can be read through `GetPlugin` and there is no supported way to put one there; the e2e seeder has a `/plugin` route for exactly this reason. Found building Task 27b.
+- [x] **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside tests — not the API, not the CLI, not the git mirror. So a plugin's declaration can be read through `GetPlugin` and there is no supported way to put one there; the e2e seeder has a `/plugin` route for exactly this reason. Found building Task 27b. DONE: `PublishPlugin` is an additive RPC on `PipelineService` — the same place `GetPlugin` reads from, because a publish only a process holding the plane's database could perform is a capability the GUI and an agent can never have (ADR 0013). `dhole plugin publish <manifest|@file|@->` is its CLI surface, which `TestCLICoversEveryRPC` obliges. The seeder's `/plugin` back door is GONE and `panel.spec.ts` publishes through the contract.
 - [x] **The quota enforcer and the CAS guard are built and unwired.** Task 58's `Enforcer.AdmitRun`/`AdmitStep` and `GuardCAS` are tested but have no call sites: `internal/scheduler` and `internal/cas` belonged to other agents that round. Wire `AdmitStep` into the dispatch loop and `GuardCAS` around the blob store. Note `tenancy` deliberately does not import `scheduler` — the dependency runs the other way — so it mirrors two persistence contracts, guarded by `TestMirroredSchedulerContractsHaveNotDrifted`.
 - [x] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and
       `scheduler.Budgets` fully tested, but `scheduler.go` was being edited concurrently so nothing calls them:
@@ -671,12 +671,18 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       steps, drain with `Next(ctx, slots)` against the fleet's free capacity, `Acquire` before the lease claim,
       and release on EVERY terminal status, not only success. This is the same shape as the cache gap
       (Task 15b): everything built, one end unconnected.
-- [ ] **`Enforcer.AdmitRun` still has no caller.** Wiring the quotas closed `AdmitStep` — the scheduler
+- [x] **`Enforcer.AdmitRun` still has no caller.** Wiring the quotas closed `AdmitStep` — the scheduler
       asks it before every dispatch, against the in-flight count the budgets bucket holds — and left the daily
       run limit unenforced: nothing admits a RUN. It belongs where a run is created, which is `internal/api`
       and the triggers, and both belonged to other agents that round. Until it is wired, `max_runs_per_day` is
       a column nobody reads and the usage ledger has no `RUN_STARTED` rows to bill from. Found wiring Task 42
-      and Task 58.
+      and Task 58. DONE: both run-creating paths admit before anything is written — `api.StartRun`
+      through a narrow `api.Quotas` (declared where the question is asked, exactly as
+      `scheduler.Quotas` is, so `tenancy` still imports neither), and `Server.Submit`, which is what
+      every trigger fires into. A refusal is `RESOURCE_EXHAUSTED` carrying the enforcer's own reason,
+      which names `max_runs_per_day`, its limit and the usage; it leaves no run id, no `RUN_CREATED`
+      and no revision behind. `AdmitRun` already recorded `KindRunStarted`, so the ledger now has the
+      rows to bill from.
 - [x] **A tenant's CAS usage only ever grows.** `MaxCASBytes` is measured by summing `KindCASBytes` usage
       records, and `cas.GC` deletes blobs without writing anything that offsets them, so a tenant that
       reclaims a terabyte is still charged for it and is eventually refused every write with a store that is
