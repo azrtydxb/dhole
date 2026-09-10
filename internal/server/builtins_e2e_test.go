@@ -259,7 +259,11 @@ func TestABoundedLoopStepStopsAtItsCeilingWhateverTheBodySays(t *testing.T) {
 	runID, err := srv.Submit(ctx, tenantID, loopPipeline("builtin-loop-ceiling", 3))
 	require.NoError(t, err)
 
-	awaitStepEvent(ctx, t, srv, runID, "refine", runstore.StepFailed)
+	// The controller that finds nothing left to realise is the one that
+	// fails: the loop's steps are the run's steps now, and the last of them
+	// is the pass past the ceiling.
+	ceilingStep := loop.ControllerID("refine", 4)
+	awaitStepEvent(ctx, t, srv, runID, ceilingStep, runstore.StepFailed)
 	events, err := srv.Events(ctx, tenantID, runID)
 	require.NoError(t, err)
 
@@ -270,7 +274,7 @@ func TestABoundedLoopStepStopsAtItsCeilingWhateverTheBodySays(t *testing.T) {
 	// And the run stops rather than spending the allowance again: the step is
 	// AT_MOST_ONCE, so the plane records that a person has to authorise a
 	// replay instead of retrying on its own (ADR 0002).
-	awaitStepEvent(ctx, t, srv, runID, "refine", scheduler.StepAwaitingReplay)
+	awaitStepEvent(ctx, t, srv, runID, ceilingStep, scheduler.StepAwaitingReplay)
 	events, err = srv.Events(ctx, tenantID, runID)
 	require.NoError(t, err)
 	require.False(t, hasEvent(events, "", runstore.RunCompleted),
@@ -461,6 +465,28 @@ func llmPipeline(id, prompt string) *dholev1.Pipeline {
 }
 
 func loopPipeline(id string, ceiling int) *dholev1.Pipeline {
+	// The body is a FRAGMENT — a dhole.v1.Pipeline in `config.body` — and one
+	// iteration of it is spliced into this run as steps of its own (ADR 0022).
+	// The step inside happens to be a builtin here; the point of the fragment
+	// is that it need not be.
+	body := fmt.Sprintf(`{
+	  "steps": [{
+	    "id": "pass",
+	    "plugin_ref": %q,
+	    "effect_class": "EFFECT_CLASS_IDEMPOTENT",
+	    "config": {
+	      "provider": "stub",
+	      "model": "test-model",
+	      "max_tokens": "4096",
+	      "prompt": "refine the finding"
+	    },
+	    "outputs": [{
+	      "name": "finding",
+	      "type": {"structured": {"schema_id": "dhole:test/finding", "schema": %s}}
+	    }]
+	  }]
+	}`, server.BuiltinLLM, mustJSONString(findingSchema))
+
 	return &dholev1.Pipeline{
 		Id:     id,
 		Tenant: &dholev1.Tenant{Id: tenantID},
@@ -472,16 +498,26 @@ func loopPipeline(id string, ceiling int) *dholev1.Pipeline {
 			// automatically is tokens burnt for the same ending.
 			EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
 			Config: map[string]string{
-				"body":           server.BuiltinLLM,
-				"max_iterations": fmt.Sprint(ceiling),
-				"exit_condition": "state.done",
-				"provider":       "stub",
-				"model":          "test-model",
-				"prompt":         "refine the finding",
+				loop.ConfigBody:          body,
+				loop.ConfigMaxIterations: fmt.Sprint(ceiling),
+				// `state` is keyed by the body step whose output it was, so a
+				// body of several steps has one key each rather than a merge
+				// nobody could read.
+				loop.ConfigExitCondition: "state.pass.done",
 			},
 			Outputs: []*dholev1.Port{findingPort("plan")},
 		}},
 	}
+}
+
+// mustJSONString renders a string as a JSON string literal, which is how a
+// schema travels inside a body document.
+func mustJSONString(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 // --- what these tests need from a plane ------------------------------------

@@ -152,9 +152,16 @@ func (s *Scheduler) dispatchQueued(ctx context.Context, item QueueItem) error {
 	case state.terminal[item.StepID] == "" && state.gated[item.StepID]:
 		return nil
 	}
-	pipeline, err := s.defs.Get(ctx, item.TenantID, state.pipelineID, state.revisionID)
+	// The graph the run ACTUALLY has, not the revision it pinned: a step a
+	// generator or a loop realised exists only in the log, and looking it up
+	// in the authored definition alone found nothing and dropped the item
+	// silently — a body step queued, never dispatched, and a run stuck with an
+	// empty tail to its log. Observed the first time a loop body dispatched to
+	// an engine (ADR 0022): a builtin body never reached this path, because
+	// Advance takes those itself instead of queueing them.
+	pipeline, err := s.graphOf(ctx, item.TenantID, item.RunID, state)
 	if err != nil {
-		return fmt.Errorf("scheduler: run %q pins revision %q: %w", item.RunID, state.revisionID, err)
+		return err
 	}
 	step := stepByID(pipeline, item.StepID)
 	if step == nil {

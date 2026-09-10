@@ -395,6 +395,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
+<<<<<<< HEAD
 - [ ] **A definition file is never collected, and ADR 0023 says it is.** That
       record's Consequences claim "a file removed by an operation is not deleted
       from the CAS: it is unreferenced, and the collector reclaims it when
@@ -461,6 +462,29 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       (`internal/server/startup_order_test.go`). A plane with no factory, or one
       naming a secret it cannot resolve, still fails the step with a named
       reason — never a nil dereference and never a silent skip. No migration.
+=======
+- [ ] **What the plane still does not host, after the dispatcher landed.** Three
+      things left of the original five; (d) and (e) are closed below.
+      (a) `internal/steps/agent` has no `builtin:agent` — the action space, the
+      taint check and the per-action approval are still library-only, because
+      an agent step needs an invoker for the actions it may take and nothing
+      supplies one.
+      (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
+      a model client holds an API key and nothing in this system leases the
+      PLANE a secret. A step on a plane with no factory fails with that reason.
+      (c) CLOSED by ADR 0022: a `builtin:loop` body is a FRAGMENT — a
+      `dhole.v1.Pipeline` in `config.body` — and an iteration splices it into
+      the same run through the generator machinery, so a body may dispatch to
+      engines because a spliced step is an ordinary step. Each pass carries the
+      iteration's own step-id prefix (`refine.3.build`), records
+      `GENERATOR_FRAGMENT_REALISED` as any generator does, and ends in the
+      controller that decides the next pass. `max_iterations` now bounds the
+      SIZE OF THE GRAPH. `internal/steps/loop/splice.go`,
+      `internal/server/builtins.go`, and one hunk each in `scheduler.go`
+      (`Scheduler.Graph`) and `admission.go` (a queued step is looked up in the
+      run's REALISED graph, not the pinned revision — a body step queued for an
+      engine was otherwise dropped silently).
+>>>>>>> wt/loop-splice
 - [x] **(d) An operator could not create a trigger through the contract.**
       Triggers were declared on `server.Config` and read from a YAML file by
       `--triggers`, so creating one needed a shell on the control plane's host
@@ -555,6 +579,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       names it between platform and capability, coarsest cause first, so a step
       that cannot be placed is reported rather than held.
 - [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
+<<<<<<< HEAD
       template does) — CLOSED: `Step.image` reaches `executor.Spec.Image` through the dispatch
       (`JobDispatch.step` already carries the whole step), and it is what the cache key is
       hashed against. **It cannot reference a file from the repository** — CLOSED by ADR 0023,
@@ -592,6 +617,56 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       the run history stop meaning anything (ADR 0008's opening paragraph). 4. **Trigger
       inputs reaching the step.** Already open above. It delivers a commit sha and a payload,
       never file bytes, so it is a prerequisite for option 2 and not an answer on its own.
+=======
+      template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
+      through the dispatch (`JobDispatch.step` already carries the whole step),
+      and it is what the cache key is hashed against. The loop body's syntax is
+      CLOSED by ADR 0022: `config.body` holds a `dhole.v1.Pipeline` as JSON and
+      an iteration is spliced into the run under its own id prefix. Still open
+      in this item: it **cannot reference a file from the repository**. A
+      trigger's bound inputs reach the sink and no run carries them.
+
+      The file reference NEEDS A DECISION, not an implementation, and the
+      reason is that the phrase "the definition's repository" names something
+      this system does not have. Git is a one-way MIRROR OUT of the definition
+      store (ADR 0008, `internal/mirror`): the database is canonical and the
+      repository is an export nobody may push to meaningfully. The git TRIGGER
+      parses a forge's webhook and never clones — there is no fetch, no
+      credential for a source remote, and no checkout anywhere in the tree. So
+      there is no repository to read a file FROM, and adding one is a decision
+      about what a pipeline's source of truth is, which is the shape of an ADR.
+      The options, with what each costs:
+
+      1. **Definition-attached files.** A file is part of the DEFINITION: stored
+         with the revision in `internal/defstore`, content-addressed, and named
+         by a step as an input the plane materialises. Preserves ADR 0001 (the
+         file is declared, the DAG still derives from declarations, no ambient
+         filesystem state) and ADR 0008 (nothing outside the database decides
+         what runs). It is part of the content hash, so it is part of the cache
+         key for free. Costs: an upload path through the API and the CLI, a size
+         ceiling, a `defstore` schema change, and the mirror has to export them.
+         This is the smallest answer that closes the acceptance pipeline's
+         embedded Dockerfile.
+      2. **A source-fetch step.** A builtin step clones a repository at a pinned
+         commit and emits it on an output port; every consumer reads it through
+         an edge. Mechanically ADR 0001-clean, and it is the CI-shaped answer.
+         Costs: source credentials the plane must hold, an effect class that is
+         not pure, and a cache key that is only stable if the step names a
+         commit sha rather than a ref — a branch name is `Step.image`'s tag
+         problem again.
+      3. **Read from the git mirror.** REJECTED, and worth writing down so it is
+         not proposed again: it makes a run's behaviour depend on a repository
+         that is by design not a source of truth, so anyone with push access to
+         the mirror changes what runs, and the approval state and the run
+         history stop meaning anything (ADR 0008's opening paragraph).
+      4. **Trigger inputs reaching the step.** Already open above. It delivers a
+         commit sha and a payload, never file bytes, so it is a prerequisite for
+         option 2 and not an answer on its own.
+
+      Until one is chosen, `acceptance/ci/pipeline.yaml` keeps carrying the
+      Dockerfile's text and `TestCIPipelineBuildsTheCheckedInDockerfile` keeps
+      that copy equal to the checked-in file.
+>>>>>>> wt/loop-splice
 - [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
       Closed: giving up now records `STEP_FAILED` and nothing else, so whether

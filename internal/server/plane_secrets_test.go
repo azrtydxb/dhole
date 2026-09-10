@@ -142,7 +142,29 @@ func llmSecretPipeline(id, prompt, secretName string) *dholev1.Pipeline {
 // call per pass — the case that must redeem once per pass rather than once.
 func loopSecretPipeline(id string, ceiling int, secretName string) *dholev1.Pipeline {
 	p := loopPipeline(id, ceiling)
-	p.GetSteps()[0].GetConfig()["api_key_secret"] = secretName
+
+	// Into the BODY's step, not the controller's config. Since ADR 0022 a loop
+	// body is a spliced fragment and the model call happens in the step inside
+	// it — the controller only decides whether there is another iteration. A
+	// secret named on the controller reaches nothing, which is right: every
+	// step names its own credential, and the loop does not lend its one out.
+	body := map[string]any{}
+	if err := json.Unmarshal([]byte(p.GetSteps()[0].GetConfig()["body"]), &body); err != nil {
+		panic("loopSecretPipeline: the body fixture is not JSON: " + err.Error())
+	}
+	steps, _ := body["steps"].([]any)
+	if len(steps) != 1 {
+		panic("loopSecretPipeline: expected exactly one body step to name the secret")
+	}
+	step, _ := steps[0].(map[string]any)
+	cfg, _ := step["config"].(map[string]any)
+	cfg["api_key_secret"] = secretName
+
+	rewritten, err := json.Marshal(body)
+	if err != nil {
+		panic("loopSecretPipeline: " + err.Error())
+	}
+	p.GetSteps()[0].GetConfig()["body"] = string(rewritten)
 	return p
 }
 
