@@ -30,7 +30,7 @@ steps:
   # to acceptance/ci/Dockerfile.
   - id: source
     name: checkout
-    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"printf %s \\\"$DOCKERFILE\\\" > context\"],\"env\":{\"DOCKERFILE\":\"# The image the CI acceptance pipeline builds.\\n#\\n# It is checked in, and `TestCIPipelineBuildsTheCheckedInDockerfile` requires\\n# that the pipeline's `source` step emits exactly these bytes: a definition\\n# cannot reference a file from the repository \u2014 a step's inputs come from\\n# edges and nothing else (ADR 0001) \u2014 so the text is carried in the step, and\\n# that test is what stops the copy drifting from this file.\\nFROM busybox:1.36\\nCOPY hello /usr/local/bin/hello\\n# Never root: nothing here needs it, and the gate refuses a Dockerfile that\\n# does not say so.\\nUSER 65534:65534\\nENTRYPOINT [\\\"/usr/local/bin/hello\\\"]\\n\"}}"
+    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"printf %s \\\"$DOCKERFILE\\\" > outputs/context\"],\"env\":{\"DOCKERFILE\":\"# The image the CI acceptance pipeline builds.\\n#\\n# It is checked in, and `TestCIPipelineBuildsTheCheckedInDockerfile` requires\\n# that the pipeline's `source` step emits exactly these bytes: a definition\\n# cannot reference a file from the repository \u2014 a step's inputs come from\\n# edges and nothing else (ADR 0001) \u2014 so the text is carried in the step, and\\n# that test is what stops the copy drifting from this file.\\nFROM busybox:1.36\\nCOPY hello /usr/local/bin/hello\\n# Never root: nothing here needs it, and the gate refuses a Dockerfile that\\n# does not say so.\\nUSER 65534:65534\\nENTRYPOINT [\\\"/usr/local/bin/hello\\\"]\\n\"}}"
     effect_class: EFFECT_CLASS_PURE
     outputs:
       - name: context
@@ -42,7 +42,7 @@ steps:
   # not spend them, and the wall-clock assertion is what notices.
   - id: build
     name: build image
-    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\nsleep 5\\nmkdir -p layer/usr/local/bin\\ncp context layer/Dockerfile\\nprintf '#!/bin/sh\\\\necho hello from dhole\\\\n' > layer/usr/local/bin/hello\\nchmod +x layer/usr/local/bin/hello\\ncd layer && find . -type f | sort | xargs sha256sum > ../image\"]}"
+    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\nsleep 5\\nmkdir -p layer/usr/local/bin\\ncp inputs/context layer/Dockerfile\\nprintf '#!/bin/sh\\\\necho hello from dhole\\\\n' > layer/usr/local/bin/hello\\nchmod +x layer/usr/local/bin/hello\\ncd layer && find . -type f | sort | xargs sha256sum > ../outputs/image\"]}"
     effect_class: EFFECT_CLASS_PURE
     inputs:
       - name: context
@@ -59,7 +59,7 @@ steps:
   # layer tree missing either file.
   - id: test
     name: test image
-    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\ngrep -q ' \\\\./Dockerfile$' image\\ngrep -q ' \\\\./usr/local/bin/hello$' image\\nprintf 'files=%s\\\\n' \\\"$(wc -l < image | tr -d ' ')\\\" > report\"]}"
+    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\ngrep -q ' \\\\./Dockerfile$' inputs/image\\ngrep -q ' \\\\./usr/local/bin/hello$' inputs/image\\nprintf 'files=%s\\\\n' \\\"$(wc -l < inputs/image | tr -d ' ')\\\" > outputs/report\"]}"
     effect_class: EFFECT_CLASS_PURE
     inputs:
       - name: image

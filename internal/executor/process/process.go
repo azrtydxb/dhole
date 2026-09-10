@@ -277,6 +277,19 @@ func (s *sandbox) Put(_ context.Context, name string, r io.Reader) error {
 	return nil
 }
 
+// Mkdir creates a directory in the sandbox, with its parents. name is relative
+// to the sandbox root and cannot escape it.
+func (s *sandbox) Mkdir(_ context.Context, name string) error {
+	path, err := resolve(s.root, name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o750); err != nil {
+		return fmt.Errorf("process executor: mkdir %q: %w", name, err)
+	}
+	return nil
+}
+
 // Get reads a file back out of the sandbox. The caller closes the reader.
 func (s *sandbox) Get(_ context.Context, name string) (io.ReadCloser, error) {
 	path, err := resolve(s.root, name)

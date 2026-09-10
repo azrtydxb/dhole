@@ -634,8 +634,10 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       through it. The exchange is now specified in docs/wire-contract.md ("Secrets"), which no
       longer lists redemption as a gap. The conformance case exercises the whole path and its four
       leak checks, and PASSES once the two gaps below are neutralised; on the tree as it stands it
-      still fails on the port layout.
-- [ ] **The port layout on disk is two conventions and neither is written down.** The engine puts an
+      still fails on the port layout. (Both are closed below as of 2026-09-10, and the case now
+      passes outright: `make conformance` is 11/11 for the shipped Go engine and for the reference
+      Python one.)
+- [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So
       `binary-artifact-round-trip` and `secret-redemption` fail with a step that could not write
@@ -643,17 +645,49 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       it, write it into docs/wire-contract.md, and make the engine and the executor agree — the
       sandbox has to CREATE the outputs directory, which no backend does today. Found closing the
       secret-redemption item, 2026-09-10.
-- [ ] **The object store protocol is still unspecified, and tenancy makes it worse.** Every Dhole
+      CLOSED 2026-09-10. The contract is `inputs/<port>` and `outputs/<port>` — the suite's and
+      the reference Python engine's layout, not the shipped engine's — because a step may declare
+      an input and an output with the SAME port name, and flat at the sandbox root the engine
+      materialised the input over the output's path and collected the untouched input back as the
+      step's result: a step that did nothing passed. `docs/wire-contract.md` gains "Port layout on
+      disk"; `executor.Sandbox` gains `Mkdir`, implemented by the process, Kubernetes, containerd
+      and pool backends and asserted by `executortest.Contract`, and the agent creates both
+      directories before the command runs. `TestAnInputAndAnOutputSharingAPortNameDoNotCollide`
+      pins the reason. Every checked-in pipeline that wrote a port at the root moved with it.
+- [x] **The object store protocol is still unspecified, and tenancy makes it worse.** Every Dhole
       store scopes structurally, so an engine's `log_key` resolves under `<tenant>/<key>` and its CAS
       objects under `<algo>/<xx>/<hex>`; the suite assumed a flat directory and the reference Python
       engine writes one. The suite now tries the tenant-scoped and Dhole CAS shapes before the flat
       ones, which unblocked four cases, but that is a harness accommodating two engines rather than a
       contract. Found closing the secret-redemption item, 2026-09-10.
-- [ ] **Nothing carries a step timeout, so `step-timeout` cannot pass.** Neither `JobDispatch` nor
+      CLOSED 2026-09-10 for the SHAPE of a key, which is what tenancy made urgent: an object named
+      by key k for tenant t resolves at `<tenant>/<key>`, and a content-addressed object at
+      `<tenant>/<algo>/<first two hex>/<hex>` — the shipped stores' layout, written into
+      `docs/wire-contract.md` as "The object store". The suite no longer tries a flat path first
+      (an engine writing flat keys passed it and would have served one tenant's log to another),
+      and the reference Python engine now scopes what it writes. The store's PROTOCOL — how an
+      engine reaches it, with what credentials — is still unspecified and stays on the gap list.
+- [x] **Nothing carries a step timeout, so `step-timeout` cannot pass.** Neither `JobDispatch` nor
       `Step` has a timeout field; the conformance suite passes `DHOLE_STEP_TIMEOUT_SECONDS` in
       `JobDispatch.env` and says so as a gap. The Go engine enforces nothing and holds the slot for
       the step's full runtime. This wants a schema field, additively, rather than the engine adopting
       the harness's environment convention. Found closing the secret-redemption item, 2026-09-10.
+      CLOSED 2026-09-10. `Step.timeout_seconds` (field 12, additive) carries it, and
+      `wire.ProtocolVersion` is 3: a bump rather than a silent addition because the field changes
+      what an engine must DO and a plane cannot observe enforcement. The agent bounds `Exec` with
+      it and reports PHASE_FAILED with exit code 137 — a killed step, not a cancellation, which
+      would not be retried — after the authoritative log is flushed.
+      `TestAStepThatOutlivesItsTimeoutIsKilledAndReportedFailedWith137` pins it, and the
+      conformance case sets the field instead of `DHOLE_STEP_TIMEOUT_SECONDS`. Both engines pass
+      11/11.
+- [ ] **The object store has no protocol, only a key shape.** Closing the tenancy half said where
+      an object RESOLVES — `<tenant>/<key>`, and `<tenant>/<algo>/<xx>/<hex>` for a
+      content-addressed one — and left the rest of the store undescribed: how an engine reaches it,
+      what it is addressed by, what credentials it presents. The conformance suite hands an engine
+      a directory in `DHOLE_BLOB_DIR`, which is a harness convention no real deployment can use,
+      and the shipped engine reads `DHOLE_OBJECT_STORE` plus a bucket's worth of variables that
+      appear in no contract. A third-party engine still cannot be pointed at a deployment's store
+      from `docs/wire-contract.md` alone. Found closing the key-shape half, 2026-09-10.
 - [ ] **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside tests — not the API, not the CLI, not the git mirror. So a plugin's declaration can be read through `GetPlugin` and there is no supported way to put one there; the e2e seeder has a `/plugin` route for exactly this reason. Found building Task 27b.
 - [x] **The quota enforcer and the CAS guard are built and unwired.** Task 58's `Enforcer.AdmitRun`/`AdmitStep` and `GuardCAS` are tested but have no call sites: `internal/scheduler` and `internal/cas` belonged to other agents that round. Wire `AdmitStep` into the dispatch loop and `GuardCAS` around the blob store. Note `tenancy` deliberately does not import `scheduler` — the dependency runs the other way — so it mirrors two persistence contracts, guarded by `TestMirroredSchedulerContractsHaveNotDrifted`.
 - [x] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and

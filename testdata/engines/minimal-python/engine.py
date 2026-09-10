@@ -180,13 +180,22 @@ PHASE_SUCCEEDED = 3
 PHASE_FAILED = 4
 PHASE_CANCELLED = 5
 
+# What the contract reserves for a step the engine killed -- a cancellation, a
+# drain that ran out of patience, a timeout -- on every platform.
+KILLED_EXIT_CODE = 137
+
 STREAM_STDOUT = 1
 STREAM_STDERR = 2
 
 CAPABILITY_NETWORK = 1
 CAPABILITY_SECRETS = 2
 
-PROTOCOL_VERSIONS = [1]
+# Version 3 added Step.timeout_seconds, which this engine enforces below.
+# Version 2 is advertised alongside it because the control plane accepts an
+# engine one version behind and an engine should say what it can actually
+# speak; a plane still on 2 sends no timeout and this engine runs the step
+# unbounded, which is exactly what version 2 means.
+PROTOCOL_VERSIONS = [2, 3]
 HEARTBEAT_INTERVAL = 5.0
 REGISTRATION_INTERVAL = 15.0
 
@@ -679,7 +688,7 @@ class Engine:
 
         try:
             for ref in d["inputs"]:
-                self.materialise(ref, workdir)
+                self.materialise(d["tenant"], ref, workdir)
         except Exception as exc:  # noqa: BLE001
             return {"phase": PHASE_FAILED, "error": "materialising inputs: %r" % (exc,)}
 
@@ -694,7 +703,12 @@ class Engine:
                 "error": "redeeming a secret reference: %s" % exc,
             }
 
-        timeout = float(d["env"].get("DHOLE_STEP_TIMEOUT_SECONDS", "0") or 0)
+        # Step.timeout_seconds, protocol version 3. It used to come from
+        # DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env, which was the
+        # conformance suite's convention and not the contract: an environment
+        # variable is a step's own input, so a step could unset the thing
+        # bounding it. Zero means unbounded.
+        timeout = float(d["timeout_seconds"])
         spool = os.path.join(workdir, "step.log")
         seq = Counter()
         with open(spool, "wb") as sink:
@@ -739,11 +753,11 @@ class Engine:
         # The authoritative log is COMPLETE in the store before any terminal
         # status names it.  A reader that acts on the status must never find a
         # half-written log.
-        # GAP: the contract names JobDispatch.output_prefix and
-        # JobStatus.log_key but defines no object store protocol at all.  A
-        # directory is the conformance suite's convention.
+        # GAP: the contract says what a key MEANS -- an object named by key k
+        # lives at <tenant>/<key> -- but still names no object store protocol,
+        # so a directory is the conformance suite's convention.
         log_key = "%s/attempt-%d.log" % (d["output_prefix"], d["attempt"])
-        self.store(log_key, open(spool, "rb").read())
+        self.store(d["tenant"], log_key, open(spool, "rb").read())
 
         with job.lock:
             cancelled, timed_out = job.cancelled, job.timed_out
@@ -757,7 +771,11 @@ class Engine:
             return {
                 "phase": PHASE_FAILED,
                 "log_key": log_key,
-                "exit_code": exit_code,
+                # 137, not the -9 the platform reports for a SIGKILLed
+                # process: a step the ENGINE killed reports one code on every
+                # platform, and a negative one sign-extends to a ten-byte
+                # varint that hangs a decoder that stops early.
+                "exit_code": KILLED_EXIT_CODE,
                 "error": "step timed out after %gs" % timeout,
             }
         if exit_code != 0:
@@ -837,18 +855,19 @@ class Engine:
         except Exception:  # noqa: BLE001
             proc.kill()
 
-    def materialise(self, ref, workdir):
+    def materialise(self, tenant, ref, workdir):
         """A step reads exactly what it declared, at inputs/<port>.
 
-        GAP: ports are in the contract; where they live for a process-executed
-        step is not.  inputs/<port> and outputs/<port> are the suite's layout.
+        inputs/<port> and outputs/<port> are the contract's layout -- see
+        docs/wire-contract.md, "Port layout on disk".  Two directories rather
+        than the sandbox root because a step may declare an input and an output
+        with the same port name, and at the root the input is materialised over
+        the output's path and collected back untouched as the step's result.
         """
         if ref.get("key"):
-            data = self.load(ref["key"])
+            data = self.load(tenant, ref["key"])
         elif ref.get("digest"):
-            data = self.load(
-                "cas/%s/%s" % (ref["digest"][0] or "sha256", ref["digest"][1])
-            )
+            data = self.load(tenant, cas_key(*ref["digest"]))
         else:
             raise ValueError("input %r names neither a key nor a digest" % ref["port"])
         with open(os.path.join(workdir, "inputs", ref["port"]), "wb") as fh:
@@ -866,7 +885,7 @@ class Engine:
             with open(path, "rb") as fh:
                 data = fh.read()
             key = "%s/outputs/%s" % (d["output_prefix"], port)
-            self.store(key, data)
+            self.store(d["tenant"], key, data)
             outputs.append(
                 {
                     "port": port,
@@ -899,15 +918,31 @@ class Engine:
             raise ValueError("the handle for %r was refused" % secret["name"])
         return value
 
-    def store(self, key, data):
-        path = os.path.join(self.blob_dir, key)
+    def store(self, tenant, key, data):
+        """Write an object at <tenant>/<key>, which is where every object lives.
+
+        The scoping is structural rather than a filter applied afterwards:
+        there is no unscoped object, even while one tenant exists.  This engine
+        used to write flat keys, which passed the conformance suite (it tried
+        both shapes) and would have served one tenant's log to another in any
+        real deployment.
+        """
+        path = os.path.join(self.blob_dir, self.scoped(tenant, key))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as fh:
             fh.write(data)
 
-    def load(self, key):
-        with open(os.path.join(self.blob_dir, key), "rb") as fh:
+    def load(self, tenant, key):
+        with open(os.path.join(self.blob_dir, self.scoped(tenant, key)), "rb") as fh:
             return fh.read()
+
+    @staticmethod
+    def scoped(tenant, key):
+        if not tenant:
+            raise ValueError(
+                "the dispatch carries no tenant; every object is tenant-scoped"
+            )
+        return os.path.join(tenant, key)
 
     # -- inbound control ---------------------------------------------------
 
@@ -979,6 +1014,17 @@ class Counter:
             return self.n
 
 
+def cas_key(algo, hex_digest):
+    """Where a content-addressed object lives within a tenant.
+
+    <algo>/<first two hex>/<hex>, so a bucket does not end up with a million
+    objects directly under one prefix.  This engine used to guess
+    "cas/<algo>/<hex>", and the suite accepted both, which is two engines
+    guessing rather than a contract.
+    """
+    return "%s/%s/%s" % (algo or "sha256", hex_digest[:2], hex_digest)
+
+
 def decode_dispatch(data):
     f = parse(data)
     step = parse(one(f, 5, b"") or b"")
@@ -1015,6 +1061,13 @@ def decode_dispatch(data):
         "trace_context": decode_map(f, 13),
         "outputs": [text(parse(p), 1) for p in step.get(6, [])],
         "capabilities": repeated_varint(step, 7),
+        # Step.timeout_seconds, added in protocol version 3. Absent means zero,
+        # which means unbounded.
+        "timeout_seconds": one(step, 12, 0),
+        # Every stored object is tenant-scoped, structurally: an engine that
+        # ignored this wrote one tenant's log where another tenant's key would
+        # resolve.
+        "tenant": text(parse(one(f, 10, b"") or b""), 1),
     }
 
 

@@ -96,6 +96,7 @@ func (f *fakeSandbox) Exec(context.Context, executor.Cmd) (int32, error) {
 }
 
 func (f *fakeSandbox) Put(context.Context, string, io.Reader) error { return nil }
+func (f *fakeSandbox) Mkdir(context.Context, string) error          { return nil }
 
 func (f *fakeSandbox) Get(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil

@@ -134,6 +134,18 @@ type Sandbox interface {
 	Put(ctx context.Context, name string, r io.Reader) error
 	// Get reads a file back out. The caller closes the reader.
 	Get(ctx context.Context, name string) (io.ReadCloser, error)
+	// Mkdir creates a directory in the sandbox under name, a path relative to
+	// the sandbox root, together with any parent it needs. It never escapes
+	// that root, and creating one that already exists is not an error.
+	//
+	// It exists because a step's output ports live under outputs/ (see
+	// docs/wire-contract.md, "Port layout on disk") and nothing else creates
+	// that directory: a step whose command is `... > outputs/copy` failed
+	// with "No such file or directory" on every backend, which reads as a
+	// broken pipeline rather than as a missing sandbox convention. Put
+	// creates the parents of a FILE it is given, and an output port has no
+	// file until the step writes one.
+	Mkdir(ctx context.Context, name string) error
 	// Signal delivers sig to everything the sandbox is currently running. It
 	// is not an error to signal an idle sandbox.
 	Signal(ctx context.Context, sig Signal) error

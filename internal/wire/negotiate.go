@@ -12,7 +12,15 @@ import "fmt"
 // engine speaking version 1 registers without one, which is accepted — the
 // window below is what makes a fleet upgrade gradually — and its tier caches
 // nothing until it is upgraded.
-const ProtocolVersion uint32 = 2
+//
+// Version 3 added Step.timeout_seconds. It is a bump rather than a silent
+// addition because the field changes what an engine must DO, not what it may
+// report: a plane cannot see whether a timeout was enforced, and two engines
+// both calling themselves version 2 while one kills a runaway step and the
+// other holds a slot for its full runtime is exactly what a version number
+// exists to prevent. An engine that negotiated 2 still receives work — the
+// window is what makes a rolling upgrade possible — and runs it unbounded.
+const ProtocolVersion uint32 = 3
 
 // SupportedWindow is how many versions back the control plane accepts. One
 // means "current and previous"; widening it is a deliberate decision, because

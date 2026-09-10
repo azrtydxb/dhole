@@ -36,6 +36,11 @@ is derived from that data flow — there is no ordering to author and no shared
 workspace to inherit ([ADR 0001](../.procoder/adr/0001-typed-content-addressed-dag-replaces-the-shared-mutable.md)).
 The single edge below is the only reason `greet` runs before `shout`.
 
+A step's ports are files: an input port arrives at `inputs/<port>` and whatever
+the step writes to `outputs/<port>` is collected as that output, both relative
+to the directory the command starts in (docs/wire-contract.md, "Port layout on
+disk"). A step that writes to the working directory itself produces nothing.
+
 ```bash
 mkdir -p hello
 cat > hello/pipeline.yaml <<'YAML'
@@ -48,7 +53,7 @@ steps:
     # `command:` is a placeholder scheme carrying the argument vector and
     # environment directly. Real pipelines name a plugin the catalog resolves;
     # see docs/writing-a-plugin.md.
-    plugin_ref: 'command:{"args":["/bin/sh","-c","printf %s \"$GREETING\" > out"],"env":{"GREETING":"hello"}}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","printf %s \"$GREETING\" > outputs/out"],"env":{"GREETING":"hello"}}'
     effect_class: EFFECT_CLASS_PURE
     outputs:
       - name: out
@@ -57,7 +62,7 @@ steps:
             media_type: text/plain
   - id: shout
     name: shout it
-    plugin_ref: 'command:{"args":["/bin/sh","-c","tr a-z A-Z < in > out"]}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","tr a-z A-Z < inputs/in > outputs/out"]}'
     effect_class: EFFECT_CLASS_PURE
     inputs:
       - name: in

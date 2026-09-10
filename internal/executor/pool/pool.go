@@ -449,6 +449,17 @@ func (l *lease) Get(ctx context.Context, name string) (io.ReadCloser, error) {
 	return l.e.sb.Get(ctx, name)
 }
 
+func (l *lease) Mkdir(ctx context.Context, name string) error {
+	if err := l.check(); err != nil {
+		return err
+	}
+	err := l.e.sb.Mkdir(ctx, name)
+	if err != nil {
+		l.markBroken()
+	}
+	return err
+}
+
 func (l *lease) Signal(ctx context.Context, sig executor.Signal) error {
 	if err := l.check(); err != nil {
 		return err

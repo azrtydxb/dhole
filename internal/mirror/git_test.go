@@ -420,6 +420,10 @@ func fullPipeline() *dholev1.Pipeline {
 				// either would export a pipeline that runs somewhere else.
 				Image:      "ghcr.io/dhole/toolchain@sha256:" + strings.Repeat("f", 64),
 				EngineType: "kubernetes",
+				// Protocol version 3's addition: a step that may not run
+				// forever. The round trip has to carry it or a mirrored
+				// pipeline comes back unbounded.
+				TimeoutSeconds: 900,
 			},
 		},
 		Edges: []*dholev1.Edge{

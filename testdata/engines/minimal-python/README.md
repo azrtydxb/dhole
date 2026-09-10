@@ -36,7 +36,8 @@ So the file contains, in order:
    socket, plus the JetStream pull consumer API (`$JS.API.CONSUMER.DURABLE.CREATE`
    and `$JS.API.CONSUMER.MSG.NEXT`) as request/reply.
 3. The engine itself: register, pull dispatches, run the command with
-   `subprocess`, stream logs, publish status, heartbeat, honour `Cancel`.
+   `subprocess`, stream logs, publish status, heartbeat, honour `Cancel`, and
+   kill a step that outlives `Step.timeout_seconds`.
 
 If you would rather have the libraries, `pip install nats-py protobuf` and
 generate `dhole/v1/*_pb2.py` with `buf generate` — the engine would be a third
@@ -50,18 +51,32 @@ about how an engine is configured or what the object store is. These names are
 the conformance suite's convention, and an engine for a real deployment will
 need its own.
 
-| Variable                | Meaning                                               |
-| ----------------------- | ----------------------------------------------------- |
-| `DHOLE_BUS_URL`         | Bus to dial. Engines are outbound-only.               |
-| `DHOLE_ENGINE_ID`       | Identity to register under; names its control subject |
-| `DHOLE_TIER`            | Trust tier — decides which dispatch subjects it takes |
-| `DHOLE_BLOB_DIR`        | Object store root; a key is a path under it           |
-| `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches               |
-| `DHOLE_SECRET_SUBJECT`  | Request/reply subject that redeems a secret handle    |
-| `DHOLE_SLOTS`           | Jobs to run at once                                   |
+| Variable                | Meaning                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `DHOLE_BUS_URL`         | Bus to dial. Engines are outbound-only.                |
+| `DHOLE_ENGINE_ID`       | Identity to register under; names its control subject  |
+| `DHOLE_TIER`            | Trust tier — decides which dispatch subjects it takes  |
+| `DHOLE_BLOB_DIR`        | Object store root; an object lives at `<tenant>/<key>` |
+| `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches                |
+| `DHOLE_SECRET_SUBJECT`  | Request/reply subject that redeems a secret handle     |
+| `DHOLE_SLOTS`           | Jobs to run at once                                    |
 
 A step runs in a fresh working directory holding `inputs/<port>`, and whatever
-it writes to `outputs/<port>` is collected. That layout is a convention too.
+it writes to `outputs/<port>` is collected. That layout IS the contract now —
+see "Port layout on disk" — as is where an object lands in the store: a key `k`
+for tenant `t` resolves at `<tenant>/<key>`, and a content-addressed object at
+`<tenant>/<algo>/<first two hex>/<hex>`. This engine wrote flat keys until the
+contract said otherwise, which worked perfectly with one tenant and would have
+served one tenant's log to another with two.
+
+## Protocol versions
+
+The engine advertises `[2, 3]`. Version 3 added `Step.timeout_seconds`, which
+it enforces with a watchdog; version 2 is advertised alongside because the
+control plane accepts an engine one version behind, and against a plane still
+on 2 no timeout arrives and the step runs unbounded. The timeout used to come
+from `DHOLE_STEP_TIMEOUT_SECONDS` in `JobDispatch.env` — the conformance
+suite's invention, and one a step could have unset for itself.
 
 ## `--ignore-cancel`
 
@@ -80,11 +95,11 @@ stranger cannot get right from the document alone:
   capability enum NUMBERS, each in decimal followed by `\n`, truncated to 16 hex
   characters. Guess differently and the engine subscribes to a subject nothing
   is published on: no work, no error, no clue.
-- **The object store.** `output_prefix` and `log_key` name objects in a store
-  that has no protocol anywhere in the contract.
+- **The object store's protocol.** The contract now says where a key resolves
+  and still says nothing about how an engine REACHES the store: no protocol, no
+  addressing, no credentials. A directory is the suite's convention.
 - **Secret redemption.** "An engine redeems a handle for the value" — on what
   subject, with what message, and what does a refusal look like?
-- **Step timeouts.** There is no timeout field in the schema at all.
 - **The JetStream details.** The stream name, that it is a work queue, that a
   consumer is durable and filtered per capability set, and that an ack is a
   publish to the message's reply subject.

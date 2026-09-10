@@ -523,6 +523,17 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 		_ = sandbox.Release(release)
 	}()
 
+	// Both port directories exist before the command runs, whether or not the
+	// step declared anything. A step whose command is `... > outputs/copy`
+	// exited 1 with "No such file or directory" when nothing created outputs/
+	// first: Put creates the parents of a file it is given, and an output port
+	// has no file until the step writes one.
+	for _, dir := range []string{inputDir, outputDir} {
+		if err := sandbox.Mkdir(ctx, dir); err != nil {
+			return a.failure(d, fmt.Sprintf("creating the %s directory: %s", dir, err))
+		}
+	}
+
 	if err := a.materialise(ctx, tenantID, sandbox, d); err != nil {
 		return a.failure(d, err.Error())
 	}
@@ -544,7 +555,20 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 	}
 	defer sink.discard()
 
-	exitCode, execErr := sandbox.Exec(ctx, executor.Cmd{
+	// The step's own bound, from Step.timeout_seconds (protocol version 3).
+	// An engine that enforces nothing holds its slot and renews its lease for
+	// the step's full runtime, so a runaway step is indistinguishable from a
+	// slow one and nothing ever reclaims the capacity. Zero means unbounded,
+	// which is what every pipeline written before the field carries.
+	execCtx := ctx
+	timeout := time.Duration(d.GetStep().GetTimeoutSeconds()) * time.Second
+	if timeout > 0 {
+		var cancelExec context.CancelFunc
+		execCtx, cancelExec = context.WithTimeout(ctx, timeout)
+		defer cancelExec()
+	}
+
+	exitCode, execErr := sandbox.Exec(execCtx, executor.Cmd{
 		Args:   d.GetCommand(),
 		Env:    stepEnv,
 		Stdout: sink.writer(dholev1.Stream_STREAM_STDOUT),
@@ -561,6 +585,20 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 	logKey := logKeyFor(d)
 	if err := sink.flush(ctx, a.cfg.Blobs, tenantID, logKey); err != nil {
 		return a.failure(d, "writing the authoritative log: "+err.Error())
+	}
+
+	// A step the engine killed at its timeout is a FAILURE, not a
+	// cancellation: a cancellation says an operator asked for this and is not
+	// retried, and a step that ran out of time is exactly the kind that its
+	// effect class may want retried. The check is here, after the log is
+	// flushed, so the evidence of the timed-out attempt is durable before its
+	// status is published. ctx.Err() distinguishes this engine's own deadline
+	// from a shutdown or a Cancel, which the caller reports for itself.
+	if timeout > 0 && errors.Is(execCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		status := a.failure(d, fmt.Sprintf("step timed out after %s", timeout))
+		status.ExitCode = killedExitCode
+		status.LogKey = logKey
+		return status
 	}
 
 	if execErr != nil {
@@ -588,7 +626,7 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 	return status
 }
 
-// materialise puts every declared input into the sandbox under its port name. A
+// materialise puts every declared input into the sandbox at inputs/<port>. A
 // step never inherits ambient filesystem state (ADR 0001): what it can read is
 // exactly what it declared.
 func (a *Agent) materialise(ctx context.Context, tenantID string, sandbox executor.Sandbox, d *dholev1.JobDispatch) error {
@@ -597,7 +635,7 @@ func (a *Agent) materialise(ctx context.Context, tenantID string, sandbox execut
 		if err != nil {
 			return fmt.Errorf("fetching input %q: %w", in.GetPort(), err)
 		}
-		err = sandbox.Put(ctx, in.GetPort(), r)
+		err = sandbox.Put(ctx, path.Join(inputDir, in.GetPort()), r)
 		closeErr := r.Close()
 		if err != nil {
 			return fmt.Errorf("placing input %q: %w", in.GetPort(), err)
@@ -628,7 +666,7 @@ func (a *Agent) collect(ctx context.Context, tenantID string, sandbox executor.S
 	ports := d.GetStep().GetOutputs()
 	outputs := make([]*dholev1.OutputRef, 0, len(ports))
 	for _, port := range ports {
-		r, err := sandbox.Get(ctx, port.GetName())
+		r, err := sandbox.Get(ctx, path.Join(outputDir, port.GetName()))
 		if err != nil {
 			return nil, fmt.Errorf("reading output %q: %w", port.GetName(), err)
 		}
@@ -697,6 +735,27 @@ func outcomeOf(status *dholev1.JobStatus) (string, error) {
 		return obs.OutcomeFailed, err
 	}
 }
+
+// inputDir and outputDir are the port layout on disk, from
+// docs/wire-contract.md, "Port layout on disk": an input port's bytes appear at
+// inputs/<port> and an output port's are read back from outputs/<port>, both
+// relative to the sandbox root the step's command runs in.
+//
+// They are two directories rather than the sandbox root because a step may
+// declare an input and an output with the SAME port name — an in-place
+// transform is the ordinary case — and at the root the engine materialised the
+// input over the output's path and then collected the untouched input back as
+// the step's result. A step that did nothing at all passed.
+const (
+	inputDir  = "inputs"
+	outputDir = "outputs"
+)
+
+// killedExitCode is what the contract reserves for a step the engine killed —
+// a cancellation, a drain that ran out of patience, or a timeout — on every
+// platform and every backend, so one code means one thing wherever the step
+// ran (docs/wire-contract.md, "Exit codes").
+const killedExitCode int32 = 137
 
 // logKeyFor names the authoritative log under the dispatch's output prefix, per
 // attempt: a retry must not overwrite the evidence of the attempt before it.

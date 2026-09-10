@@ -94,6 +94,20 @@ message Step {
   // could not be expressed at all. Both the planner and the dispatcher read
   // it straight off the step, so the placement they compute cannot disagree.
   string engine_type = 11;
+  // How long this step may run before the engine kills it, in seconds. Zero
+  // means unbounded, which is the only compatible default: every pipeline
+  // written before this field existed carries none.
+  //
+  // It is a field rather than an environment variable because enforcement is
+  // an ENGINE obligation and an environment variable is a step's own input:
+  // a step could unset it, and an engine reading one would be taking its
+  // timeout from the thing it is timing. The conformance suite passed
+  // DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env for exactly as long as
+  // there was no field, and said so as a gap.
+  //
+  // Added in protocol version 3. An engine that negotiated 2 ignores it and
+  // runs the step unbounded — see docs/wire-contract.md, "Step timeouts".
+  uint32 timeout_seconds = 12;
 }
 
 // Edge connects one step's output port to another step's input port. The DAG

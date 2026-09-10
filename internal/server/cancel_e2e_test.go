@@ -27,7 +27,7 @@ func sleeper(id string) *dholev1.Pipeline {
 		Steps: []*dholev1.Step{{
 			Id:          "slow",
 			Name:        "slow",
-			PluginRef:   `command:{"args":["/bin/sh","-c","sleep 600 > out"]}`,
+			PluginRef:   `command:{"args":["/bin/sh","-c","sleep 600 > outputs/out"]}`,
 			EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
 			Outputs: []*dholev1.Port{{
 				Name: "out",

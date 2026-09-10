@@ -200,7 +200,11 @@ maximum on every dispatch would fail every step on every engine it had just
 admitted for being one version behind.
 
 Within a major version, schema changes are additive only. Fields are never
-renumbered, never removed, and never change meaning.
+renumbered, never removed, and never change meaning. A field whose arrival
+changes what an engine must DO, rather than what it may report, comes with a
+version bump so that a plane can tell the two behaviours apart: version 2 added
+`EngineRegistration.environment_identity`, version 3 added
+`Step.timeout_seconds`.
 
 ## Environment identity
 
@@ -341,6 +345,103 @@ The subject is a deployment's to move: an engine that is told a different one
 uses that instead. Dhole's engine reads `DHOLE_SECRET_SUBJECT` and falls back to
 `secret.redeem`.
 
+## Port layout on disk
+
+A step declares ports; this is where their bytes are, and it is the same on
+every backend. Both paths are relative to the sandbox root, which is the
+directory the step's command starts in.
+
+| What                   | Where            |
+| ---------------------- | ---------------- |
+| An input port's bytes  | `inputs/<port>`  |
+| An output port's bytes | `outputs/<port>` |
+
+**Both directories exist before the command runs**, whether or not the step
+declared anything in them. A step whose command is `cat inputs/src >
+outputs/copy` fails with "No such file or directory" if the engine waits for
+the step to create `outputs/` itself, and that failure reads as a broken
+pipeline rather than as a missing convention.
+
+They are two directories rather than the sandbox root because **a step may
+declare an input and an output with the same port name** — an in-place
+transform is the ordinary case. Flat, the engine materialises the input over
+the output's path, the step overwrites it or does not, and the engine collects
+the file back as the result: a step that did nothing passes, with its own input
+reported as its output. That is the failure this layout exists to prevent, and
+it is invisible in every log.
+
+An engine writes nothing else into either directory: what a step can read is
+exactly what it declared (ADR 0001). An output port with no file at
+`outputs/<port>` when the command exits is a FAILED step naming the port, never
+a success with an empty artifact.
+
+## The object store
+
+`JobDispatch.output_prefix`, `JobDispatch.inputs[].key` and `JobStatus.log_key`
+name objects in a store. This document does not say what that store IS — a
+bucket, a directory, a service — and deliberately: an engine is configured with
+one and a deployment chooses. What it does say is where a key resolves, because
+two engines that disagree about that write objects nobody can find.
+
+**Every object is tenant-scoped, structurally.** An object named by key `k` for
+the tenant in `JobDispatch.tenant` lives at:
+
+```
+<tenant>/<key>
+```
+
+Not a filter applied after a lookup, and not optional while only one tenant
+exists: there is no unscoped object. An engine that writes a flat key works
+perfectly in a one-tenant deployment and serves one tenant's log to another in
+any other, which is the kind of bug that is found by an auditor rather than by
+a test.
+
+**A content-addressed object** — one an `OutputRef` names by digest rather than
+by key — lives at:
+
+```
+<tenant>/<algo>/<first two hex characters>/<hex>
+```
+
+for example `acme/sha256/9f/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08`.
+The two-character fan-out is there so a bucket does not accumulate a million
+objects directly under one prefix.
+
+An engine that reports an output by `key` writes it under the dispatch's
+`output_prefix`; one that reports it by `digest` writes it content-addressed.
+Either is acceptable; both are read back by the rules above.
+
+## Step timeouts
+
+`Step.timeout_seconds` is how long a step may run before the engine kills it.
+Zero, and absent, mean unbounded.
+
+An engine that enforces nothing holds its slot and keeps renewing its lease for
+the step's full runtime, so a runaway step is indistinguishable from a slow one
+and nothing ever reclaims the capacity. Enforcement is the ENGINE's, because it
+is the only party that can see the process.
+
+- A step killed at its timeout is **`PHASE_FAILED`**, not `PHASE_CANCELLED`.
+  Cancellation means an operator asked for this and is not retried; a step that
+  ran out of time is exactly the kind an effect class may want retried.
+- Its `exit_code` is **137**, like every other step the engine killed (see Exit
+  codes), on every platform.
+- The authoritative log is written first. The evidence of a timed-out attempt
+  is the thing anybody investigating one reads.
+
+The bound is a schema field and not an environment variable on purpose: an
+environment variable is a step's own input, so a step could unset the thing
+timing it, and an engine reading one would take its timeout from the process it
+is timing.
+
+`Step.timeout_seconds` arrived in **protocol version 3**. An engine that
+negotiated version 2 receives the field, does not understand it, and runs the
+step unbounded — which is what accepting an engine one version behind costs,
+and why the version was bumped rather than the field added silently: a plane
+cannot observe enforcement, and two engines both calling themselves version 2
+while one kills a runaway step and the other does not is exactly what a version
+number exists to prevent.
+
 ## Logs
 
 Two copies of a step's output exist, and they have different jobs.
@@ -447,24 +548,12 @@ the reference Go engine does that this document does not say, so a stranger
 cannot implement it. They are listed rather than hidden, and the conformance
 suite's own choices are named so a second implementer makes the same ones.
 
-- **The object store protocol.** `JobDispatch.output_prefix` and
-  `JobStatus.log_key` name objects in a store this document never describes:
-  no protocol, no addressing, no credentials. The conformance suite uses a
-  directory named by `DHOLE_BLOB_DIR`. It also has to guess at the SHAPE of a
-  key: Dhole's own stores scope every object by tenant structurally, so their
-  keys resolve under `<tenant>/<key>`, and the suite now tries that before the
-  flat path the reference Python engine writes. Neither is the contract, and a
-  third engine will guess a third way until this is written down. The
-  content-addressed layout is unspecified in the same way — Dhole writes
-  `<algo>/<first two hex>/<hex>`, the suite also accepts `cas/<algo>/<hex>`.
-- **Step timeouts.** Neither `JobDispatch` nor `Step` carries one, so the
-  obligation to enforce a timeout cannot be met from the schema. The conformance
-  suite passes `DHOLE_STEP_TIMEOUT_SECONDS` in `JobDispatch.env`.
+- **The object store's protocol.** The object store above says where a key
+  RESOLVES and says nothing about how an engine reaches the store: no protocol,
+  no addressing, no credentials. The conformance suite uses a directory named
+  by `DHOLE_BLOB_DIR`, which is a harness convention and not this contract.
 - **Engine configuration.** Bus URL, engine id, tier and slot count are not
   described, so an engine cannot be started from this document alone.
-- **Port layout on disk.** For a step executed as a process, nothing says where
-  an input port's bytes appear or where an output port's are read from. The
-  conformance suite uses `inputs/<port>` and `outputs/<port>`.
 - **Fence ordering.** Fence tokens are described as opaque, and the control
   plane compares them by age. Ordering an opaque string is undefined; an engine
   only ever needs equality, and this document should say so explicitly.

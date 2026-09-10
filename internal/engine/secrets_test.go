@@ -215,7 +215,7 @@ func TestARedeemedValueNeverReachesALogChunkTheAuthoritativeLogAnOutputRefOrASta
 	// stdout as well as the file, so the live subject and the authoritative
 	// log both genuinely carry the step's output while carrying no secret.
 	d := newDispatch("run-secret-leak", "step", "/bin/sh", "-c",
-		`printf '%s' "$DHOLE_TEST_SECRET" | tr 'A-Za-z' 'N-ZA-Mn-za-m' | tee proof`)
+		`printf '%s' "$DHOLE_TEST_SECRET" | tr 'A-Za-z' 'N-ZA-Mn-za-m' | tee outputs/proof`)
 	d.Step.Capabilities = []dholev1.Capability{dholev1.Capability_CAPABILITY_SECRETS}
 	d.Step.Outputs = []*dholev1.Port{{Name: "proof"}}
 	d.Secrets = []*dholev1.SecretRef{{
