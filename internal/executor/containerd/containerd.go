@@ -527,7 +527,15 @@ func (e *Executor) Acquire(ctx context.Context, spec executor.Spec) (executor.Sa
 	if err != nil {
 		return nil, err
 	}
-	sb := &sandbox{exec: e, id: id, container: container, env: spec.Env, workDir: sandboxRoot}
+	sb := &sandbox{
+		exec: e, id: id, container: container, env: spec.Env, workDir: sandboxRoot,
+		// The image THIS sandbox was created from, as e.image(spec.Image)
+		// resolved it. The executor's own identity answers for an EMPTY spec,
+		// which stops being the same question once a step names its own image:
+		// one executor running several images would otherwise report one
+		// digest for all of them and collide their cache keys.
+		image: e.image(spec.Image),
+	}
 
 	// The init process's own IO goes nowhere: it prints nothing, and a FIFO
 	// nobody reads fills up and blocks the container it belongs to.
@@ -594,9 +602,27 @@ type sandbox struct {
 	task      client.Task
 	env       map[string]string
 	workDir   string
+	// image is what this sandbox actually runs, which is what its environment
+	// identity has to describe.
+	image string
+
+	identityOnce sync.Once
+	identity     string
+	identityErr  error
 
 	mu       sync.Mutex
 	released bool
+}
+
+// EnvironmentIdentity is the digest of the image THIS sandbox runs.
+//
+// Resolved once and memoised: it is a registry round trip, and a step asks for
+// it on the path that decides whether its result may be cached.
+func (s *sandbox) EnvironmentIdentity() (string, error) {
+	s.identityOnce.Do(func() {
+		s.identity, s.identityErr = resolveDigest(s.image, s.exec.insecure)
+	})
+	return s.identity, s.identityErr
 }
 
 // Exec runs a command inside the sandbox container as an exec process. A
