@@ -59,6 +59,10 @@ const (
 	BuiltinLLM = BuiltinScheme + "llm"
 	// BuiltinLoop repeats another builtin step type up to a hard ceiling.
 	BuiltinLoop = BuiltinScheme + "loop"
+	// BuiltinAgent gives a model a bounded loop over Dhole's OWN contract:
+	// start a run, read a run, decide an approval gate, apply an operation to
+	// a pipeline, and nothing else (ADR 0025). See agent.go.
+	BuiltinAgent = BuiltinScheme + "agent"
 )
 
 // builtinWorkers is how many builtin steps run at once.
@@ -112,6 +116,12 @@ type builtins struct {
 	resume approval.Resumer
 	models ModelFactory
 	calls  *llm.Recorder
+	// tokens mints the short-lived credential an agent step acts under, and
+	// apiBase is where it presents it. See agent.go: an agent is an ordinary
+	// authenticated client of this plane's own listener, so it needs both a
+	// token of its own and the address every other client uses.
+	tokens  *identity.Local
+	apiBase func() string
 	// leases is what makes a builtin step recoverable. A step this plane runs
 	// is leased exactly as a step dispatched to an engine is, because the
 	// sweeper that recovers a dead holder knows nothing else: before this, a
@@ -236,6 +246,8 @@ func (b *builtins) execute(ctx context.Context, job builtinJob) (lease.Token, er
 		return b.attempt(ctx, job, b.callModel)
 	case BuiltinLoop:
 		return b.attempt(ctx, job, b.iterate)
+	case BuiltinAgent:
+		return b.attempt(ctx, job, b.runAgent)
 	default:
 		return lease.Token{}, fmt.Errorf("no step type is registered for %q", ref)
 	}
@@ -726,11 +738,13 @@ func newBuiltins(
 	if err != nil {
 		return nil, err
 	}
+	principals := identity.NewSQLStoreWithDialect(in.db, in.dialect)
 	return &builtins{
 		log:       log,
 		store:     in.store,
 		cas:       in.cas,
-		approvers: identity.NewSQLStoreWithDialect(in.db, in.dialect),
+		approvers: principals,
+		tokens:    identity.NewLocal(principals),
 		resume:    resume,
 		models:    models,
 		calls:     calls,

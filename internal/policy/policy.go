@@ -69,6 +69,27 @@ type Input struct {
 	// on advertises. They are NOT the step's own: a privileged ENGINE is a
 	// host-level foothold whatever the step asked for.
 	EngineCapabilities []dholev1.Capability
+
+	// The principal keys (ADR 0025). Taint follows the CREDENTIAL as well as
+	// the value: an agent step acts through the contract as a principal of
+	// its tenant, and its token is marked untrusted, so a rule can refuse an
+	// at-most-once effect or an unsigned plugin to an agent while allowing it
+	// to a person — without every call having to carry provenance.
+	//
+	// They were added because there was no expression that told the two
+	// apart. A rule naming a key the input map does not hold is an evaluation
+	// error, which denies, so before these existed an agent and a person were
+	// admitted together or refused together and the ADR's own example could
+	// not be written.
+
+	// PrincipalKind is the kind of principal asking — identity.Kind's value,
+	// "user", "service" or "agent" — or empty when the decision is about a
+	// definition rather than a call.
+	PrincipalKind string
+	// PrincipalUntrusted reports whether the credential itself is untrusted.
+	// It is separate from Tainted, which is about the DATA: an agent that has
+	// read nothing at all still holds an untrusted token.
+	PrincipalUntrusted bool
 }
 
 // Decision is the answer, plus enough of the reasoning to answer for it later.

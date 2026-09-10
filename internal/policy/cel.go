@@ -39,6 +39,9 @@ const (
 	keyTainted            = "tainted"
 	keyTaintSources       = "taint_sources"
 	keyEngineCapabilities = "engine_capabilities"
+
+	keyPrincipalKind      = "principal_kind"
+	keyPrincipalUntrusted = "principal_untrusted"
 )
 
 // newEnv builds the CEL environment every policy is compiled in.
@@ -89,6 +92,9 @@ func inputMap(in Input) map[string]any {
 		keyTainted:            in.Tainted,
 		keyTaintSources:       sources,
 		keyEngineCapabilities: engineCaps,
+
+		keyPrincipalKind:      in.PrincipalKind,
+		keyPrincipalUntrusted: in.PrincipalUntrusted,
 	}
 }
 

@@ -134,6 +134,16 @@ type Dispatch struct {
 	Inputs map[string]*structpb.Value
 	// InputRefs are the outputs of upstream steps feeding this one.
 	InputRefs []*dholev1.OutputRef
+
+	// PrincipalKind and PrincipalUntrusted are WHO is dispatching, and they
+	// reach the rule as `input.principal_kind` and
+	// `input.principal_untrusted` (ADR 0025). Taint follows the credential as
+	// well as the value: an agent acting through the contract holds an
+	// untrusted token whether or not the data it read carries a mark, and a
+	// check that looked only at the inputs would let an agent that had read
+	// nothing take any action at all.
+	PrincipalKind      string
+	PrincipalUntrusted bool
 }
 
 // The decision itself is Checker.Check, in policy.go: whether tainted data may

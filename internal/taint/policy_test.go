@@ -269,3 +269,50 @@ func TestTaintCheckRefusesAnUnscopedDispatch(t *testing.T) {
 	require.ErrorIs(t, err, policy.ErrTenantRequired)
 	require.False(t, decision.Allow)
 }
+
+// TestATaintCheckCarriesTheAskingPrincipalIntoTheRule is the other half of
+// ADR 0025's "taint follows the credential": the taint checker is the one
+// place an agent step asks whether it may act, so a rule that cannot see WHO
+// is acting cannot express the ADR's own example — refuse an at-most-once
+// effect to an agent while allowing it to a person.
+//
+// The dispatch below carries no tainted value at all. That is deliberate: the
+// credential's own untrustworthiness is not the data's, and a check that only
+// looked at the inputs would let an agent take any action it liked as long as
+// it had read nothing.
+func TestATaintCheckCarriesTheAskingPrincipalIntoTheRule(t *testing.T) {
+	ctx := context.Background()
+
+	src := policy.NewStaticSource()
+	require.NoError(t, src.Set("standard", policy.TierPolicy{
+		Revision: "rev1",
+		Rules: []policy.Rule{{
+			ID:         "agents-do-not-deploy",
+			Expression: `input.principal_kind != "agent" || input.effect_class != "AT_MOST_ONCE"`,
+			Reason:     "an agent may not take an at-most-once action",
+		}},
+	}))
+	checker, err := taint.NewChecker(src, policy.DiscardAudit{})
+	require.NoError(t, err)
+
+	dispatch := taint.Dispatch{
+		TenantID:    "tenant-a",
+		Tier:        "standard",
+		Subject:     "start_run",
+		EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
+	}
+
+	person := dispatch
+	person.PrincipalKind = "user"
+	decision, err := checker.Check(ctx, person)
+	require.NoError(t, err)
+	require.True(t, decision.Allow, "a person was refused by a rule about agents")
+
+	robot := dispatch
+	robot.PrincipalKind = "agent"
+	robot.PrincipalUntrusted = true
+	decision, err = checker.Check(ctx, robot)
+	require.NoError(t, err)
+	require.False(t, decision.Allow, "an agent took an action the same rule denies it")
+	require.Equal(t, "agents-do-not-deploy", decision.Rule)
+}
