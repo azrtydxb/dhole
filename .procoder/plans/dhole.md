@@ -645,26 +645,31 @@ Interfaces: produces `defstore.ResolveLockfile(ctx, tenantID string, p *dholev1.
 
 ## Task 36: containerd/OCI executor
 
-**Blocked on this machine, not on the design.** containerd needs a container
-runtime, and this machine's Docker daemon does not start; k3s's own containerd
-is reachable only from a privileged pod on a node. Task 37's Kubernetes
-executor already covers the container case and passes the identical shared
-contract against a real cluster, so the interface claim in ADR 0006 is tested;
-what remains untested is containerd specifically. Do NOT implement this
-against a fake client — Task 37 found two real bugs (SPDY hanging forever, a
-liveness probe adding five seconds to every signalled exec) that a fake
-clientset would have hidden, and a containerd backend written against a mock
-would carry the same class of defect into production.
+**Unblocked by running it on a node.** This machine still has no containerd,
+but k3s's own is reachable from a privileged pod with the socket, the FIFO
+directory and the host CA bundle mounted in, and that is where the whole
+shared contract was run: nine subtests, all passing in 10s against
+containerd 2.1.5 on an arm64 k3s node, plus the four tests below. Refusing to
+write it against a fake was right — every defect found here was invisible to
+one: a custom registry-hosts config silently drops containerd's authorizer and
+every pull comes back 401; a k3s node advertises a stargz snapshotter with no
+init error that cannot create a container; `oci.WithImageConfig` temp-mounts
+the rootfs on the CLIENT, so it fails for any executor not sharing the
+daemon's filesystem; containerd holds stdin open until `CloseIO`, so `cat >
+file` never sees EOF; and containerd cannot tear down an exec whose stdio a
+step's abandoned grandchild still holds, so a cancellation that sweeps the
+process tree only after reading the exit status never sweeps at all and Exec
+returns fifteen seconds late.
 
 Files: `internal/executor/containerd/containerd.go`, `internal/executor/containerd/identity.go`, `internal/executor/containerd/containerd_test.go`
 Interfaces: produces `containerd.New(cfg containerd.Config) (executor.Executor, error)` satisfying Task 9's interface; `Executor.EnvironmentIdentity() (string, error)` returning the image digest.
 
-- [ ] Write `internal/executor/containerd/containerd_test.go` calling Task 9's `executorContract` as `TestContainerdExecutorContract` against a containerd socket from `DHOLE_TEST_CONTAINERD_SOCK`, skipping when unset. Run — expect FAIL with "undefined: containerd.New".
-- [ ] Add `TestEnvironmentIdentityIsImageDigestNotTag` asserting `EnvironmentIdentity` returns the resolved digest and changes when the image content changes under the same tag.
-- [ ] Add `TestPrivilegedIsRefusedUnlessCapabilityAdvertised` asserting a spec requesting `PRIVILEGED` against an executor not advertising it returns an error containing "capability not advertised".
-- [ ] Add `TestRootlessByDefault` asserting the container's uid inside the sandbox is non-zero unless `PRIVILEGED` is granted.
-- [ ] Implement `internal/executor/containerd/containerd.go` using `containerd/containerd/v2` client — pull by digest, create a rootless container, stream stdout/stderr, propagate `SIGTERM` then `SIGKILL` after a grace period — and `identity.go` resolving image digests.
-- [ ] Add containerd to CI as a service and run `make test-integration` — expect PASS. Commit.
+- [x] Write `internal/executor/containerd/containerd_test.go` calling Task 9's `executorContract` as `TestContainerdExecutorContract` against a containerd socket from `DHOLE_TEST_CONTAINERD_SOCK`, skipping when unset. Run — expect FAIL with "undefined: containerd.New".
+- [x] Add `TestEnvironmentIdentityIsImageDigestNotTag` asserting `EnvironmentIdentity` returns the resolved digest and changes when the image content changes under the same tag. It pushes two different images to one tag on a real registry running in the test process, so it needs no containerd and runs everywhere; mutating the digest to a tag, and to a constant digest, both fail it.
+- [x] Add `TestPrivilegedIsRefusedUnlessCapabilityAdvertised` asserting a spec requesting `PRIVILEGED` against an executor not advertising it returns an error containing "capability not advertised". The socket it names does not exist, so the refusal is proved to come from the capability check and not from an unreachable daemon.
+- [x] Add `TestRootlessByDefault` asserting the container's uid inside the sandbox is non-zero unless `PRIVILEGED` is granted, and `TestPrivilegedGrantsRootWhenItIsAdvertised` for the other half. Both run against the k3s node's containerd; dropping `oci.WithUIDGID` fails the first.
+- [x] Implement `internal/executor/containerd/containerd.go` using `containerd/containerd/v2` client — pull by digest, create a rootless container, stream stdout/stderr, propagate `SIGTERM` then `SIGKILL` after a grace period — and `identity.go` resolving image digests. Signals sweep the container's process table rather than the task's cgroup, so a signalled sandbox survives to run the next step of a pipeline lease.
+- [~] Add containerd to CI as a service and run `make test-integration` — expect PASS. Commit. **PARTIAL.** `.github/workflows/ci.yml` gained a `containerd executor` job on both architectures — it starts the daemon the ubuntu runners already ship (a service container cannot expose its socket and FIFO directory at the paths the shim opens them by), runs the package as root, and fails the job if the contract only skipped. `Makefile` passes `DHOLE_TEST_CONTAINERD_SOCK` through `test-integration`. What is NOT closed: that job has never executed — GitHub Actions cannot be run from here — and `make test-integration` as a whole was not run, only `go test ./internal/executor/containerd/...` against the k3s node's containerd. Tick this when a CI run is green.
 
 ## Task 37: Kubernetes executor
 
@@ -708,7 +713,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
 - [x] Write `internal/executor/pool/pool_test.go` asserting `TestPoolReusesSandboxAcrossRuns`: two runs with the same pool key receive the same sandbox id, and a file written by the first is visible to the second. Run — expect FAIL with "undefined: pool.New".
 - [x] Add `TestReapReleasesIdleSandboxes` asserting a sandbox idle beyond the threshold is released and the next acquire creates a new one.
 - [x] Add `TestPooledSandboxIsReportedNonCacheable` asserting Task 16's `cache.Eligible` is consulted and returns false for every step run from the pool.
-- [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — SKIPPED, and honestly. It needs a reachable containerd with the stargz snapshotter AND Task 36's `containerd.New` to drive the pull; this machine has neither, and the zot registry alone is not enough. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
+- [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.
 

@@ -20,6 +20,12 @@ GO_DIRS     := $(shell find . -name '*.go' -not -path './web/*' -exec dirname {}
 # A kubeconfig for a cluster the Kubernetes executor may create and delete pods
 # in. It creates and destroys its own namespace; unset, its tests skip.
 DHOLE_TEST_KUBECONFIG     ?=
+# A containerd socket the containerd executor may create and delete containers
+# on, in its own containerd namespace. Unset, its tests skip. The process
+# running the tests needs write access to the socket AND to the FIFO directory
+# containerd creates exec streams in (/run/containerd/fifo), which on a
+# packaged containerd means root.
+DHOLE_TEST_CONTAINERD_SOCK ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
 .PHONY: check web-check web-build web-e2e test test-race test-integration conformance build clean
@@ -86,6 +92,7 @@ test-integration:
 	DHOLE_TEST_OCI_REGISTRY=$(DHOLE_TEST_OCI_REGISTRY) \
 	go test $(GO_PKGS) -tags=integration
 	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
+	DHOLE_TEST_CONTAINERD_SOCK='$(DHOLE_TEST_CONTAINERD_SOCK)' \
 	go test ./... -tags=integration
 
 ## acceptance-*: the three acceptance pipelines — the definition of done for

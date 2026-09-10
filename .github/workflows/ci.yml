@@ -48,6 +48,65 @@ jobs:
       - name: conformance
         run: make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
 
+  # The containerd executor (Task 36). It is a job of its own rather than a
+  # step in the gate because it needs a container runtime and root: the ubuntu
+  # runners already run containerd for Docker, so the "service" here is the
+  # daemon the image ships with rather than a service container — a service
+  # container could not expose its socket and its FIFO directory to the runner
+  # at the paths the shim opens them by.
+  #
+  # It runs on every push rather than nightly because it is the only place the
+  # containerd backend is executed at all: without it, internal/executor/
+  # containerd is code that compiles and has never run, and the whole point of
+  # the shared contract is that a backend is held to it by something other than
+  # reading.
+  containerd:
+    name: containerd executor (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both architectures, for the same reason the gate runs on both: an
+        # engine is shipped for each, and a runtime is exactly the kind of
+        # dependency that behaves differently on one of them.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: start containerd
+        run: |
+          set -euo pipefail
+          sudo systemctl start containerd
+          # A socket that is not there yet is the difference between a real run
+          # and a silent skip, so wait for it and fail loudly if it never came.
+          for _ in $(seq 1 30); do
+            [ -S /run/containerd/containerd.sock ] && break
+            sleep 1
+          done
+          sudo ctr version
+      # sudo, because the socket and the exec FIFOs under /run/containerd are
+      # root's. Only this package is run as root: the rest of the suite has
+      # tests about unreadable files, and root can read them.
+      - name: executor contract
+        run: |
+          sudo --preserve-env=PATH env \
+            DHOLE_TEST_CONTAINERD_SOCK=/run/containerd/containerd.sock \
+            "$(command -v go)" test ./internal/executor/containerd/... -count=1 -v -timeout 20m \
+            2>&1 | tee containerd-test.log
+      # These tests skip themselves when the socket is missing, and a skip is
+      # invisible in a green job. This job exists to run them.
+      - name: refuse a run that only skipped
+        run: |
+          set -euo pipefail
+          if grep -q -- '--- SKIP: TestContainerdExecutorContract' containerd-test.log; then
+            echo "::error::the containerd executor contract skipped; this job exists to run it, not to report a pass nobody earned"
+            exit 1
+          fi
+
   web:
     name: web
     runs-on: ubuntu-latest
