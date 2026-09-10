@@ -393,10 +393,33 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
 - [ ] **What the plane still does not host, after the dispatcher landed.** Three
       things left of the original five; (d) and (e) are closed below.
-      (a) `internal/steps/agent` has no `builtin:agent` — the action space, the
-      taint check and the per-action approval are still library-only, because
-      an agent step needs an invoker for the actions it may take and nothing
-      supplies one.
+      (a) DONE. `internal/steps/agent` had no `builtin:agent` — the action
+      space, the taint check and the per-action approval were library-only,
+      because an agent step needs an invoker for the actions it may take and
+      nothing supplied one. Closed by ADR 0025 and
+      `internal/steps/agent/contract.go` + `internal/server/agent.go`: an agent
+      acts ONLY through Dhole's own public API, as a principal of its tenant,
+      and its action space is the contract — `start_run`, `read_run`,
+      `decide_approval`, `apply_operation`, and nothing else. The invoker is a
+      Connect client over the plane's OWN loopback listener carrying a token
+      minted for the agent's subject (kind `agent`, 15 minutes), NOT a direct
+      call into `api.Server`: ADR 0013's point is that there is no privileged
+      path, and an in-process shortcut would be the one caller that missed
+      every interceptor. Taint follows the CREDENTIAL as well as the value —
+      `policy.Input` gained `principal_kind` and `principal_untrusted`
+      (additive, so the CEL contract holds), threaded through
+      `taint.Dispatch`, so a rule can refuse an at-most-once effect to an agent
+      while allowing it to a person. Every action is audited under the agent's
+      own subject in `policy_audit` and recorded in the run log as
+      `AGENT_ACTION`, refusals included. An agent CANNOT run a command: no
+      branch of the invoker executes one and
+      `TestAnAgentStepHasNoPathToExecutingACommand` asserts the package cannot
+      even reach `internal/executor`. NOT built: a parked agent is not resumed
+      after a person decides its gate — re-entering the model's loop at the
+      call it stopped on needs more than this task, so the step fails with the
+      gate's own reason and the run stops readably rather than hanging. No
+      migration was needed. Tested through `server.New`/`Start` alone in
+      `internal/server/agent_e2e_test.go`.
       (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
       a model client holds an API key and nothing in this system leases the
       PLANE a secret. A step on a plane with no factory fails with that reason.

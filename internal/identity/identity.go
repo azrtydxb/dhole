@@ -29,6 +29,20 @@ type Kind string
 const (
 	PrincipalUser    Kind = "user"
 	PrincipalService Kind = "service"
+	// PrincipalAgent is an agent step acting through the contract as a
+	// principal of its tenant (ADR 0025).
+	//
+	// It is a third kind rather than a service, and the difference is the
+	// whole of ADR 0025's "taint follows the credential": an agent's inputs
+	// are model output, untrusted by construction (ADR 0015), so a policy
+	// rule has to be able to refuse an at-most-once effect or an unsigned
+	// plugin to an agent while allowing it to a person or to a CI runner. A
+	// kind of "service" would have made an agent indistinguishable from the
+	// deploy robot, which is the one distinction that matters here.
+	//
+	// It authenticates and is authorised exactly as any other principal is:
+	// the kind is a fact a rule may read, never a capability.
+	PrincipalAgent Kind = "agent"
 )
 
 // Principal is an authenticated caller. It is what authorisation decisions are

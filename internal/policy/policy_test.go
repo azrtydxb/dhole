@@ -428,3 +428,50 @@ func TestExpensiveRuleIsBounded(t *testing.T) {
 		t.Fatal("evaluation did not terminate: the cost limit is not enforced")
 	}
 }
+
+// TestAPolicyRuleCanRefuseAnAgentWhatItAllowsAPerson is ADR 0025's taint half:
+// "an agent's token is marked untrusted, so the policy engine can refuse an
+// at-most-once effect or an unsigned plugin to an agent while allowing it to a
+// person, without every call carrying provenance."
+//
+// The two inputs below differ in NOTHING except who is asking. Before the
+// principal reached the input map there was no expression an operator could
+// write that told them apart: `input.principal_untrusted` did not exist, and a
+// rule naming a key the map does not hold is an evaluation error, which denies
+// — so the agent and the person were refused together or admitted together.
+func TestAPolicyRuleCanRefuseAnAgentWhatItAllowsAPerson(t *testing.T) {
+	ctx := context.Background()
+
+	src := policy.NewStaticSource()
+	require.NoError(t, src.Set("production", policy.TierPolicy{
+		Revision: "rev1",
+		Rules: []policy.Rule{{
+			ID:         "no-at-most-once-for-an-agent",
+			Expression: `!input.principal_untrusted || input.effect_class != "AT_MOST_ONCE"`,
+			Reason:     "an untrusted principal may not take an at-most-once action",
+		}},
+	}))
+	engine, err := policy.New(src, policy.DiscardAudit{})
+	require.NoError(t, err)
+
+	deploy := policy.Input{
+		Tier:        "production",
+		TenantID:    "acme",
+		Subject:     "action:start_run",
+		EffectClass: dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE,
+	}
+
+	person := deploy
+	person.PrincipalKind = "user"
+	decision, err := engine.Evaluate(ctx, person)
+	require.NoError(t, err)
+	require.True(t, decision.Allow, "a person was refused by a rule about agents")
+
+	robot := deploy
+	robot.PrincipalKind = "agent"
+	robot.PrincipalUntrusted = true
+	decision, err = engine.Evaluate(ctx, robot)
+	require.NoError(t, err)
+	require.False(t, decision.Allow, "an agent held a capability the same rule denies it")
+	require.Equal(t, "no-at-most-once-for-an-agent", decision.Rule)
+}

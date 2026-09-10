@@ -395,6 +395,12 @@ func (s *Server) Start(ctx context.Context) error {
 		in.close()
 		return err
 	}
+	// Where an agent step's own contract calls go. It is a FUNCTION rather
+	// than the address itself because the listener has not been opened yet —
+	// startAPI runs at the end of Start, and with port zero the address is
+	// not known until it does. A `builtin:agent` step asks at the moment it
+	// acts, by which time this plane is serving.
+	built.apiBase = s.APIAddr
 
 	// The fair queue, the per-pipeline budget and the tenant quota. All three
 	// were built and tested and NONE of them had a call site, so a fleet ran

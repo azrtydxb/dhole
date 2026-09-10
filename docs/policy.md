@@ -61,6 +61,8 @@ rewritten to a zero value.
 | `input.tainted`             | bool           | untrusted data reaches this subject                 |
 | `input.taint_sources`       | list of string | the triggers that admitted it, sorted               |
 | `input.engine_capabilities` | list of string | what the ENGINE the work would run on advertises    |
+| `input.principal_kind`      | string         | who is asking: `user`, `service`, `agent`, or empty |
+| `input.principal_untrusted` | bool           | the CREDENTIAL is untrusted, whatever the data is   |
 
 Enums are the short name — `PRIVILEGED`, not `CAPABILITY_PRIVILEGED`; `PURE`,
 not `EFFECT_CLASS_PURE` — because that is what a policy author writes and the
@@ -73,6 +75,19 @@ never removed, because tenant-authored policies depend on them.
 a privileged **engine** is a host-level foothold whatever the step asked for. A
 rule that keeps untrusted work off privileged engines reads
 `input.engine_capabilities`, not `input.capabilities`.
+
+`input.principal_untrusted` is about the **credential**, where `input.tainted` is
+about the **data**. An agent step acts through this system's own API as a
+principal of its tenant, and its token is marked untrusted
+([ADR 0025](../.procoder/adr/0025-an-agent-step-acts-through-the-contract.md)) —
+so an agent that has read nothing at all is still an untrusted caller, and a
+rule can refuse it an effect it allows a person:
+
+```yaml
+- id: agents-do-not-deploy
+  expression: '!input.principal_untrusted || input.effect_class != "AT_MOST_ONCE"'
+  reason: an agent may ask for an at-most-once action, and a person decides it
+```
 
 ## Rules worth having
 
