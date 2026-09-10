@@ -318,6 +318,24 @@ func (s *Server) Start(ctx context.Context) error {
 	out := outbox.New(in.store, in.plane, s.cfg.DeploymentID, outbox.WithErrorHandler(func(err error) {
 		s.log.Error("outbox drain failed", "error", err)
 	}))
+	// The fair queue, the per-pipeline budget and the tenant quota. All three
+	// were built and tested and NONE of them had a call site, so a fleet ran
+	// with dispatch in arrival order, no pipeline cap and no tenant limit:
+	// three mechanisms passing their own tests and governing nothing.
+	queue, err := scheduler.NewQueue(scheduler.QueueConfig{})
+	if err != nil {
+		in.close()
+		return err
+	}
+	budgets, err := scheduler.NewBudgets(ctx, in.conn, scheduler.BudgetConfig{
+		PlaneID: s.cfg.DeploymentID,
+	})
+	if err != nil {
+		in.close()
+		return err
+	}
+	in.onClose(budgets.Close)
+
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       in.store,
 		Outbox:      out,
@@ -339,6 +357,9 @@ func (s *Server) Start(ctx context.Context) error {
 		Cache:     in.cache,
 		Revisions: defs,
 		BlobRefs:  in.refs,
+		Queue:     queue,
+		Budgets:   budgets,
+		Quotas:    in.quotas,
 	})
 	if err != nil {
 		in.close()

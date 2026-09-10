@@ -329,6 +329,43 @@ func (b *Budgets) release(slot *budgetSlot) {
 	}
 }
 
+// InFlight is how many slots this tenant holds across the WHOLE fleet, over
+// every pipeline it is running.
+//
+// It is counted from the bucket rather than from this plane's own holders
+// because it answers a fleet-wide question: the tenant's concurrency quota.
+// Counted locally, a limit of sixty-four would become sixty-four per plane,
+// which is the same mistake the budget itself exists to avoid — and it would
+// fail open precisely when the most is in flight.
+//
+// The count is of keys, so it includes slots held by other planes and excludes
+// ones the server has already aged out. It is a snapshot and it is racy by
+// construction: two planes admitting at once can both read the same figure and
+// both be admitted. That is a cap that slips by one, not one that fails open,
+// and the alternative is a fleet-wide lock in the dispatch path.
+func (b *Budgets) InFlight(ctx context.Context, tenantID string) (int, error) {
+	if tenantID == "" {
+		return 0, fmt.Errorf("scheduler: counting in-flight slots: %w", runstore.ErrTenantRequired)
+	}
+	// The tenant is the first segment of every key, so the filter is exact:
+	// each segment is base64url-encoded, and no encoded tenant can be the
+	// prefix of another followed by a dot.
+	lister, err := b.kv.ListKeysFiltered(ctx, budgetPrefix+encodeSegment(tenantID)+".>")
+	if err != nil {
+		if errors.Is(err, jetstream.ErrNoKeysFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("scheduler: counting in-flight slots for %q: %w", tenantID, err)
+	}
+	defer func() { _ = lister.Stop() }()
+
+	count := 0
+	for range lister.Keys() {
+		count++
+	}
+	return count, nil
+}
+
 // Close stops this plane's renewals. It deliberately does NOT release the slots
 // still held: an in-flight step whose plane is shutting down is still in
 // flight, and its slot goes back the way a crashed plane's does — by ageing
