@@ -406,6 +406,15 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       (e) A builtin step in flight when the plane dies is not recovered: it
       writes STEP_DISPATCHED but holds no lease, so `SweepOrphans` cannot see
       it. Closing it means giving a builtin step a lease of its own.
+- [x] VERIFIED ON REAL INFRASTRUCTURE 2026-09-10: all four acceptance tests pass
+      against the kw k3s cluster and a live Postgres — `TestAcceptanceCICacheHit`,
+      `TestCIPipelineBuildsTheCheckedInDockerfile`,
+      `TestAcceptanceAutomationTriggersAndWait` and
+      `TestAcceptanceAgentLoopAndApproval`, 98s, zero skipped. That is the first
+      time the three profiles have actually run rather than skipping, and it is
+      the evidence the gate-atomicity work could not produce for itself: the
+      automation pipeline's five-second workaround is gone and `builtin:wait`
+      holds it instead.
 - [x] **Arming a durable gate is not atomic with the readiness decision.**
       `STEP_AWAITING_TIMER` was written in its own transaction, so it could appear
       earlier in the log than the `STEP_DISPATCHED` of the step it should have
