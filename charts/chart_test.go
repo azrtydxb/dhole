@@ -9,6 +9,7 @@ package charts_test
 
 import (
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -257,5 +258,36 @@ func TestTheProbesAskTheControlPlaneAQuestion(t *testing.T) {
 		if !strings.Contains(out, path) {
 			t.Errorf("no probe uses %s:\n%s", path, out)
 		}
+	}
+}
+
+// DHOLE_S3_SESSION_TOKEN is part of the object-store contract an engine author
+// reads, and the chart could not set it — so a deployment on temporary
+// credentials (STS, a federated role) had no way to pass one through Helm.
+//
+// It must be optional in the Secret as well as in the values: a session token
+// is absent for a static key pair, and a required key that is missing fails
+// the mount and stops the pod, which is worse than the token being unset.
+func TestTheChartCanPassAnS3SessionToken(t *testing.T) {
+	out := render(t,
+		"--set", "objectStore.kind=s3",
+		"--set", "objectStore.s3.bucket=b",
+		"--set", "objectStore.s3.existingSecret=dhole-s3")
+
+	if !strings.Contains(out, "DHOLE_S3_SESSION_TOKEN") {
+		t.Fatalf("the chart cannot pass a session token:\n%s", out)
+	}
+	// Matched inside the session token's OWN block, not anywhere in the
+	// render: there are four `optional: true` lines in a rendered chart, so
+	// a bare Contains passed with the token's key still required. It did,
+	// until this assertion was tightened.
+	if !strings.Contains(out, "key: sessionToken") ||
+		!regexp.MustCompile(`key: sessionToken\s+optional: true`).MatchString(out) {
+		t.Error("the session token key is required, so a Secret without one stops the pod")
+	}
+	// And it reaches both the plane and its engines, like every other store
+	// variable — half a deployment on temporary credentials is no deployment.
+	if got := strings.Count(out, "DHOLE_S3_SESSION_TOKEN"); got < 2 {
+		t.Errorf("the session token reaches %d containers, want the plane and its engines", got)
 	}
 }

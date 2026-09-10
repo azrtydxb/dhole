@@ -96,6 +96,17 @@ them on its own. Every step succeeds and nothing it produced can be read.
     secretKeyRef:
       name: {{ . | quote }}
       key: secretAccessKey
+# Optional, and optional in the Secret too: a session token belongs to
+# temporary credentials (STS, a federated role) and is absent for a static key
+# pair. `optional: true` is what lets ONE Secret shape serve both — without it
+# a Secret carrying only the two long-lived keys fails to mount and the pod
+# never starts, which is a worse failure than the token simply being unset.
+- name: DHOLE_S3_SESSION_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ . | quote }}
+      key: sessionToken
+      optional: true
 {{- end }}
 {{- end }}
 {{- end -}}
