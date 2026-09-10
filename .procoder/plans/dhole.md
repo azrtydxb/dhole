@@ -48,7 +48,9 @@ decide what may be cached and what may be retried.
   (23), 0005 definitions (25), 0006 catalog (30), 0007 signatures (33),
   0008 llm_calls (49), 0009 tenancy (22), 0010 cache_entries (15),
   0011 policy_audit (21), 0012 upstreams (34), 0018 quotas_and_usage (58), 0019 pipeline_heads (27b), 0013 timers (20), 0014 trigger_schedules (40),
-  0015 outbox_deployment (18b), 0016 open_runs (18b), 0017 run_sequence (18b). A task
+  0015 outbox_deployment (18b), 0016 open_runs (18b), 0017 run_sequence (18b),
+  0020 terminal_once (bugfix: a run's terminal event is unique, so two racing
+  advances cannot both close it). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in

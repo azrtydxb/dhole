@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
@@ -47,4 +48,33 @@ func TestPostgresSchemaHasEveryTable(t *testing.T) {
 			 WHERE table_schema='public' AND table_name=$1)`, table).Scan(&exists))
 		require.True(t, exists, "table %s is missing from the Postgres schema", table)
 	}
+}
+
+// TestPostgresRefusesASecondTerminalEvent runs the double-completion rule
+// against the dialect the deployment that hit it was on. The SQLite tests
+// prove the migration's intent; only this proves Postgres took the partial
+// unique index and that `ON CONFLICT DO NOTHING` covers it there too.
+func TestPostgresRefusesASecondTerminalEvent(t *testing.T) {
+	dsn := os.Getenv("DHOLE_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("DHOLE_TEST_POSTGRES_DSN not set")
+	}
+	ctx := context.Background()
+	store, err := runstore.NewPostgres(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	tenant := "terminal-" + time.Now().UTC().Format("20060102150405.000000000")
+	require.NoError(t, store.Append(ctx, tenant, runstore.Event{
+		RunID: "run-a", Type: runstore.RunCreated, At: time.Now().UTC(),
+	}))
+	for range 2 {
+		require.NoError(t, store.Append(ctx, tenant, runstore.Event{
+			RunID: "run-a", Type: runstore.RunCompleted, At: time.Now().UTC(),
+		}))
+	}
+
+	events, err := store.Replay(ctx, tenant, "run-a")
+	require.NoError(t, err)
+	require.Len(t, terminalEvents(events), 1)
 }

@@ -1492,9 +1492,23 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 	})
 }
 
-// complete closes a run that has nothing ready and nothing in flight. Advance
-// returns before reaching here once the run is completed, so this is written
-// exactly once per run.
+// complete closes a run that has nothing ready and nothing in flight.
+//
+// It used to say this was written exactly once per run because Advance returns
+// early on a completed run. That was check-then-act, and it was wrong: the
+// early return reads a state loaded OUTSIDE the transaction this writes in.
+// Advance has two triggers — the open-run tick and a status arriving from an
+// engine — and on one replica, one step and one engine they both replayed a
+// finished run before either appended, so both concluded "complete" and both
+// appended one. Each got its own sequence, so nothing collided and a live
+// run's log carried RUN_COMPLETED twice; every consumer treats the first as
+// the end of the run, and the SSE stream closes the client on it.
+//
+// The guarantee is now the store's, in the statement that writes the event:
+// migration 0020 makes a run's terminal event unique, so the second append is
+// the same no-op a redelivery already is. Nothing here needs a lock, and the
+// loser is told nothing, because there is nothing it needs to know — the run
+// is over either way.
 func (s *Scheduler) complete(ctx context.Context, tenantID, runID string) error {
 	defer obs.EndRun(tenantID, runID)
 	return s.append(ctx, tenantID, runstore.Event{
