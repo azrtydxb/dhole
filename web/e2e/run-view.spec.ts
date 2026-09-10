@@ -73,11 +73,22 @@ async function startRun(
 }
 
 /** runEvents drains the SSE event stream of a finished run. */
+/** SSEEvent is one frame of the run event stream, as a test reads it. */
+type SSEEvent = {
+  type: string;
+  stepId: string;
+  /** The event's own payload, already decoded. */
+  payload: unknown;
+  /** The whole frame, for assertions about the wire form itself. */
+  frame: string;
+  id: string;
+};
+
 async function runEvents(
   request: APIRequestContext,
   runID: string,
   bearer: string = token(),
-): Promise<{ type: string; stepId: string; payload: string; id: string }[]> {
+): Promise<SSEEvent[]> {
   const res = await request.get(`${apiUrl}/v1/runs/${runID}/events`, {
     headers: { Authorization: `Bearer ${bearer}`, Accept: "text/event-stream" },
     timeout: 60_000,
@@ -88,9 +99,8 @@ async function runEvents(
 
 function parseSSE(
   text: string,
-): { type: string; stepId: string; payload: string; id: string }[] {
-  const out: { type: string; stepId: string; payload: string; id: string }[] =
-    [];
+): SSEEvent[] {
+  const out: SSEEvent[] = [];
   for (const frame of text.split("\n\n")) {
     let id = "";
     let event = "";
@@ -101,8 +111,21 @@ function parseSSE(
       else if (line.startsWith("data:")) data += line.slice(5).trim();
     }
     if (event === "") continue;
-    const parsed = data === "" ? {} : (JSON.parse(data) as { stepId?: string });
-    out.push({ type: event, stepId: parsed.stepId ?? "", payload: data, id });
+    const parsed =
+      data === ""
+        ? {}
+        : (JSON.parse(data) as { stepId?: string; payload?: unknown });
+    // `payload` is the event's OWN payload, not the frame around it. It used
+    // to be the whole frame under the same name, so a test reaching for a
+    // field of the payload silently got undefined and read as a missing
+    // feature — which is exactly what happened to cache_ineligible_reason.
+    out.push({
+      type: event,
+      stepId: parsed.stepId ?? "",
+      payload: parsed.payload,
+      frame: data,
+      id,
+    });
   }
   return out;
 }
@@ -230,11 +253,8 @@ test("a non-cacheable step shows the control plane's own reason, not a retyped o
   const dispatched = events.filter((e) => e.type === "STEP_DISPATCHED");
   expect(dispatched.length).toBeGreaterThan(0);
   const reason = dispatched
-    .map(
-      (e) =>
-        (JSON.parse(e.payload) as { cache_ineligible_reason?: string })
-          .cache_ineligible_reason,
-    )
+    .map((e) => (e.payload as { cache_ineligible_reason?: string } | undefined)
+      ?.cache_ineligible_reason)
     .find((r) => r !== undefined && r !== "");
   expect(
     reason,

@@ -117,7 +117,7 @@ export async function tokenFor(
  */
 export async function seedShape(
   request: APIRequestContext,
-  shape: "cacheable" | "impure",
+  shape: "cacheable" | "impure" | "slow",
 ): Promise<Seeded> {
   const response = await request.post(`${seedUrl}/shape/${shape}`);
   expect(
