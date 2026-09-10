@@ -60,6 +60,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/steps/gate"
+	"github.com/azrtydxb/dhole/internal/trigger"
 	"github.com/azrtydxb/dhole/internal/wait"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
@@ -206,6 +207,17 @@ type Config struct {
 	// API key and nothing in this system hands the control plane one — see
 	// ModelFactory.
 	Models ModelFactory
+	// LeaseTTL is how long a step's lease lives before its holder is presumed
+	// dead and the step is swept back. Zero means scheduler.DefaultLeaseTTL.
+	//
+	// It governs a step dispatched to an ENGINE and a step the plane runs
+	// itself alike, because the two are recovered by the same sweeper and two
+	// different deadlines would mean a plane that died holding one of each
+	// gave them back at different times for no reason anyone could state. It
+	// must stay comfortably above orphanSweepInterval: the TTL decides when a
+	// holder is presumed dead, the sweep decides how promptly that is acted
+	// on.
+	LeaseTTL time.Duration
 	// APIAllowedOrigins are the browser origins allowed to make cross-origin
 	// calls. Empty — the default — allows none, so a page on any site cannot
 	// reach a plane on the developer's own loopback address.
@@ -232,9 +244,19 @@ type Server struct {
 	// and Approve can reach them.
 	builtins *builtins
 	timers   *wait.Timers
-	// triggerMux holds the webhook trigger handlers rootHandler serves. Nil
-	// when this deployment configured none.
+	// trigMu guards everything about the triggers this process is running:
+	// the live set, the webhook mux built from it, and the stored table it
+	// reconciles against. It is NOT s.mu — reconciling runs on its own loop
+	// while Stop holds s.mu waiting for that loop to end, and one lock for
+	// both would deadlock the plane against its own shutdown.
+	trigMu sync.Mutex
+	// live is what this process is running now, keyed by tenant and id; and
+	// triggerMux is the webhook half of it, rebuilt whenever live changes.
+	// triggers is the durable table both are reconciled against, nil until
+	// Start opens it. See triggers.go.
+	live       map[string]*liveTrigger
 	triggerMux *http.ServeMux
+	triggers   trigger.Store
 	// broker issues and redeems the short-lived handles a dispatch carries.
 	// In memory, and deliberately: a table of live handles in the run database
 	// would be the secret at rest that SecretRef exists to avoid.
@@ -278,6 +300,17 @@ func New(cfg Config) (*Server, error) {
 		cfg.DeploymentID = derivedDeploymentID(cfg.BlobRoot)
 	}
 	return &Server{cfg: cfg, log: slog.Default()}, nil
+}
+
+// leaseTTL is how long this plane's step leases live, its own and its
+// engines'. One value for both: a plane holding one of each must give them
+// back at the same moment, or an operator has two timeouts to reason about
+// where the situation is one.
+func (s *Server) leaseTTL() time.Duration {
+	if s.cfg.LeaseTTL > 0 {
+		return s.cfg.LeaseTTL
+	}
+	return scheduler.DefaultLeaseTTL
 }
 
 // derivedDeploymentID names a plane that was not given a name, from the one
@@ -353,7 +386,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// engine is a reference no engine can resolve, and for the whole of Tasks
 	// 20-51 that is exactly what happened — internal/steps/* and
 	// internal/wait were libraries with tests and no caller in the binary.
-	built, err := newBuiltins(in, s.cfg.Models, nil, s.log)
+	// The lease manager goes in with it: a step the PLANE runs is leased
+	// exactly as one dispatched to an engine is, or a plane that dies mid-step
+	// leaves a run in flight that no sweeper can see and no engine will ever
+	// report on.
+	built, err := newBuiltins(in, s.cfg.Models, nil, leases, s.leaseTTL(), s.log)
 	if err != nil {
 		in.close()
 		return err
@@ -397,6 +434,7 @@ func (s *Server) Start(ctx context.Context) error {
 		Fleet:       fleet,
 		Definitions: defs,
 		Tier:        DefaultTier,
+		LeaseTTL:    s.cfg.LeaseTTL,
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		// There is deliberately no environment identity here. It belongs to
@@ -436,6 +474,12 @@ func (s *Server) Start(ctx context.Context) error {
 		in.close()
 		return err
 	}
+
+	// The trigger table, over the same database as the run log. It is set
+	// before anything reconciles against it and before the API is given it:
+	// a plane whose CreateTrigger wrote a row nothing reads would be a
+	// contract that accepts triggers and runs none.
+	s.setTriggerStore(trigger.NewStore(in.db, in.dialect))
 
 	s.broker = secrets.NewBroker()
 	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
@@ -899,7 +943,8 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	s.infra.close()
 	s.infra = nil
-	s.builtins, s.timers, s.triggerMux = nil, nil, nil
+	s.builtins, s.timers = nil, nil
+	s.stopAllTriggers()
 	return nil
 }
 

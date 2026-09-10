@@ -303,6 +303,10 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
             // than a choice this canvas made on the author's behalf.
             image: "",
             engineType: "",
+            // Nor a timeout: zero means unbounded, which is what every
+            // pipeline written before the field existed carries, and a number
+            // this canvas invented would be a limit nobody chose.
+            timeoutSeconds: 0,
             inputs: [...kind.inputs],
             outputs: [...kind.outputs],
           },

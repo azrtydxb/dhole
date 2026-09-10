@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_api: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIkwKDVNldFN0ZXBDb25maWcSDwoHc3RlcF9pZBgBIAEoCRILCgNrZXkYAiABKAkSDQoFdmFsdWUYAyABKAkSDgoGcmVtb3ZlGAQgASgIIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkiwQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSAASMgoPc2V0X3N0ZXBfY29uZmlnGAcgASgLMhcuZGhvbGUudjEuU2V0U3RlcENvbmZpZ0gAQgYKBGtpbmQibAoGQ2hhbmdlEiIKBGtpbmQYASABKA4yFC5kaG9sZS52MS5DaGFuZ2VLaW5kEg8KB3N0ZXBfaWQYAiABKAkSHAoEZWRnZRgDIAEoCzIOLmRob2xlLnYxLkVkZ2USDwoHc3VtbWFyeRgEIAEoCSIpCgREaWZmEiEKB2NoYW5nZXMYASADKAsyEC5kaG9sZS52MS5DaGFuZ2Ui1wEKCFJldmlzaW9uEgoKAmlkGAEgASgJEhMKC3BpcGVsaW5lX2lkGAIgASgJEhQKDGNvbnRlbnRfaGFzaBgDIAEoCRINCgVzdGF0ZRgEIAEoCRIyCghsb2NrZmlsZRgFIAMoCzIgLmRob2xlLnYxLlJldmlzaW9uLkxvY2tmaWxlRW50cnkSDgoGYXV0aG9yGAYgASgJEhAKCGFwcHJvdmVyGAcgASgJGi8KDUxvY2tmaWxlRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASI+ChJHZXRQaXBlbGluZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiYQoTR2V0UGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iUgoVQ3JlYXRlUGlwZWxpbmVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEiQKCHBpcGVsaW5lGAIgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiZAoWQ3JlYXRlUGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iawoVQXBwbHlPcGVyYXRpb25SZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhUKDWJhc2VfcmV2aXNpb24YAiABKAkSJgoJb3BlcmF0aW9uGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uIqgBChZBcHBseU9wZXJhdGlvblJlc3BvbnNlEiQKCHJldmlzaW9uGAEgASgLMhIuZGhvbGUudjEuUmV2aXNpb24SHAoEZGlmZhgCIAEoCzIOLmRob2xlLnYxLkRpZmYSJAoHaW52ZXJzZRgDIAEoCzITLmRob2xlLnYxLk9wZXJhdGlvbhIkCghwaXBlbGluZRgEIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lImEKD1ZhbGlkYXRlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCRIkCghwaXBlbGluZRgDIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lIk4KCkRpYWdub3N0aWMSEAoIc2V2ZXJpdHkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIPCgdzdGVwX2lkGAMgASgJEgwKBHBvcnQYBCABKAkiPQoQVmFsaWRhdGVSZXNwb25zZRIpCgtkaWFnbm9zdGljcxgBIAMoCzIULmRob2xlLnYxLkRpYWdub3N0aWMiNwoLUGxhblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiZAoLUGxhbm5lZFN0ZXASDwoHc3RlcF9pZBgBIAEoCRIRCgljYWNoZV9oaXQYAiABKAgSEwoLZW5naW5lX2tpbmQYAyABKAkSHAoUbm9uX2NhY2hlYWJsZV9yZWFzb24YBCABKAkiNAoMUGxhblJlc3BvbnNlEiQKBXN0ZXBzGAEgAygLMhUuZGhvbGUudjEuUGxhbm5lZFN0ZXAiKwoUTGlzdFJldmlzaW9uc1JlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkiPgoVTGlzdFJldmlzaW9uc1Jlc3BvbnNlEiUKCXJldmlzaW9ucxgBIAMoCzISLmRob2xlLnYxLlJldmlzaW9uIi0KFkFwcHJvdmVSZXZpc2lvblJlcXVlc3QSEwoLcmV2aXNpb25faWQYASABKAkiPwoXQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiI7Cg9TdGFydFJ1blJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiNwoQU3RhcnRSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiIQoPV2F0Y2hSdW5SZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCSKLAQoQV2F0Y2hSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhAKCHNlcXVlbmNlGAQgASgEEgwKBHR5cGUYBSABKAkSDwoHcGF5bG9hZBgGIAEoDBIUCgxhdF91bml4X25hbm8YByABKAMiSgoVRGVjaWRlQXBwcm92YWxSZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEhAKCGFwcHJvdmVkGAMgASgIIl0KFkRlY2lkZUFwcHJvdmFsUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEg8KB3N0ZXBfaWQYAiABKAkSEAoIYXBwcm92ZXIYAyABKAkSEAoIYXBwcm92ZWQYBCABKAgiJgoQR2V0UGx1Z2luUmVxdWVzdBISCgpwbHVnaW5fcmVmGAEgASgJIpMCCgZQbHVnaW4SCwoDcmVmGAEgASgJEhEKCW5hbWVzcGFjZRgCIAEoCRIMCgRuYW1lGAMgASgJEg8KB3ZlcnNpb24YBCABKAkSIAoGZGlnZXN0GAUgASgLMhAuZGhvbGUudjEuRGlnZXN0EgwKBGtpbmQYBiABKAkSKwoMZWZmZWN0X2NsYXNzGAcgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSKgoMY2FwYWJpbGl0aWVzGAggAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIUCgxpbnB1dF9zY2hlbWEYCSABKAkSFQoNb3V0cHV0X3NjaGVtYRgKIAEoCRIUCgxlbmdpbmVfdHlwZXMYCyADKAkiNQoRR2V0UGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIjgKFFB1Ymxpc2hQbHVnaW5SZXF1ZXN0EiAKBnBsdWdpbhgBIAEoCzIQLmRob2xlLnYxLlBsdWdpbiI5ChVQdWJsaXNoUGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIjIKEENhbmNlbFJ1blJlcXVlc3QSDgoGcnVuX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSJECg1DYW5jZWxsZWRTdGVwEg8KB3N0ZXBfaWQYASABKAkSDwoHYXR0ZW1wdBgCIAEoDRIRCgllbmdpbmVfaWQYAyABKAkiSwoRQ2FuY2VsUnVuUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEiYKBXN0ZXBzGAIgAygLMhcuZGhvbGUudjEuQ2FuY2VsbGVkU3RlcCK6AQoGRW5naW5lEgoKAmlkGAEgASgJEg0KBXN0YXRlGAIgASgJEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIZChFwcm90b2NvbF92ZXJzaW9ucxgHIAMoDRIlCglpbl9mbGlnaHQYCCADKAsyEi5kaG9sZS52MS5JbkZsaWdodCIUChJMaXN0RW5naW5lc1JlcXVlc3QiOAoTTGlzdEVuZ2luZXNSZXNwb25zZRIhCgdlbmdpbmVzGAEgAygLMhAuZGhvbGUudjEuRW5naW5lIicKEkRyYWluRW5naW5lUmVxdWVzdBIRCgllbmdpbmVfaWQYASABKAkiNwoTRHJhaW5FbmdpbmVSZXNwb25zZRIgCgZlbmdpbmUYASABKAsyEC5kaG9sZS52MS5FbmdpbmUiHgoGQ3Vyc29yEgkKAXgYASABKAESCQoBeRgCIAEoASJ5Cg1QcmVzZW5jZUV2ZW50EhEKCXByaW5jaXBhbBgBIAEoCRIRCglzZWxlY3Rpb24YAiABKAkSIAoGY3Vyc29yGAMgASgLMhAuZGhvbGUudjEuQ3Vyc29yEhIKCnNlc3Npb25faWQYBCABKAkSDAoEZ29uZRgFIAEoCCJ0ChRXYXRjaFByZXNlbmNlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEhEKCXNlbGVjdGlvbhgDIAEoCRIgCgZjdXJzb3IYBCABKAsyEC5kaG9sZS52MS5DdXJzb3IiPwoVV2F0Y2hQcmVzZW5jZVJlc3BvbnNlEiYKBWV2ZW50GAEgASgLMhcuZGhvbGUudjEuUHJlc2VuY2VFdmVudCKDAQoVVXBkYXRlUHJlc2VuY2VSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSEQoJc2VsZWN0aW9uGAMgASgJEiAKBmN1cnNvchgEIAEoCzIQLmRob2xlLnYxLkN1cnNvchIMCgRnb25lGAUgASgIIhgKFlVwZGF0ZVByZXNlbmNlUmVzcG9uc2UqcgoKQ2hhbmdlS2luZBIbChdDSEFOR0VfS0lORF9VTlNQRUNJRklFRBAAEhUKEUNIQU5HRV9LSU5EX0FEREVEEAESFwoTQ0hBTkdFX0tJTkRfUkVNT1ZFRBACEhcKE0NIQU5HRV9LSU5EX0NIQU5HRUQQAzKnAQoNRW5naW5lU2VydmljZRJKCgtMaXN0RW5naW5lcxIcLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVxdWVzdBodLmRob2xlLnYxLkxpc3RFbmdpbmVzUmVzcG9uc2USSgoLRHJhaW5FbmdpbmUSHC5kaG9sZS52MS5EcmFpbkVuZ2luZVJlcXVlc3QaHS5kaG9sZS52MS5EcmFpbkVuZ2luZVJlc3BvbnNlMo8JCg9QaXBlbGluZVNlcnZpY2USUwoOQ3JlYXRlUGlwZWxpbmUSHy5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlcXVlc3QaIC5kaG9sZS52MS5DcmVhdGVQaXBlbGluZVJlc3BvbnNlEkoKC0dldFBpcGVsaW5lEhwuZGhvbGUudjEuR2V0UGlwZWxpbmVSZXF1ZXN0Gh0uZGhvbGUudjEuR2V0UGlwZWxpbmVSZXNwb25zZRJTCg5BcHBseU9wZXJhdGlvbhIfLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVxdWVzdBogLmRob2xlLnYxLkFwcGx5T3BlcmF0aW9uUmVzcG9uc2USQQoIVmFsaWRhdGUSGS5kaG9sZS52MS5WYWxpZGF0ZVJlcXVlc3QaGi5kaG9sZS52MS5WYWxpZGF0ZVJlc3BvbnNlEjUKBFBsYW4SFS5kaG9sZS52MS5QbGFuUmVxdWVzdBoWLmRob2xlLnYxLlBsYW5SZXNwb25zZRJECglHZXRQbHVnaW4SGi5kaG9sZS52MS5HZXRQbHVnaW5SZXF1ZXN0GhsuZGhvbGUudjEuR2V0UGx1Z2luUmVzcG9uc2USUAoNUHVibGlzaFBsdWdpbhIeLmRob2xlLnYxLlB1Ymxpc2hQbHVnaW5SZXF1ZXN0Gh8uZGhvbGUudjEuUHVibGlzaFBsdWdpblJlc3BvbnNlElAKDUxpc3RSZXZpc2lvbnMSHi5kaG9sZS52MS5MaXN0UmV2aXNpb25zUmVxdWVzdBofLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXNwb25zZRJWCg9BcHByb3ZlUmV2aXNpb24SIC5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXF1ZXN0GiEuZGhvbGUudjEuQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USQQoIU3RhcnRSdW4SGS5kaG9sZS52MS5TdGFydFJ1blJlcXVlc3QaGi5kaG9sZS52MS5TdGFydFJ1blJlc3BvbnNlEkMKCFdhdGNoUnVuEhkuZGhvbGUudjEuV2F0Y2hSdW5SZXF1ZXN0GhouZGhvbGUudjEuV2F0Y2hSdW5SZXNwb25zZTABElMKDkRlY2lkZUFwcHJvdmFsEh8uZGhvbGUudjEuRGVjaWRlQXBwcm92YWxSZXF1ZXN0GiAuZGhvbGUudjEuRGVjaWRlQXBwcm92YWxSZXNwb25zZRJECglDYW5jZWxSdW4SGi5kaG9sZS52MS5DYW5jZWxSdW5SZXF1ZXN0GhsuZGhvbGUudjEuQ2FuY2VsUnVuUmVzcG9uc2USUgoNV2F0Y2hQcmVzZW5jZRIeLmRob2xlLnYxLldhdGNoUHJlc2VuY2VSZXF1ZXN0Gh8uZGhvbGUudjEuV2F0Y2hQcmVzZW5jZVJlc3BvbnNlMAESUwoOVXBkYXRlUHJlc2VuY2USHy5kaG9sZS52MS5VcGRhdGVQcmVzZW5jZVJlcXVlc3QaIC5kaG9sZS52MS5VcGRhdGVQcmVzZW5jZVJlc3BvbnNlQokBCgxjb20uZGhvbGUudjFCCEFwaVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    "ChJkaG9sZS92MS9hcGkucHJvdG8SCGRob2xlLnYxIicKB0FkZFN0ZXASHAoEc3RlcBgBIAEoCzIOLmRob2xlLnYxLlN0ZXAiHQoKUmVtb3ZlU3RlcBIPCgdzdGVwX2lkGAEgASgJIicKB0Nvbm5lY3QSHAoEZWRnZRgBIAEoCzIOLmRob2xlLnYxLkVkZ2UiKgoKUmVtb3ZlRWRnZRIcCgRlZGdlGAEgASgLMg4uZGhvbGUudjEuRWRnZSI/CgtTZXRQcm9wZXJ0eRIPCgdzdGVwX2lkGAEgASgJEhAKCHByb3BlcnR5GAIgASgJEg0KBXZhbHVlGAMgASgJIkwKDVNldFN0ZXBDb25maWcSDwoHc3RlcF9pZBgBIAEoCRILCgNrZXkYAiABKAkSDQoFdmFsdWUYAyABKAkSDgoGcmVtb3ZlGAQgASgIIicKBlJlbmFtZRIPCgdzdGVwX2lkGAEgASgJEgwKBG5hbWUYAiABKAkiwQIKCU9wZXJhdGlvbhIlCghhZGRfc3RlcBgBIAEoCzIRLmRob2xlLnYxLkFkZFN0ZXBIABIkCgdjb25uZWN0GAIgASgLMhEuZGhvbGUudjEuQ29ubmVjdEgAEi0KDHNldF9wcm9wZXJ0eRgDIAEoCzIVLmRob2xlLnYxLlNldFByb3BlcnR5SAASKwoLcmVtb3ZlX2VkZ2UYBCABKAsyFC5kaG9sZS52MS5SZW1vdmVFZGdlSAASIgoGcmVuYW1lGAUgASgLMhAuZGhvbGUudjEuUmVuYW1lSAASKwoLcmVtb3ZlX3N0ZXAYBiABKAsyFC5kaG9sZS52MS5SZW1vdmVTdGVwSAASMgoPc2V0X3N0ZXBfY29uZmlnGAcgASgLMhcuZGhvbGUudjEuU2V0U3RlcENvbmZpZ0gAQgYKBGtpbmQibAoGQ2hhbmdlEiIKBGtpbmQYASABKA4yFC5kaG9sZS52MS5DaGFuZ2VLaW5kEg8KB3N0ZXBfaWQYAiABKAkSHAoEZWRnZRgDIAEoCzIOLmRob2xlLnYxLkVkZ2USDwoHc3VtbWFyeRgEIAEoCSIpCgREaWZmEiEKB2NoYW5nZXMYASADKAsyEC5kaG9sZS52MS5DaGFuZ2Ui1wEKCFJldmlzaW9uEgoKAmlkGAEgASgJEhMKC3BpcGVsaW5lX2lkGAIgASgJEhQKDGNvbnRlbnRfaGFzaBgDIAEoCRINCgVzdGF0ZRgEIAEoCRIyCghsb2NrZmlsZRgFIAMoCzIgLmRob2xlLnYxLlJldmlzaW9uLkxvY2tmaWxlRW50cnkSDgoGYXV0aG9yGAYgASgJEhAKCGFwcHJvdmVyGAcgASgJGi8KDUxvY2tmaWxlRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASI+ChJHZXRQaXBlbGluZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiYQoTR2V0UGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iUgoVQ3JlYXRlUGlwZWxpbmVSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEiQKCHBpcGVsaW5lGAIgASgLMhIuZGhvbGUudjEuUGlwZWxpbmUiZAoWQ3JlYXRlUGlwZWxpbmVSZXNwb25zZRIkCghwaXBlbGluZRgBIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lEiQKCHJldmlzaW9uGAIgASgLMhIuZGhvbGUudjEuUmV2aXNpb24iawoVQXBwbHlPcGVyYXRpb25SZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhUKDWJhc2VfcmV2aXNpb24YAiABKAkSJgoJb3BlcmF0aW9uGAMgASgLMhMuZGhvbGUudjEuT3BlcmF0aW9uIqgBChZBcHBseU9wZXJhdGlvblJlc3BvbnNlEiQKCHJldmlzaW9uGAEgASgLMhIuZGhvbGUudjEuUmV2aXNpb24SHAoEZGlmZhgCIAEoCzIOLmRob2xlLnYxLkRpZmYSJAoHaW52ZXJzZRgDIAEoCzITLmRob2xlLnYxLk9wZXJhdGlvbhIkCghwaXBlbGluZRgEIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lImEKD1ZhbGlkYXRlUmVxdWVzdBITCgtwaXBlbGluZV9pZBgBIAEoCRITCgtyZXZpc2lvbl9pZBgCIAEoCRIkCghwaXBlbGluZRgDIAEoCzISLmRob2xlLnYxLlBpcGVsaW5lIk4KCkRpYWdub3N0aWMSEAoIc2V2ZXJpdHkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIPCgdzdGVwX2lkGAMgASgJEgwKBHBvcnQYBCABKAkiPQoQVmFsaWRhdGVSZXNwb25zZRIpCgtkaWFnbm9zdGljcxgBIAMoCzIULmRob2xlLnYxLkRpYWdub3N0aWMiNwoLUGxhblJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiZAoLUGxhbm5lZFN0ZXASDwoHc3RlcF9pZBgBIAEoCRIRCgljYWNoZV9oaXQYAiABKAgSEwoLZW5naW5lX2tpbmQYAyABKAkSHAoUbm9uX2NhY2hlYWJsZV9yZWFzb24YBCABKAkiNAoMUGxhblJlc3BvbnNlEiQKBXN0ZXBzGAEgAygLMhUuZGhvbGUudjEuUGxhbm5lZFN0ZXAiKwoUTGlzdFJldmlzaW9uc1JlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkiPgoVTGlzdFJldmlzaW9uc1Jlc3BvbnNlEiUKCXJldmlzaW9ucxgBIAMoCzISLmRob2xlLnYxLlJldmlzaW9uIi0KFkFwcHJvdmVSZXZpc2lvblJlcXVlc3QSEwoLcmV2aXNpb25faWQYASABKAkiPwoXQXBwcm92ZVJldmlzaW9uUmVzcG9uc2USJAoIcmV2aXNpb24YASABKAsyEi5kaG9sZS52MS5SZXZpc2lvbiI7Cg9TdGFydFJ1blJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiNwoQU3RhcnRSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSEwoLcmV2aXNpb25faWQYAiABKAkiIQoPV2F0Y2hSdW5SZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCSKLAQoQV2F0Y2hSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhAKCHNlcXVlbmNlGAQgASgEEgwKBHR5cGUYBSABKAkSDwoHcGF5bG9hZBgGIAEoDBIUCgxhdF91bml4X25hbm8YByABKAMiSgoVRGVjaWRlQXBwcm92YWxSZXF1ZXN0Eg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEhAKCGFwcHJvdmVkGAMgASgIIl0KFkRlY2lkZUFwcHJvdmFsUmVzcG9uc2USDgoGcnVuX2lkGAEgASgJEg8KB3N0ZXBfaWQYAiABKAkSEAoIYXBwcm92ZXIYAyABKAkSEAoIYXBwcm92ZWQYBCABKAgiJgoQR2V0UGx1Z2luUmVxdWVzdBISCgpwbHVnaW5fcmVmGAEgASgJIpMCCgZQbHVnaW4SCwoDcmVmGAEgASgJEhEKCW5hbWVzcGFjZRgCIAEoCRIMCgRuYW1lGAMgASgJEg8KB3ZlcnNpb24YBCABKAkSIAoGZGlnZXN0GAUgASgLMhAuZGhvbGUudjEuRGlnZXN0EgwKBGtpbmQYBiABKAkSKwoMZWZmZWN0X2NsYXNzGAcgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSKgoMY2FwYWJpbGl0aWVzGAggAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIUCgxpbnB1dF9zY2hlbWEYCSABKAkSFQoNb3V0cHV0X3NjaGVtYRgKIAEoCRIUCgxlbmdpbmVfdHlwZXMYCyADKAkiNQoRR2V0UGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIjgKFFB1Ymxpc2hQbHVnaW5SZXF1ZXN0EiAKBnBsdWdpbhgBIAEoCzIQLmRob2xlLnYxLlBsdWdpbiI5ChVQdWJsaXNoUGx1Z2luUmVzcG9uc2USIAoGcGx1Z2luGAEgASgLMhAuZGhvbGUudjEuUGx1Z2luIoYCCgdUcmlnZ2VyEgoKAmlkGAEgASgJEgwKBGtpbmQYAiABKAkSEwoLcGlwZWxpbmVfaWQYAyABKAkSOgoNaW5wdXRfbWFwcGluZxgEIAMoCzIjLmRob2xlLnYxLlRyaWdnZXIuSW5wdXRNYXBwaW5nRW50cnkSEgoKZXhwcmVzc2lvbhgFIAEoCRIRCgl1bnRydXN0ZWQYBiABKAgSDgoGc2VjcmV0GAcgASgJEhAKCGRlY2xhcmVkGAggASgIEhIKCmhhc19zZWNyZXQYCSABKAgaMwoRSW5wdXRNYXBwaW5nRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASI6ChRDcmVhdGVUcmlnZ2VyUmVxdWVzdBIiCgd0cmlnZ2VyGAEgASgLMhEuZGhvbGUudjEuVHJpZ2dlciI7ChVDcmVhdGVUcmlnZ2VyUmVzcG9uc2USIgoHdHJpZ2dlchgBIAEoCzIRLmRob2xlLnYxLlRyaWdnZXIiFQoTTGlzdFRyaWdnZXJzUmVxdWVzdCI7ChRMaXN0VHJpZ2dlcnNSZXNwb25zZRIjCgh0cmlnZ2VycxgBIAMoCzIRLmRob2xlLnYxLlRyaWdnZXIiKgoURGVsZXRlVHJpZ2dlclJlcXVlc3QSEgoKdHJpZ2dlcl9pZBgBIAEoCSIXChVEZWxldGVUcmlnZ2VyUmVzcG9uc2UiMgoQQ2FuY2VsUnVuUmVxdWVzdBIOCgZydW5faWQYASABKAkSDgoGcmVhc29uGAIgASgJIkQKDUNhbmNlbGxlZFN0ZXASDwoHc3RlcF9pZBgBIAEoCRIPCgdhdHRlbXB0GAIgASgNEhEKCWVuZ2luZV9pZBgDIAEoCSJLChFDYW5jZWxSdW5SZXNwb25zZRIOCgZydW5faWQYASABKAkSJgoFc3RlcHMYAiADKAsyFy5kaG9sZS52MS5DYW5jZWxsZWRTdGVwIroBCgZFbmdpbmUSCgoCaWQYASABKAkSDQoFc3RhdGUYAiABKAkSKgoMY2FwYWJpbGl0aWVzGAMgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIKCgJvcxgEIAEoCRIMCgRhcmNoGAUgASgJEg0KBXNsb3RzGAYgASgNEhkKEXByb3RvY29sX3ZlcnNpb25zGAcgAygNEiUKCWluX2ZsaWdodBgIIAMoCzISLmRob2xlLnYxLkluRmxpZ2h0IhQKEkxpc3RFbmdpbmVzUmVxdWVzdCI4ChNMaXN0RW5naW5lc1Jlc3BvbnNlEiEKB2VuZ2luZXMYASADKAsyEC5kaG9sZS52MS5FbmdpbmUiJwoSRHJhaW5FbmdpbmVSZXF1ZXN0EhEKCWVuZ2luZV9pZBgBIAEoCSI3ChNEcmFpbkVuZ2luZVJlc3BvbnNlEiAKBmVuZ2luZRgBIAEoCzIQLmRob2xlLnYxLkVuZ2luZSIeCgZDdXJzb3ISCQoBeBgBIAEoARIJCgF5GAIgASgBInkKDVByZXNlbmNlRXZlbnQSEQoJcHJpbmNpcGFsGAEgASgJEhEKCXNlbGVjdGlvbhgCIAEoCRIgCgZjdXJzb3IYAyABKAsyEC5kaG9sZS52MS5DdXJzb3ISEgoKc2Vzc2lvbl9pZBgEIAEoCRIMCgRnb25lGAUgASgIInQKFFdhdGNoUHJlc2VuY2VSZXF1ZXN0EhMKC3BpcGVsaW5lX2lkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSEQoJc2VsZWN0aW9uGAMgASgJEiAKBmN1cnNvchgEIAEoCzIQLmRob2xlLnYxLkN1cnNvciI/ChVXYXRjaFByZXNlbmNlUmVzcG9uc2USJgoFZXZlbnQYASABKAsyFy5kaG9sZS52MS5QcmVzZW5jZUV2ZW50IoMBChVVcGRhdGVQcmVzZW5jZVJlcXVlc3QSEwoLcGlwZWxpbmVfaWQYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCRIRCglzZWxlY3Rpb24YAyABKAkSIAoGY3Vyc29yGAQgASgLMhAuZGhvbGUudjEuQ3Vyc29yEgwKBGdvbmUYBSABKAgiGAoWVXBkYXRlUHJlc2VuY2VSZXNwb25zZSpyCgpDaGFuZ2VLaW5kEhsKF0NIQU5HRV9LSU5EX1VOU1BFQ0lGSUVEEAASFQoRQ0hBTkdFX0tJTkRfQURERUQQARIXChNDSEFOR0VfS0lORF9SRU1PVkVEEAISFwoTQ0hBTkdFX0tJTkRfQ0hBTkdFRBADMqcBCg1FbmdpbmVTZXJ2aWNlEkoKC0xpc3RFbmdpbmVzEhwuZGhvbGUudjEuTGlzdEVuZ2luZXNSZXF1ZXN0Gh0uZGhvbGUudjEuTGlzdEVuZ2luZXNSZXNwb25zZRJKCgtEcmFpbkVuZ2luZRIcLmRob2xlLnYxLkRyYWluRW5naW5lUmVxdWVzdBodLmRob2xlLnYxLkRyYWluRW5naW5lUmVzcG9uc2UyggsKD1BpcGVsaW5lU2VydmljZRJTCg5DcmVhdGVQaXBlbGluZRIfLmRob2xlLnYxLkNyZWF0ZVBpcGVsaW5lUmVxdWVzdBogLmRob2xlLnYxLkNyZWF0ZVBpcGVsaW5lUmVzcG9uc2USSgoLR2V0UGlwZWxpbmUSHC5kaG9sZS52MS5HZXRQaXBlbGluZVJlcXVlc3QaHS5kaG9sZS52MS5HZXRQaXBlbGluZVJlc3BvbnNlElMKDkFwcGx5T3BlcmF0aW9uEh8uZGhvbGUudjEuQXBwbHlPcGVyYXRpb25SZXF1ZXN0GiAuZGhvbGUudjEuQXBwbHlPcGVyYXRpb25SZXNwb25zZRJBCghWYWxpZGF0ZRIZLmRob2xlLnYxLlZhbGlkYXRlUmVxdWVzdBoaLmRob2xlLnYxLlZhbGlkYXRlUmVzcG9uc2USNQoEUGxhbhIVLmRob2xlLnYxLlBsYW5SZXF1ZXN0GhYuZGhvbGUudjEuUGxhblJlc3BvbnNlEkQKCUdldFBsdWdpbhIaLmRob2xlLnYxLkdldFBsdWdpblJlcXVlc3QaGy5kaG9sZS52MS5HZXRQbHVnaW5SZXNwb25zZRJQCg1QdWJsaXNoUGx1Z2luEh4uZGhvbGUudjEuUHVibGlzaFBsdWdpblJlcXVlc3QaHy5kaG9sZS52MS5QdWJsaXNoUGx1Z2luUmVzcG9uc2USUAoNQ3JlYXRlVHJpZ2dlchIeLmRob2xlLnYxLkNyZWF0ZVRyaWdnZXJSZXF1ZXN0Gh8uZGhvbGUudjEuQ3JlYXRlVHJpZ2dlclJlc3BvbnNlEk0KDExpc3RUcmlnZ2VycxIdLmRob2xlLnYxLkxpc3RUcmlnZ2Vyc1JlcXVlc3QaHi5kaG9sZS52MS5MaXN0VHJpZ2dlcnNSZXNwb25zZRJQCg1EZWxldGVUcmlnZ2VyEh4uZGhvbGUudjEuRGVsZXRlVHJpZ2dlclJlcXVlc3QaHy5kaG9sZS52MS5EZWxldGVUcmlnZ2VyUmVzcG9uc2USUAoNTGlzdFJldmlzaW9ucxIeLmRob2xlLnYxLkxpc3RSZXZpc2lvbnNSZXF1ZXN0Gh8uZGhvbGUudjEuTGlzdFJldmlzaW9uc1Jlc3BvbnNlElYKD0FwcHJvdmVSZXZpc2lvbhIgLmRob2xlLnYxLkFwcHJvdmVSZXZpc2lvblJlcXVlc3QaIS5kaG9sZS52MS5BcHByb3ZlUmV2aXNpb25SZXNwb25zZRJBCghTdGFydFJ1bhIZLmRob2xlLnYxLlN0YXJ0UnVuUmVxdWVzdBoaLmRob2xlLnYxLlN0YXJ0UnVuUmVzcG9uc2USQwoIV2F0Y2hSdW4SGS5kaG9sZS52MS5XYXRjaFJ1blJlcXVlc3QaGi5kaG9sZS52MS5XYXRjaFJ1blJlc3BvbnNlMAESUwoORGVjaWRlQXBwcm92YWwSHy5kaG9sZS52MS5EZWNpZGVBcHByb3ZhbFJlcXVlc3QaIC5kaG9sZS52MS5EZWNpZGVBcHByb3ZhbFJlc3BvbnNlEkQKCUNhbmNlbFJ1bhIaLmRob2xlLnYxLkNhbmNlbFJ1blJlcXVlc3QaGy5kaG9sZS52MS5DYW5jZWxSdW5SZXNwb25zZRJSCg1XYXRjaFByZXNlbmNlEh4uZGhvbGUudjEuV2F0Y2hQcmVzZW5jZVJlcXVlc3QaHy5kaG9sZS52MS5XYXRjaFByZXNlbmNlUmVzcG9uc2UwARJTCg5VcGRhdGVQcmVzZW5jZRIfLmRob2xlLnYxLlVwZGF0ZVByZXNlbmNlUmVxdWVzdBogLmRob2xlLnYxLlVwZGF0ZVByZXNlbmNlUmVzcG9uc2VCiQEKDGNvbS5kaG9sZS52MUIIQXBpUHJvdG9QAVouZ2l0aHViLmNvbS9henJ0eWR4Yi9kaG9sZS9nZW4vZGhvbGUvdjE7ZGhvbGV2MaICA0RYWKoCCERob2xlLlYxygIIRGhvbGVcVjHiAhREaG9sZVxWMVxHUEJNZXRhZGF0YeoCCURob2xlOjpWMWIGcHJvdG8z",
     [file_dhole_v1_common, file_dhole_v1_engine, file_dhole_v1_pipeline],
   );
 
@@ -1261,6 +1261,229 @@ export const PublishPluginResponseSchema: GenMessage<PublishPluginResponse> =
   messageDesc(file_dhole_v1_api, 37);
 
 /**
+ * Trigger is one configured event source, as the contract carries it.
+ *
+ * It is on the contract because it was not: triggers could only be declared on
+ * the plane's own configuration file and read at start-up by `--triggers`, so
+ * creating one was a capability reserved for whoever could edit a file on the
+ * control plane's host and restart it. The GUI and an agent can do neither,
+ * which is exactly what ADR 0013 refuses. A trigger binds to a pipeline's
+ * typed inputs (ADR 0007), and the binding is checked when the trigger is
+ * CREATED rather than at 3am inside the first step of a run that should never
+ * have started.
+ *
+ * @generated from message dhole.v1.Trigger
+ */
+export type Trigger = Message<"dhole.v1.Trigger"> & {
+  /**
+   * Identity within the tenant. A schedule's id is the key of its row, so two
+   * planes running the same id run ONE schedule between them.
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * "schedule", "http" or "git".
+   *
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+
+  /**
+   * The pipeline this trigger drives. Its ACTIVE revision is resolved when
+   * the trigger fires, never pinned when it is created.
+   *
+   * @generated from field: string pipeline_id = 3;
+   */
+  pipelineId: string;
+
+  /**
+   * Each of the pipeline's declared inputs to the field of this trigger's own
+   * event that fills it. The pipeline's vocabulary is the stable one.
+   *
+   * @generated from field: map<string, string> input_mapping = 4;
+   */
+  inputMapping: { [key: string]: string };
+
+  /**
+   * A five- or six-field cron expression. Schedules only.
+   *
+   * @generated from field: string expression = 5;
+   */
+  expression: string;
+
+  /**
+   * Mark every value this trigger produces as tainted (ADR 0015).
+   *
+   * @generated from field: bool untrusted = 6;
+   */
+  untrusted: boolean;
+
+  /**
+   * The shared secret a forge signs its webhooks with. Git triggers only, and
+   * required for them: an endpoint that can verify nothing is an
+   * unauthenticated way to start somebody's pipeline.
+   *
+   * WRITE-ONLY. It is never returned by ListTriggers — a contract that read
+   * back the secret it was given would make every credential-listing client a
+   * way to exfiltrate it. has_secret says whether one is held.
+   *
+   * @generated from field: string secret = 7;
+   */
+  secret: string;
+
+  /**
+   * Read-only: this trigger is DECLARED in the plane's `--triggers` file
+   * rather than stored. A declared trigger wins over a stored one of the same
+   * id and cannot be changed or deleted through this contract, because the
+   * file is what the next restart will read.
+   *
+   * @generated from field: bool declared = 8;
+   */
+  declared: boolean;
+
+  /**
+   * Read-only: a secret is held for this trigger.
+   *
+   * @generated from field: bool has_secret = 9;
+   */
+  hasSecret: boolean;
+};
+
+/**
+ * Describes the message dhole.v1.Trigger.
+ * Use `create(TriggerSchema)` to create a new message.
+ */
+export const TriggerSchema: GenMessage<Trigger> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 38);
+
+/**
+ * CreateTriggerRequest stores one trigger in the caller's tenant.
+ *
+ * The tenant is the credential's, like everywhere else. The binding is
+ * validated against the pipeline's active revision before anything is stored:
+ * a trigger naming an input the pipeline does not declare is a mistake made
+ * while wiring it up, and finding it now is worth far more than finding it in
+ * a run.
+ *
+ * @generated from message dhole.v1.CreateTriggerRequest
+ */
+export type CreateTriggerRequest = Message<"dhole.v1.CreateTriggerRequest"> & {
+  /**
+   * @generated from field: dhole.v1.Trigger trigger = 1;
+   */
+  trigger?: Trigger | undefined;
+};
+
+/**
+ * Describes the message dhole.v1.CreateTriggerRequest.
+ * Use `create(CreateTriggerRequestSchema)` to create a new message.
+ */
+export const CreateTriggerRequestSchema: GenMessage<CreateTriggerRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 39);
+
+/**
+ * CreateTriggerResponse is the trigger as it is now stored, without its
+ * secret.
+ *
+ * @generated from message dhole.v1.CreateTriggerResponse
+ */
+export type CreateTriggerResponse =
+  Message<"dhole.v1.CreateTriggerResponse"> & {
+    /**
+     * @generated from field: dhole.v1.Trigger trigger = 1;
+     */
+    trigger?: Trigger | undefined;
+  };
+
+/**
+ * Describes the message dhole.v1.CreateTriggerResponse.
+ * Use `create(CreateTriggerResponseSchema)` to create a new message.
+ */
+export const CreateTriggerResponseSchema: GenMessage<CreateTriggerResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 40);
+
+/**
+ * ListTriggersRequest asks for every trigger the caller's tenant has: the
+ * stored ones and the ones the plane's own configuration declares, so an
+ * operator mid-migration can see both and which is which.
+ *
+ * @generated from message dhole.v1.ListTriggersRequest
+ */
+export type ListTriggersRequest = Message<"dhole.v1.ListTriggersRequest"> & {};
+
+/**
+ * Describes the message dhole.v1.ListTriggersRequest.
+ * Use `create(ListTriggersRequestSchema)` to create a new message.
+ */
+export const ListTriggersRequestSchema: GenMessage<ListTriggersRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 41);
+
+/**
+ * ListTriggersResponse is those triggers, in id order and without secrets.
+ *
+ * @generated from message dhole.v1.ListTriggersResponse
+ */
+export type ListTriggersResponse = Message<"dhole.v1.ListTriggersResponse"> & {
+  /**
+   * @generated from field: repeated dhole.v1.Trigger triggers = 1;
+   */
+  triggers: Trigger[];
+};
+
+/**
+ * Describes the message dhole.v1.ListTriggersResponse.
+ * Use `create(ListTriggersResponseSchema)` to create a new message.
+ */
+export const ListTriggersResponseSchema: GenMessage<ListTriggersResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 42);
+
+/**
+ * DeleteTriggerRequest removes one stored trigger. A DECLARED trigger is
+ * refused: it lives in the plane's configuration file, and deleting the row
+ * would leave the file to put it back at the next restart.
+ *
+ * @generated from message dhole.v1.DeleteTriggerRequest
+ */
+export type DeleteTriggerRequest = Message<"dhole.v1.DeleteTriggerRequest"> & {
+  /**
+   * @generated from field: string trigger_id = 1;
+   */
+  triggerId: string;
+};
+
+/**
+ * Describes the message dhole.v1.DeleteTriggerRequest.
+ * Use `create(DeleteTriggerRequestSchema)` to create a new message.
+ */
+export const DeleteTriggerRequestSchema: GenMessage<DeleteTriggerRequest> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 43);
+
+/**
+ * DeleteTriggerResponse is empty. The trigger is gone; there is nothing left
+ * to say about it.
+ *
+ * @generated from message dhole.v1.DeleteTriggerResponse
+ */
+export type DeleteTriggerResponse =
+  Message<"dhole.v1.DeleteTriggerResponse"> & {};
+
+/**
+ * Describes the message dhole.v1.DeleteTriggerResponse.
+ * Use `create(DeleteTriggerResponseSchema)` to create a new message.
+ */
+export const DeleteTriggerResponseSchema: GenMessage<DeleteTriggerResponse> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_api, 44);
+
+/**
  * CancelRunRequest stops a run.
  *
  * Cancellation is a control-plane act with an engine-side half: the run is
@@ -1291,7 +1514,7 @@ export type CancelRunRequest = Message<"dhole.v1.CancelRunRequest"> & {
  */
 export const CancelRunRequestSchema: GenMessage<CancelRunRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 38);
+  messageDesc(file_dhole_v1_api, 45);
 
 /**
  * CancelledStep is one in-flight attempt cancellation reached.
@@ -1323,7 +1546,7 @@ export type CancelledStep = Message<"dhole.v1.CancelledStep"> & {
  */
 export const CancelledStepSchema: GenMessage<CancelledStep> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 39);
+  messageDesc(file_dhole_v1_api, 46);
 
 /**
  * CancelRunResponse is what the cancellation reached. An empty steps list
@@ -1350,7 +1573,7 @@ export type CancelRunResponse = Message<"dhole.v1.CancelRunResponse"> & {
  */
 export const CancelRunResponseSchema: GenMessage<CancelRunResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 40);
+  messageDesc(file_dhole_v1_api, 47);
 
 /**
  * Engine is one live engine instance as the control plane currently sees it.
@@ -1410,7 +1633,7 @@ export type Engine = Message<"dhole.v1.Engine"> & {
  */
 export const EngineSchema: GenMessage<Engine> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 41);
+  messageDesc(file_dhole_v1_api, 48);
 
 /**
  * ListEnginesRequest asks for the caller's tenant's fleet. It carries no
@@ -1426,7 +1649,7 @@ export type ListEnginesRequest = Message<"dhole.v1.ListEnginesRequest"> & {};
  */
 export const ListEnginesRequestSchema: GenMessage<ListEnginesRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 42);
+  messageDesc(file_dhole_v1_api, 49);
 
 /**
  * ListEnginesResponse is the live fleet, by engine id.
@@ -1446,7 +1669,7 @@ export type ListEnginesResponse = Message<"dhole.v1.ListEnginesResponse"> & {
  */
 export const ListEnginesResponseSchema: GenMessage<ListEnginesResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 43);
+  messageDesc(file_dhole_v1_api, 50);
 
 /**
  * DrainEngineRequest stops new work reaching one engine.
@@ -1466,7 +1689,7 @@ export type DrainEngineRequest = Message<"dhole.v1.DrainEngineRequest"> & {
  */
 export const DrainEngineRequestSchema: GenMessage<DrainEngineRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 44);
+  messageDesc(file_dhole_v1_api, 51);
 
 /**
  * DrainEngineResponse is the instance as it now stands, or unset when the
@@ -1489,7 +1712,7 @@ export type DrainEngineResponse = Message<"dhole.v1.DrainEngineResponse"> & {
  */
 export const DrainEngineResponseSchema: GenMessage<DrainEngineResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 45);
+  messageDesc(file_dhole_v1_api, 52);
 
 /**
  * Cursor is where an editor's pointer is on the canvas, in the canvas's own
@@ -1516,7 +1739,7 @@ export type Cursor = Message<"dhole.v1.Cursor"> & {
  */
 export const CursorSchema: GenMessage<Cursor> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 46);
+  messageDesc(file_dhole_v1_api, 53);
 
 /**
  * PresenceEvent is one OTHER editor of a pipeline, as the editors watching it
@@ -1576,7 +1799,7 @@ export type PresenceEvent = Message<"dhole.v1.PresenceEvent"> & {
  */
 export const PresenceEventSchema: GenMessage<PresenceEvent> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 47);
+  messageDesc(file_dhole_v1_api, 54);
 
 /**
  * WatchPresenceRequest follows who else is editing one pipeline.
@@ -1623,7 +1846,7 @@ export type WatchPresenceRequest = Message<"dhole.v1.WatchPresenceRequest"> & {
  */
 export const WatchPresenceRequestSchema: GenMessage<WatchPresenceRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 48);
+  messageDesc(file_dhole_v1_api, 55);
 
 /**
  * WatchPresenceResponse is one presence event. It wraps rather than repeats
@@ -1646,7 +1869,7 @@ export type WatchPresenceResponse =
  */
 export const WatchPresenceResponseSchema: GenMessage<WatchPresenceResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 49);
+  messageDesc(file_dhole_v1_api, 56);
 
 /**
  * UpdatePresenceRequest is one editor saying what it is doing now.
@@ -1693,7 +1916,7 @@ export type UpdatePresenceRequest =
  */
 export const UpdatePresenceRequestSchema: GenMessage<UpdatePresenceRequest> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 50);
+  messageDesc(file_dhole_v1_api, 57);
 
 /**
  * UpdatePresenceResponse is empty: presence is fire-and-forget, and a field
@@ -1710,7 +1933,7 @@ export type UpdatePresenceResponse =
  */
 export const UpdatePresenceResponseSchema: GenMessage<UpdatePresenceResponse> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_api, 51);
+  messageDesc(file_dhole_v1_api, 58);
 
 /**
  * ChangeKind is what happened to one element of the pipeline.
@@ -1870,6 +2093,40 @@ export const PipelineService: GenService<{
     methodKind: "unary";
     input: typeof PublishPluginRequestSchema;
     output: typeof PublishPluginResponseSchema;
+  };
+  /**
+   * CreateTrigger stores an event source in the caller's tenant. Without it
+   * triggers could only be declared in the plane's own configuration file and
+   * read at start-up, so an operator without shell access to the control
+   * plane's host could not create one at all (ADR 0013).
+   *
+   * @generated from rpc dhole.v1.PipelineService.CreateTrigger
+   */
+  createTrigger: {
+    methodKind: "unary";
+    input: typeof CreateTriggerRequestSchema;
+    output: typeof CreateTriggerResponseSchema;
+  };
+  /**
+   * ListTriggers returns the tenant's triggers, stored and declared alike,
+   * and never their secrets.
+   *
+   * @generated from rpc dhole.v1.PipelineService.ListTriggers
+   */
+  listTriggers: {
+    methodKind: "unary";
+    input: typeof ListTriggersRequestSchema;
+    output: typeof ListTriggersResponseSchema;
+  };
+  /**
+   * DeleteTrigger removes one stored trigger.
+   *
+   * @generated from rpc dhole.v1.PipelineService.DeleteTrigger
+   */
+  deleteTrigger: {
+    methodKind: "unary";
+    input: typeof DeleteTriggerRequestSchema;
+    output: typeof DeleteTriggerResponseSchema;
   };
   /**
    * ListRevisions returns a pipeline's revision history.

@@ -47,6 +47,9 @@ func surfaces() map[string]surface {
 		"WatchRun":        {group: groupRun, build: runWatchCmd},
 		"CancelRun":       {group: groupRun, build: runCancelCmd},
 		"DecideApproval":  {group: groupRun, build: runApproveCmd},
+		"CreateTrigger":   {group: groupTrigger, build: triggerCreateCmd},
+		"ListTriggers":    {group: groupTrigger, build: triggerListCmd},
+		"DeleteTrigger":   {group: groupTrigger, build: triggerDeleteCmd},
 		"GetPlugin":       {group: groupPlugin, build: pluginGetCmd},
 		"PublishPlugin":   {group: groupPlugin, build: pluginPublishCmd},
 		"ListEngines":     {group: groupEngine, build: engineListCmd},
@@ -60,6 +63,7 @@ const (
 	groupRun      = "run"
 	groupEngine   = "engine"
 	groupPlugin   = "plugin"
+	groupTrigger  = "trigger"
 )
 
 // groupHelp is what each group says for itself.
@@ -68,6 +72,7 @@ var groupHelp = map[string]string{
 	groupRun:      "start, follow, cancel and inspect runs",
 	groupEngine:   "the live engine fleet",
 	groupPlugin:   "published plugins and what they declare",
+	groupTrigger:  "the event sources that start runs",
 }
 
 // contractCommands builds one command per RPC of every dhole.v1 service, from

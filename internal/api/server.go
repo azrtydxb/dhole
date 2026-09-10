@@ -33,6 +33,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/tenancy"
+	"github.com/azrtydxb/dhole/internal/trigger"
 )
 
 // DefaultPollInterval is how often WatchRun re-reads the run log while it has
@@ -181,6 +182,16 @@ type Config struct {
 	// catalog. Optional: without one, PublishPlugin says so rather than
 	// accepting a declaration it drops.
 	CatalogWriter PluginPublisher
+	// TriggerStore is the durable trigger table CreateTrigger writes and
+	// ListTriggers reads. Optional: without one, the trigger RPCs say so
+	// rather than accepting an event source they drop — which is what every
+	// deployment had before there was a table at all.
+	TriggerStore Triggers
+	// DeclaredTriggers are the triggers this plane's own `--triggers` file
+	// declares. They are listed alongside the stored ones and they WIN: a
+	// create or delete naming one of these ids is refused, because the file
+	// is what the next restart reads and a row could not change that.
+	DeclaredTriggers []trigger.Spec
 	// OS and Arch are the platform steps are planned for, in Go's
 	// GOOS/GOARCH vocabulary, and must match the scheduler's. Empty means
 	// the deployment does not care.
@@ -224,6 +235,12 @@ type Server struct {
 	tier      string
 	cat       StepResolver
 	catWriter PluginPublisher
+	// triggers is the durable trigger table; declared and declaredSpecs are
+	// the ones the plane's configuration file declares, which win over it.
+	// See triggers.go.
+	triggers      Triggers
+	declared      map[string]bool
+	declaredSpecs []trigger.Spec
 	// live and archive are the two copies of a step's log: the ephemeral
 	// subject and the durable object. See stream.go for why both exist.
 	live    LiveLogs
@@ -268,6 +285,7 @@ func NewServer(cfg Config) (*Server, error) {
 		tier:        cfg.Tier,
 		cat:         cfg.Catalog,
 		catWriter:   cfg.CatalogWriter,
+		triggers:    cfg.TriggerStore,
 		live:        cfg.LiveLogs,
 		archive:     cfg.LogArchive,
 		os:          cfg.OS,
@@ -276,6 +294,11 @@ func NewServer(cfg Config) (*Server, error) {
 		presenceTTL: cfg.PresenceTTL,
 		poll:        cfg.PollInterval,
 		now:         cfg.Now,
+	}
+	s.declaredSpecs = cfg.DeclaredTriggers
+	s.declared = make(map[string]bool, len(cfg.DeclaredTriggers))
+	for _, spec := range cfg.DeclaredTriggers {
+		s.declared[spec.ID] = true
 	}
 	if s.presenceTTL <= 0 {
 		s.presenceTTL = DefaultPresenceTTL

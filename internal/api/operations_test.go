@@ -682,6 +682,19 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 			Plugin: &dholev1.Plugin{Namespace: "acme", Name: "build", Version: "1.0.0"},
 		}))
 		return err
+	case "CreateTrigger":
+		_, err := h.client.CreateTrigger(ctx, connect.NewRequest(&dholev1.CreateTriggerRequest{
+			Trigger: &dholev1.Trigger{Id: "hook", Kind: "http", PipelineId: "pipe-1"},
+		}))
+		return err
+	case "ListTriggers":
+		_, err := h.client.ListTriggers(ctx, connect.NewRequest(&dholev1.ListTriggersRequest{}))
+		return err
+	case "DeleteTrigger":
+		_, err := h.client.DeleteTrigger(ctx, connect.NewRequest(&dholev1.DeleteTriggerRequest{
+			TriggerId: "hook",
+		}))
+		return err
 	case "DecideApproval":
 		_, err := h.client.DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
 			RunId: "run-x", StepId: "approve", Approved: true,
