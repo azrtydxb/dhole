@@ -41,6 +41,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/dag"
 	"github.com/azrtydxb/dhole/internal/defstore"
+	"github.com/azrtydxb/dhole/internal/dynamic"
 	"github.com/azrtydxb/dhole/internal/effects"
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
@@ -427,6 +428,12 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 	pipeline, err := s.defs.Get(ctx, tenantID, state.pipelineID, state.revisionID)
 	if err != nil {
 		return fmt.Errorf("scheduler: run %q pins revision %q: %w", runID, state.revisionID, err)
+	}
+	// The pinned definition is what was AUTHORED; the run's graph is that plus
+	// whatever its generators realised, which only the log knows.
+	pipeline, err = spliceRealised(runID, pipeline, state.fragments)
+	if err != nil {
+		return err
 	}
 	graph, err := dag.Build(pipeline)
 	if err != nil {
@@ -1073,6 +1080,10 @@ type runState struct {
 	// not come due, an approval nobody has decided. The gate is lifted by the
 	// step's own terminal event, written by whoever owns the gate.
 	gated map[string]bool
+	// fragments are the subgraphs this run's generators realised, in the order
+	// the log recorded them. They are part of the run's GRAPH rather than of
+	// its progress: see spliceRealised.
+	fragments []realised
 }
 
 // load replays the run and folds its events into the state a decision needs.
@@ -1153,6 +1164,17 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			// Nothing to fold: a denial is always followed by RUN_FAILED, and
 			// that is what makes the run terminal. The event is here so the
 			// reason is in the log a person reads.
+		case dynamic.EventFragmentRealised:
+			// A generator decided at runtime what work there is, and this is
+			// what it decided. It is folded into the GRAPH rather than into
+			// any step's state, because asking the generator again would
+			// answer differently and the replayed run would stop being the
+			// run that happened (ADR 0003).
+			fragment, err := foldRealised(runID, e)
+			if err != nil {
+				return nil, err
+			}
+			state.fragments = append(state.fragments, fragment)
 		case StepUnschedulable:
 			reason, err := UnmarshalUnschedulable(e.Payload)
 			if err != nil {

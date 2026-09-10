@@ -128,6 +128,55 @@ describe("the realised graph", () => {
     expect(loop.iterations[1]!.finished).toBe(false);
   });
 
+  it("draws the steps a generator realised, out of the record in the log", () => {
+    // A generator decides at RUNTIME what work there is, so the definition
+    // this view never reads would not have contained these steps anyway. The
+    // fragment is in the run log because internal/dynamic put it there (ADR
+    // 0003), and this is the only place the run view can learn about it.
+    const model = applyEvents(emptyRun("run_1"), [
+      event({ type: "RUN_CREATED", sequence: 1 }),
+      event({
+        type: "GENERATOR_FRAGMENT_REALISED",
+        sequence: 2,
+        stepId: "fan-out",
+        payload: {
+          generator: "fan-out",
+          steps: ["shard-a", "shard-b", "shard-c"],
+          fragment: "CghmcmFnbWVudA==",
+        },
+      }),
+    ]);
+
+    const generator = model.nodes[0]!;
+    expect(generator.id).toEqual("fan-out");
+    expect(generator.realised?.steps).toEqual([
+      "shard-a",
+      "shard-b",
+      "shard-c",
+    ]);
+    // The encoded fragment is kept, not thrown away for the list of names: it
+    // is what a replay rebuilds the graph from, and a view holding only the
+    // summary is a view that cannot say what it is showing.
+    expect(generator.realised?.fragment).toEqual("CghmcmFnbWVudA==");
+  });
+
+  it("keeps the node when a generator payload cannot be read", () => {
+    // A frame this client cannot read must not take the run view down: the
+    // rest of the run is still on screen and still moving.
+    const model = applyEvents(emptyRun("run_1"), [
+      event({
+        type: "GENERATOR_FRAGMENT_REALISED",
+        sequence: 1,
+        stepId: "fan-out",
+        payload: { steps: "not a list" },
+      }),
+    ]);
+
+    const generator = model.nodes[0]!;
+    expect(generator.id).toEqual("fan-out");
+    expect(generator.realised).toBeUndefined();
+  });
+
   it("tracks the last sequence, which is what a resume sends back", () => {
     const model = applyEvents(emptyRun("run_1"), [
       event({ type: "RUN_CREATED", sequence: 4 }),

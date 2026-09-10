@@ -13,6 +13,7 @@
  */
 import { useEffect, useReducer, useState } from "react";
 
+import { RealisedGenerator } from "../canvas/GeneratorNode.js";
 import { getToken } from "../api/client.js";
 import {
   applyEvent,
@@ -144,6 +145,12 @@ function NodeView({ node, expanded, onToggle, onSelect }: NodeViewProps) {
         <span data-testid="node-cache-reason">
           {node.cacheIneligibleReason}
         </span>
+      )}
+      {/* A generator's realised steps. They are in the run log and nowhere
+          else — the definition never contained them — so this is drawn from
+          the record the plane wrote and from nothing this view computed. */}
+      {node.realised !== undefined && (
+        <RealisedGenerator record={node.realised} />
       )}
       {node.loop && (
         <>

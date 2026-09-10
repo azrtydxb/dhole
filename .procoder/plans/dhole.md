@@ -948,15 +948,16 @@ Interfaces: produces build-tagged implementations of the Task 9 signal and proce
 
 ## Task 55: Dynamic pipelines
 
-Files: `internal/dynamic/generator.go`, `internal/dynamic/generator_test.go`, `web/src/canvas/GeneratorNode.tsx`
-Interfaces: produces `dynamic.Generator` step type emitting a `*dholev1.Pipeline` fragment; `dynamic.Splice(parent *dholev1.Pipeline, at string, fragment *dholev1.Pipeline) (*dholev1.Pipeline, error)`.
+Files: `internal/dynamic/generator.go`, `internal/dynamic/generator_test.go`, `web/src/canvas/GeneratorNode.tsx`, `internal/scheduler/generator.go`, `internal/scheduler/generator_test.go`, `web/src/canvas/Canvas.tsx`, `web/src/run/events.ts`, `web/src/run/RunView.tsx`, `web/e2e/generator-node.spec.ts`, `web/e2e/seed/main.go`
+Interfaces: produces `dynamic.Generator` step type emitting a `*dholev1.Pipeline` fragment; `dynamic.Splice(parent *dholev1.Pipeline, at string, fragment *dholev1.Pipeline) (*dholev1.Pipeline, error)`; the scheduler derives a run's graph from the pinned definition PLUS every `GENERATOR_FRAGMENT_REALISED` record in its log.
 
-- [ ] Write `internal/dynamic/generator_test.go` asserting `TestGeneratorEmitsSubgraphSplicedIntoRun`: a generator emitting three steps results in those three executing and the run completing. Run — expect FAIL with "undefined: dynamic.Splice".
-- [ ] Add `TestSpliceRejectsDuplicateStepID` asserting a fragment reusing an existing step id fails with an error naming the collision rather than silently overwriting.
-- [ ] Add `TestSplicedGraphIsStillAcyclic` asserting a fragment introducing a cycle is rejected at splice time.
-- [ ] Add `TestAuthoredGraphShowsGeneratorAsOpaque` (Playwright) asserting the editor renders the generator as an opaque "expands at runtime" node while the run view shows the realised steps.
-- [ ] Implement `generator.go` and `Splice`, recording the realised fragment in the event log so replay is deterministic, and `GeneratorNode.tsx`.
-- [ ] Run `go test ./internal/dynamic && npx playwright test` — expect PASS. Commit.
+- [x] Write `internal/dynamic/generator_test.go` asserting `TestGeneratorEmitsSubgraphSplicedIntoRun`: a generator emitting three steps results in those three executing and the run completing. Run — expect FAIL with "undefined: dynamic.Splice".
+- [x] Add `TestSpliceRejectsDuplicateStepID` asserting a fragment reusing an existing step id fails with an error naming the collision rather than silently overwriting.
+- [x] Add `TestSplicedGraphIsStillAcyclic` asserting a fragment introducing a cycle is rejected at splice time.
+- [x] Add `TestAuthoredGraphShowsGeneratorAsOpaque` (Playwright) asserting the editor renders the generator as an opaque "expands at runtime" node while the run view shows the realised steps. Both halves are the SHIPPING screens: the canvas routes a generator step to its own node, and the run view folds the realised record out of the event stream. The harness module that stood in for both is gone, and with it the checked-in record fixture the browser used to read — the suite now seeds a run whose fragment `internal/dynamic` realised against the pipeline under test.
+- [x] Implement `generator.go` and `Splice`, recording the realised fragment in the event log so replay is deterministic, and `GeneratorNode.tsx`.
+- [x] Fold the record in the SCHEDULER, which is where determinism is observable: `runState` collects every realised fragment and `Advance` splices them into the pinned definition before building the DAG. Without it a restarted plane derived the authored graph, saw the generator already succeeded, and COMPLETED the run while the steps it realised had never run — green and wrong. A fragment that no longer splices is an error, never a fall back to the authored graph.
+- [x] Run `go test ./internal/dynamic && npx playwright test` — expect PASS. Commit.
 
 ## Task 56: Multiplayer editing
 

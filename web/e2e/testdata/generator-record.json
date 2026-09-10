@@ -1,5 +1,0 @@
-{
-  "generator": "fan-out",
-  "steps": ["shard-a", "shard-b", "shard-c"],
-  "fragment": "CghmcmFnbWVudBoWCgdzaGFyZC1hKgsKBXNoYXJkEgIKABoWCgdzaGFyZC1iKgsKBXNoYXJkEgIKABoWCgdzaGFyZC1jKgsKBXNoYXJkEgIKAA=="
-}
