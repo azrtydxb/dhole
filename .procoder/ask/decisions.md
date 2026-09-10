@@ -346,3 +346,43 @@ needs nested runs — which is a change to what a run IS (ADR 0003), not a step 
 
 My inclination is the splice for (c) — the machinery exists and it keeps one run one
 graph — but it is your call, and (a) and (b) are more open than that.
+
+## Proving the last two paths end to end (2026-09-10)
+
+Everything else runs on the cluster and is watched running: two-step pipelines,
+cache hits, approvals decided through the wire, cancellation, budget release on
+failure, triggers firing and stopping, a loop body dispatching to an engine, and
+all three acceptance pipelines with zero skips.
+
+Two paths are proven in tests but have never completed a real pipeline on kw.
+Both are configuration rather than code, and both need something only the owner
+can supply.
+
+### An agent step completing
+
+`builtin:agent` reaches the model factory and refuses, correctly and by name, for
+want of a credential. The action space, the loopback invoker, the taint plumbing
+and the audit trail are covered by `internal/server/agent_e2e_test.go` against a
+stub model. What has never happened is a real agent taking a real action.
+
+Needs: a provider API key, supplied as `dhole serve --model-secret NAME=ENVVAR`
+or the chart's `controlPlane.modelSecrets`. It is a real key with real cost, and
+an agent that can `start_run` will start runs.
+
+- Configure a model secret on the kw deployment and run an agent pipeline.
+- Leave it — the stub-model e2e is enough for now.
+- Configure it but grant only `read_run`, so nothing an agent does has an effect.
+
+### A pipeline running inside a microVM
+
+The VM executor passes the whole shared executor contract, 11 of 11, against real
+Firecracker on an arm64 node with `/dev/kvm`. No engine is deployed with
+`DHOLE_EXECUTOR=vm`, so no PIPELINE has run in a microVM.
+
+Needs: a guest kernel and rootfs staged on the node, and an engine tier configured
+for the vm backend. The images are built the way `docs/executors/vm.md` describes.
+
+- Stage a kernel and rootfs on a node and deploy a vm-backed engine tier.
+- Leave it — the executor contract against real Firecracker is the evidence that
+  matters, and a pipeline adds deployment plumbing rather than proof.
+- Do it in CI instead, on a KVM-capable runner, rather than on kw.
