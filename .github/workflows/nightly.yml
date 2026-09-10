@@ -65,25 +65,36 @@ jobs:
       # Each target names the variables it needs, so they are set together here
       # rather than per-step: a target that quietly stopped needing one would
       # otherwise keep passing for the wrong reason.
+      #
+      # The output is inspected in the SAME run rather than by repeating the
+      # suite. These pipelines take tens of minutes; running them twice to ask
+      # a question about the first run is a job nobody waits for.
+      #
+      # The skip check is the point of the workflow. Each suite skips itself
+      # when its infrastructure is missing, and a skip is invisible in a green
+      # job — so a nightly that provisioned nothing would report a pass nobody
+      # earned, which is worse than not running at all.
       - name: acceptance
-        env:
-          DHOLE_TEST_KUBECONFIG: ${{ runner.temp }}/kubeconfig
-          DHOLE_TEST_POSTGRES_DSN: postgres://dhole:dhole@127.0.0.1:5432/dhole?sslmode=disable
-        run: make acceptance
-
-      # The suites skip themselves when their infrastructure is missing, and a
-      # skip is invisible in a green job. This is the whole reason the workflow
-      # exists, so it fails loudly rather than reporting a pass nobody earned.
-      - name: refuse a run that only skipped
-        if: always()
         env:
           DHOLE_TEST_KUBECONFIG: ${{ runner.temp }}/kubeconfig
           DHOLE_TEST_POSTGRES_DSN: postgres://dhole:dhole@127.0.0.1:5432/dhole?sslmode=disable
         run: |
           set -euo pipefail
-          out=$(go test ./acceptance -count=1 -v -timeout 30m 2>&1 | tee /dev/stderr)
-          if printf '%s' "$out" | grep -q -- '--- SKIP'; then
-            echo "::error::an acceptance pipeline skipped; the nightly job exists to run them, not to report a pass nobody earned"
+          # PIPESTATUS, because `tee` would otherwise swallow a failing suite.
+          set -o pipefail
+          make acceptance 2>&1 | tee "$RUNNER_TEMP/acceptance.log"
+      - name: refuse a run that only skipped
+        if: always()
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/acceptance.log"
+          if [ ! -s "$log" ]; then
+            echo "::error::the acceptance step produced no output at all"
+            exit 1
+          fi
+          if grep -q -- '--- SKIP' "$log"; then
+            echo "::error::an acceptance pipeline skipped; this job exists to run them, not to report a pass nobody earned"
+            grep -- '--- SKIP' "$log"
             exit 1
           fi
 
