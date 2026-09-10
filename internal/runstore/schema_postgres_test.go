@@ -78,3 +78,47 @@ func TestPostgresRefusesASecondTerminalEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, terminalEvents(events), 1)
 }
+
+// TestPostgresRefusesASecondStepVerdict is migration 0021 against the dialect
+// the deployment runs. The SQLite tests prove the migration's intent; only
+// this proves Postgres took both partial unique indexes and that
+// `ON CONFLICT DO NOTHING` covers them there too — a plain .sql file reaches
+// both runners, so a construct only SQLite accepts would leave the deployment
+// with the bug and every local test passing.
+func TestPostgresRefusesASecondStepVerdict(t *testing.T) {
+	dsn := os.Getenv("DHOLE_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("DHOLE_TEST_POSTGRES_DSN not set")
+	}
+	ctx := context.Background()
+	store, err := runstore.NewPostgres(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	tenant := "verdict-" + time.Now().UTC().Format("20060102150405.000000000")
+	require.NoError(t, store.Append(ctx, tenant, runstore.Event{
+		RunID: "run-a", Type: runstore.RunCreated, At: time.Now().UTC(),
+	}))
+	for _, verdict := range []runstore.EventType{awaitingReplay, policyDenied} {
+		for range 2 {
+			require.NoError(t, store.Append(ctx, tenant, runstore.Event{
+				RunID: "run-a", StepID: "a", Attempt: 1,
+				Type: verdict, At: time.Now().UTC(),
+			}))
+		}
+	}
+
+	events, err := store.Replay(ctx, tenant, "run-a")
+	require.NoError(t, err)
+	require.Len(t, eventsOfType(events, awaitingReplay), 1)
+	require.Len(t, eventsOfType(events, policyDenied), 1)
+
+	// And the index is per step, not per run, on this dialect too.
+	require.NoError(t, store.Append(ctx, tenant, runstore.Event{
+		RunID: "run-a", StepID: "b", Attempt: 1,
+		Type: awaitingReplay, At: time.Now().UTC(),
+	}))
+	events, err = store.Replay(ctx, tenant, "run-a")
+	require.NoError(t, err)
+	require.Len(t, eventsOfType(events, awaitingReplay), 2)
+}

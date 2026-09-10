@@ -1193,6 +1193,15 @@ func (s *Scheduler) provenance(
 // The facts the decision was made on travel with it — which plugin, signed or
 // not, from where — because the rule can only say what it refuses in general,
 // and the person reading a failed run needs to know which artifact it was.
+//
+// It writes unconditionally, and what stood in for a check was the READINESS
+// the replay reported — which makes it the same check-then-act that let two
+// advances both close a run (migration 0020). Two advances replaying one log
+// both find the step ready, both put it to policy, and both record the
+// refusal; the refusal is the only trace a denied step leaves anywhere, so two
+// of them say the rule refused this step twice and the run failed once.
+// Migration 0021 makes a step's STEP_POLICY_DENIED unique, so the second
+// append is a no-op, and the fail() below is already idempotent by 0020.
 func (s *Scheduler) deny(
 	ctx context.Context,
 	tenantID, runID string,
@@ -1422,6 +1431,21 @@ func inputsFor(p *dholev1.Pipeline, stepID string, state *runState) []*dholev1.I
 // distinct reason. Repeating an unchanged reason on every Advance would bury
 // the log; changing it — an engine drained, a capability disappeared — is news
 // and is recorded.
+//
+// This one keeps its check-then-act, ON PURPOSE, unlike the terminal event
+// (migration 0020) and the two step verdicts (0021). Two advances that replay
+// before either appends do both write, so a reason can appear twice — but the
+// rule here is "not the same reason twice RUNNING", and a unique index can
+// only express "never twice". Keying one on the payload would silently drop
+// the second half of a reason that went A, B, A, and leave the log saying the
+// step is stuck on B while it is stuck on A. A duplicated line is noise; a log
+// that names the wrong reason is a wrong answer, and this event exists to be
+// the only answer an operator gets about a step that is going nowhere.
+//
+// What the guard is actually for survives the race intact: it stops the 4Hz
+// open-run tick writing the same line thousands of times while a step waits
+// for an engine, because both racers write the SAME reason and every later
+// replay then sees it.
 func (s *Scheduler) recordUnschedulable(
 	ctx context.Context, tenantID, runID, stepID, reason string, state *runState,
 ) error {
@@ -1445,6 +1469,16 @@ func (s *Scheduler) recordUnschedulable(
 // automatically. Once is enough: Advance runs after every status and every
 // restart, and repeating the same standstill on each pass would bury the
 // event that explains it.
+//
+// The `awaiting` check below is a shortcut, NOT the guarantee. It reads a
+// replay taken outside the transaction the append runs in, which is the same
+// check-then-act that let two advances both close a run (migration 0020) — and
+// a blocked step is examined on every pass for as long as the run stays open,
+// which is until a person acts, so the open-run tick and an arriving status
+// meet on it far more often than they met on a completion. The guarantee is
+// migration 0021: a step's STEP_AWAITING_REPLAY is unique, so the second
+// append is the same no-op a redelivery already is, and the loser needs to
+// learn nothing — the sentence it wanted to write is already in the log.
 func (s *Scheduler) recordAwaitingReplay(
 	ctx context.Context, tenantID, runID string, step *dholev1.Step, state *runState,
 ) error {
