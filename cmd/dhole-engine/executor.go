@@ -23,6 +23,21 @@ import (
 // mistake this function must not make: a typo in a trust boundary reads as
 // isolation right up until it does not hold.
 func chooseExecutor() (executor.Executor, error) {
+	backend, err := chooseBackend()
+	if err != nil {
+		return nil, err
+	}
+	// An operator whose hosts really are built from one image can say so; the
+	// process backend cannot discover that for itself and correctly refuses to
+	// guess. Declaring it wrongly serves one host's results as another's, so
+	// it is opt-in and never inferred (internal/executor.WithDeclaredEnvironment).
+	if id := strings.TrimSpace(os.Getenv("DHOLE_ENVIRONMENT_IDENTITY")); id != "" {
+		return executor.WithDeclaredEnvironment(backend, id)
+	}
+	return backend, nil
+}
+
+func chooseBackend() (executor.Executor, error) {
 	kind := envOr("DHOLE_EXECUTOR", process.Kind)
 	switch kind {
 	case process.Kind:

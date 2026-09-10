@@ -79,6 +79,8 @@ func serveCmd(o *options) *cobra.Command {
 				BlobRoot: blobRoot,
 				Blobs:    blobs,
 
+				EnvironmentIdentity: os.Getenv("DHOLE_ENVIRONMENT_IDENTITY"),
+
 				DeploymentID: deploymentID,
 
 				APIAddr:           apiAddr,

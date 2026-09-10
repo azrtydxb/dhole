@@ -130,6 +130,16 @@ type Config struct {
 	// BusURL is the NATS server to dial. Ignored in ModeEmbedded, which
 	// starts its own and reports the URL through BusURL().
 	BusURL string
+	// EnvironmentIdentity is what this deployment declares its hosted engine's
+	// environment to be. Empty means the executor answers for itself, which
+	// for a host process is "no stable identity" and therefore no caching.
+	//
+	// It is a declaration and not a discovery: an operator whose engines are
+	// built from one immutable image knows something the process backend
+	// cannot see, and an operator who declares it wrongly gets one host's
+	// results served as another's (ADR 0021).
+	EnvironmentIdentity string
+
 	// Blobs is the object store every process in this deployment shares.
 	//
 	// Nil means the filesystem under BlobRoot, which is right for a single

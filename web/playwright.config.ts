@@ -47,11 +47,23 @@ export default defineConfig({
       // port talk to this one. The plane allows NO cross-origin call by
       // default, so this names the one origin the suite runs from rather
       // than opening the plane to any page on any site.
+      // DHOLE_ENVIRONMENT_IDENTITY is what lets this plane cache at all. The
+      // process backend runs against whatever its host carries and so reports
+      // no stable identity, which correctly disables caching (ADR 0021) — and
+      // would make "the run view shows cache hits" untestable, because there
+      // would be none. Declaring one says what a real operator says when their
+      // engines are built from one image: this environment is fixed. It is
+      // pinned to the suite's own name so it can never be mistaken for a
+      // production digest.
       command:
         `rm -rf ${stateDir} && go run ../cmd/dhole serve` +
         ` --api-addr ${new URL(apiUrl).host}` +
         ` --store-dsn ${stateDir}/dhole.db --blob-root ${stateDir}` +
         ` --api-allowed-origin ${webUrl}`,
+      env: {
+        ...process.env,
+        DHOLE_ENVIRONMENT_IDENTITY: "e2e:playwright-fixed-environment",
+      },
       reuseExistingServer: false,
       // The port rather than a URL: every RPC on this plane is
       // authenticated, so an HTTP readiness probe would have to carry a

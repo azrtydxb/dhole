@@ -264,6 +264,17 @@ func (i *infra) openEngineSide(ctx context.Context, cfg Config) error {
 	if i.exec == nil {
 		i.exec = process.New()
 	}
+	// The same declaration the standalone engine accepts, for the same reason
+	// and by the same name. A single binary on a reproducible host can cache;
+	// one on a laptop must not, and only its operator can tell the two apart
+	// (ADR 0021, internal/executor.WithDeclaredEnvironment).
+	if cfg.EnvironmentIdentity != "" {
+		declared, err := executor.WithDeclaredEnvironment(i.exec, cfg.EnvironmentIdentity)
+		if err != nil {
+			return err
+		}
+		i.exec = declared
+	}
 	return nil
 }
 

@@ -10,9 +10,15 @@
 import { Canvas } from "./canvas/Canvas.js";
 import { RunView } from "./run/RunView.js";
 import { getToken } from "./api/client.js";
+import { useLocationKey } from "./useLocation.js";
 
 /** App picks the pipeline to edit and hands it to the canvas. */
 export function App() {
+  // Subscribed to rather than read: see useLocationKey. Its value is not used
+  // directly — reading it is what makes this component re-render when the URL
+  // moves, so the reads below see the new one.
+  useLocationKey();
+
   const signedIn = getToken() !== null;
   const parameters = new URLSearchParams(globalThis.location?.search ?? "");
   const pipelineId = parameters.get("pipeline") ?? "";

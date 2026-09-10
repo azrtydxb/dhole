@@ -265,8 +265,16 @@ func shaped(id, name string) (*dholev1.Pipeline, error) {
 		// with `get "out": reader exited 1`. It did, and it took three e2e
 		// tests down with it while looking like a product bug.
 		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
-			step("first", "printf one > out", dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
-			step("second", "cat in > out", dholev1.EffectClass_EFFECT_CLASS_PURE, []string{"in"}, []string{"out"}),
+			// Each step says something on stdout AND writes its declared
+			// output. The two are different channels and the run view shows
+			// both: the log stream is stdout, and a declared output is a file
+			// named after its port. A step that only wrote its file produced
+			// no log at all, so "the log streams into the open page" had
+			// nothing to wait for.
+			step("first", "echo first ran; printf one > out",
+				dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
+			step("second", "echo second ran; cat in > out",
+				dholev1.EffectClass_EFFECT_CLASS_PURE, []string{"in"}, []string{"out"}),
 		}, Edges: []*dholev1.Edge{
 			{FromStep: "first", FromPort: "out", ToStep: "second", ToPort: "in"},
 		}}, nil
