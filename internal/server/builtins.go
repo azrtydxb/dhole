@@ -23,7 +23,6 @@ import (
 	"github.com/azrtydxb/dhole/internal/steps/gate"
 	"github.com/azrtydxb/dhole/internal/steps/llm"
 	"github.com/azrtydxb/dhole/internal/steps/loop"
-	"github.com/azrtydxb/dhole/internal/wait"
 	"github.com/azrtydxb/go-ai-sdk/provider"
 )
 
@@ -97,10 +96,9 @@ type ModelFactory func(ctx context.Context, providerName, modelID string) (provi
 // internal/wait libraries with tests and no caller: every acceptance pipeline
 // that used them had its harness stand in for this file.
 type builtins struct {
-	log    *slog.Logger
-	store  runstore.Store
-	cas    cas.Store
-	timers *wait.Timers
+	log   *slog.Logger
+	store runstore.Store
+	cas   cas.Store
 	// approvers is where an approver is verified. An approval whose approver
 	// is not a principal of the tenant is not an approval.
 	approvers approval.Approvers
@@ -217,25 +215,16 @@ func (b *builtins) execute(ctx context.Context, job builtinJob) error {
 	}
 }
 
-// --- the two gates ---------------------------------------------------------
+// --- the human gate --------------------------------------------------------
 
-// arm makes the run wait until a time. Nothing sleeps: the wait is a row, and
-// internal/wait's poll — started by the same Server that started this — is
-// what ends it (ADR 0003).
-func (b *builtins) arm(ctx context.Context, job builtinJob) error {
-	raw := job.step.GetConfig()["duration"]
-	if strings.TrimSpace(raw) == "" {
-		return errors.New("a timer step needs a `duration` in its config")
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return fmt.Errorf("a timer step's duration %q: %w", raw, err)
-	}
-	if d < 0 {
-		return fmt.Errorf("a timer step's duration %q is in the past", raw)
-	}
-	return b.timers.Schedule(ctx, job.tenantID, job.runID, job.step.GetId(), time.Now().Add(d))
-}
+// The timer gate is NOT here any more, and its absence is the point. Arming a
+// timer used to be a builtin job like any other, which made it a different
+// transaction from the readiness decision that gated the step — so
+// STEP_AWAITING_TIMER could land at a lower sequence than the STEP_DISPATCHED
+// of the step it gated, a log reading "gated, then dispatched" and a wait that
+// never happened. It now runs inside the transaction that would otherwise have
+// dispatched (scheduler.Config.Gate), and the copy here was left behind by
+// that move with nothing calling it.
 
 // request opens a human gate. It is armed here and decided by Server.Approve,
 // which is the one call an approval RPC or a CLI has to make.
@@ -614,7 +603,6 @@ func newBuiltins(in *infra, models ModelFactory, resume approval.Resumer, log *s
 		log:       log,
 		store:     in.store,
 		cas:       in.cas,
-		timers:    wait.NewTimers(in.store),
 		approvers: identity.NewSQLStoreWithDialect(in.db, in.dialect),
 		resume:    resume,
 		models:    models,

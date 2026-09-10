@@ -25,7 +25,6 @@ import {
   bootstrapToken,
   createPipeline,
   rpc,
-  seedUrl,
   type Seeded,
 } from "./plane.js";
 
@@ -62,27 +61,41 @@ const deployV2 = {
 /**
  * publishPlugin puts a manifest in the plane's catalog and returns its ref.
  *
- * Through the seeder, and this one is NOT the hole Task 27b closed: nothing
- * anywhere in Dhole publishes to the catalog — not the API, not the CLI, not
- * the git mirror — so there is no contract call to prefer here. See
- * e2e/seed/main.go.
+ * THROUGH THE CONTRACT. It used to go through the seeder, which wrote the
+ * catalog row itself, because nothing anywhere in Dhole published — not the
+ * API, not the CLI, not the git mirror. PublishPlugin closed that, so the
+ * suite now publishes the way the canvas and an agent do, and a publish path
+ * that broke would break this test rather than being routed around by it.
+ *
+ * The digest is a stand-in: the catalog refuses a manifest without one and
+ * these plugins have no artefact behind them at all.
  */
 async function publishPlugin(
   request: APIRequestContext,
   version: string,
   schema: unknown,
 ): Promise<string> {
-  const response = await request.post(`${seedUrl}/plugin`, {
-    data: {
+  const response = await rpc(request, "PublishPlugin", {
+    plugin: {
       namespace: "acme",
       name: "deploy",
       version,
+      kind: "step",
       effectClass: "EFFECT_CLASS_AT_MOST_ONCE",
-      inputSchema: schema,
+      digest: { algo: "sha256", hex: `deadbeef${version.replace(/\W/g, "")}` },
+      inputSchema: JSON.stringify(schema),
+      // A manifest with no output schema is refused, and these plugins are
+      // about their inputs.
+      outputSchema: JSON.stringify({
+        $id: "https://example.test/plugins/deploy/out.json",
+        type: "object",
+      }),
+      engineTypes: ["process"],
     },
   });
-  expect(response.ok(), await response.text()).toBe(true);
-  return ((await response.json()) as { ref: string }).ref;
+  const ref = (response as { plugin?: { ref?: string } }).plugin?.ref;
+  expect(ref, "PublishPlugin returned no ref").toBeTruthy();
+  return ref ?? "";
 }
 
 /** addStep adds a step naming a published plugin — and carrying no schema of

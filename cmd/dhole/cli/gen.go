@@ -48,6 +48,7 @@ func surfaces() map[string]surface {
 		"CancelRun":       {group: groupRun, build: runCancelCmd},
 		"DecideApproval":  {group: groupRun, build: runApproveCmd},
 		"GetPlugin":       {group: groupPlugin, build: pluginGetCmd},
+		"PublishPlugin":   {group: groupPlugin, build: pluginPublishCmd},
 		"ListEngines":     {group: groupEngine, build: engineListCmd},
 		"DrainEngine":     {group: groupEngine, build: engineDrainCmd},
 	}

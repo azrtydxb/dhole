@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_pipeline: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUi1AIKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUSKgoGY29uZmlnGAkgAygLMhouZGhvbGUudjEuU3RlcC5Db25maWdFbnRyeRotCgtDb25maWdFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIk4KBEVkZ2USEQoJZnJvbV9zdGVwGAEgASgJEhEKCWZyb21fcG9ydBgCIAEoCRIPCgd0b19zdGVwGAMgASgJEg8KB3RvX3BvcnQYBCABKAkidgoIUGlwZWxpbmUSCgoCaWQYASABKAkSIAoGdGVuYW50GAIgASgLMhAuZGhvbGUudjEuVGVuYW50Eh0KBXN0ZXBzGAMgAygLMg4uZGhvbGUudjEuU3RlcBIdCgVlZGdlcxgEIAMoCzIOLmRob2xlLnYxLkVkZ2VCjgEKDGNvbS5kaG9sZS52MUINUGlwZWxpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
+    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUi+AIKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUSKgoGY29uZmlnGAkgAygLMhouZGhvbGUudjEuU3RlcC5Db25maWdFbnRyeRINCgVpbWFnZRgKIAEoCRITCgtlbmdpbmVfdHlwZRgLIAEoCRotCgtDb25maWdFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIk4KBEVkZ2USEQoJZnJvbV9zdGVwGAEgASgJEhEKCWZyb21fcG9ydBgCIAEoCRIPCgd0b19zdGVwGAMgASgJEg8KB3RvX3BvcnQYBCABKAkidgoIUGlwZWxpbmUSCgoCaWQYASABKAkSIAoGdGVuYW50GAIgASgLMhAuZGhvbGUudjEuVGVuYW50Eh0KBXN0ZXBzGAMgAygLMg4uZGhvbGUudjEuU3RlcBIdCgVlZGdlcxgEIAMoCzIOLmRob2xlLnYxLkVkZ2VCjgEKDGNvbS5kaG9sZS52MUINUGlwZWxpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
     [file_dhole_v1_common],
   );
 
@@ -211,6 +211,41 @@ export type Step = Message<"dhole.v1.Step"> & {
    * @generated from field: map<string, string> config = 9;
    */
   config: { [key: string]: string };
+
+  /**
+   * Image the sandbox this step runs in is built from, as the executor's
+   * backend understands it: an OCI reference for a container backend, ignored
+   * by a backend that has no images at all.
+   *
+   * It exists because a pipeline could not say what its steps run in. The
+   * executor's pod template did, so every step on one Kubernetes engine ran
+   * the same image and the acceptance pipelines had to embed a Dockerfile's
+   * text in a step to get a toolchain in.
+   *
+   * PIN IT TO A DIGEST if the step is to be cached. The cache key is hashed
+   * against this reference, and the plane resolves nothing: a tag is a moving
+   * target, so a step naming one has no stable environment identity and is
+   * refused by cache.Eligible rather than keyed against a name whose meaning
+   * can change under it. Empty means the engine's own environment, whose
+   * digest its tier already reported (ADR 0021).
+   *
+   * @generated from field: string image = 10;
+   */
+  image: string;
+
+  /**
+   * Executor kind this step must run on — "process", "kubernetes",
+   * "containerd" — matched against the engine_types an engine registered.
+   * Empty means any kind will do.
+   *
+   * Capability was the only lever before this: a pipeline that needed a pod
+   * asked for NETWORK and hoped, and a step that had to run as a host process
+   * could not be expressed at all. Both the planner and the dispatcher read
+   * it straight off the step, so the placement they compute cannot disagree.
+   *
+   * @generated from field: string engine_type = 11;
+   */
+  engineType: string;
 };
 
 /**

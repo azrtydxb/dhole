@@ -12,12 +12,11 @@
 // now — CreatePipeline — so the suite creates pipelines the way the canvas
 // does, and this program no longer touches the definition store at all.
 //
-// Publishing a plugin is here for a DIFFERENT reason, and it is worth naming
-// so nobody mistakes it for the hole that has just been closed: nothing
-// anywhere in Dhole publishes to the catalog. Not the API, not the CLI, not
-// the git mirror — internal/catalog.Publish has no caller outside tests. That
-// is a real gap and a task of its own; until it has one, a suite that needs a
-// published plugin has to write the row, and this is where it does.
+// Publishing a plugin used to live here too, for the same shape of reason:
+// nothing anywhere in Dhole published to the catalog — not the API, not the
+// CLI, not the git mirror — so a suite that needed a published plugin had to
+// write the row itself. PublishPlugin closed that, so panel.spec.ts publishes
+// through the contract and this program no longer touches the catalog either.
 //
 // What is left is the second tenant. `dhole serve` prints the bootstrap
 // credential for the default tenant only, and a suite asserting that one
@@ -28,8 +27,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -40,7 +37,6 @@ import (
 	"time"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
-	"github.com/azrtydxb/dhole/internal/catalog"
 	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/dynamic"
 	"github.com/azrtydxb/dhole/internal/identity"
@@ -76,23 +72,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "seed: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// published is one plugin the suite wants in the catalog.
-type published struct {
-	Namespace   string `json:"namespace"`
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	EffectClass string `json:"effectClass"`
-	InputSchema any    `json:"inputSchema"`
-}
-
-// digestOf is a stand-in for the artefact digest a real publish would carry.
-// The catalog refuses a manifest without one, and these plugins have no
-// artefact behind them at all.
-func digestOf(schema []byte) string {
-	sum := sha256.Sum256(schema)
-	return hex.EncodeToString(sum[:])
 }
 
 // realisedRun is one seeded run holding a realised fragment: the run to open,
@@ -138,7 +117,6 @@ func run(addr, dsn, waitFor string) error {
 	defer func() { _ = db.Close() }()
 
 	local := identity.NewLocal(identity.NewSQLStore(db))
-	plugins := catalog.New(db, runstore.DialectSQLite)
 	// A definition store for the shaped pipelines below. A pipeline with no
 	// plugin references is created through CreatePipeline like any client
 	// would; a SHAPE carries steps with commands, which no operation can set,
@@ -175,42 +153,6 @@ func run(addr, dsn, waitFor string) error {
 		_ = json.NewEncoder(w).Encode(issued{Token: token})
 	})
 
-	mux.HandleFunc("POST /plugin", func(w http.ResponseWriter, r *http.Request) {
-		var body published
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		inputSchema, err := json.Marshal(body.InputSchema)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		effect, ok := dholev1.EffectClass_value[body.EffectClass]
-		if !ok {
-			http.Error(w, "unknown effect class "+body.EffectClass, http.StatusBadRequest)
-			return
-		}
-		manifest := catalog.Manifest{
-			Namespace:   body.Namespace,
-			Name:        body.Name,
-			Version:     body.Version,
-			Digest:      &dholev1.Digest{Algo: "sha256", Hex: digestOf(inputSchema)},
-			Kind:        catalog.KindStep,
-			EffectClass: dholev1.EffectClass(effect),
-			InputSchema: inputSchema,
-			// A manifest with no output schema is refused by the catalog,
-			// and these plugins are about their inputs.
-			OutputSchema: []byte(`{"$id":"https://example.test/out.json","type":"object"}`),
-			EngineTypes:  []string{"process"},
-		}
-		if err := plugins.Publish(r.Context(), "default", manifest); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"ref": manifest.Ref()})
-	})
 	// A pipeline of a named SHAPE. The run view needs particular ones — two
 	// pure steps where the second consumes the first, a step with no effect
 	// class, a bounded loop — and nothing creates them through the contract:

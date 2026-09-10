@@ -7,9 +7,59 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 )
+
+// pluginPublishCmd puts a declaration in the catalog.
+//
+// It is the CLI half of PublishPlugin, and it exists in this shape rather than
+// as a command that writes the control plane's database because a publish only
+// a process holding that file could perform is a capability the GUI and an
+// agent can never have (ADR 0013). It sends the same request the canvas would.
+func pluginPublishCmd(o *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "publish <manifest>",
+		Short: "publish a plugin's declaration to the catalog",
+		Long: "The manifest is a dhole.v1.Plugin as JSON, or @file, or @- for\n" +
+			"stdin. Its namespace, name and version ARE its identity, so the\n" +
+			"`ref` field is ignored; the tenant is the credential's and is never\n" +
+			"taken from the manifest.\n" +
+			"A version is immutable: republishing identical bytes is a no-op, so\n" +
+			"a deploy can be retried, and republishing different bytes under the\n" +
+			"same version is refused.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.checkOutput(cmd); err != nil {
+				return err
+			}
+			raw, err := readArgument(args[0], cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			manifest := &dholev1.Plugin{}
+			if err := protojson.Unmarshal(raw, manifest); err != nil {
+				return fmt.Errorf("the manifest is not a dhole.v1.Plugin: %w", err)
+			}
+
+			ctx, cancel := o.context(cmd)
+			defer cancel()
+
+			res, err := o.client().PublishPlugin(ctx, connect.NewRequest(&dholev1.PublishPluginRequest{
+				Plugin: manifest,
+			}))
+			if err != nil {
+				return o.fail("publish plugin", err)
+			}
+			return o.emit(res.Msg, func(w io.Writer) {
+				p := res.Msg.GetPlugin()
+				_, _ = fmt.Fprintf(w, "published %s  %s  %s\n",
+					p.GetRef(), p.GetKind(), p.GetEffectClass())
+			})
+		},
+	}
+}
 
 // pluginGetCmd reads what one published plugin declares.
 //

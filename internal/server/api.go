@@ -104,6 +104,8 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		return err
 	}
 
+	plugins := catalog.New(s.infra.db, s.infra.dialect)
+
 	cfg := api.Config{
 		Definitions: s.defs,
 		Auth:        local,
@@ -119,9 +121,14 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// plane authenticated and by nobody else.
 		Approvers: principals,
 		Advancer:  s.sched,
-		Cache:     s.infra.cache,
-		Fleet:     s.fleet,
-		Drain:     s.fleet,
+		// The same enforcer the guarded CAS and the scheduler answer to, so a
+		// tenant's daily runs, its concurrency and its storage are all
+		// measured against one limits row. Without it StartRun enforced
+		// max_runs_per_day nowhere and wrote no RUN_STARTED row to bill from.
+		Quotas: s.quotasLocked(),
+		Cache:  s.infra.cache,
+		Fleet:  s.fleet,
+		Drain:  s.fleet,
 		// The plane's own bus connection, so a cancel travels the same way
 		// every dispatch does. An API reaching engines over a connection of
 		// its own would be a second control plane.
@@ -131,7 +138,12 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// presence.go); giving the API a bus connection of its own would be a
 		// second control plane on the same bus.
 		Presence: s.infra.plane,
-		Catalog:  catalog.New(s.infra.db, s.infra.dialect),
+		// One catalog, read and written. The reader is what Validate and Plan
+		// resolve steps against; the writer is what PublishPlugin records
+		// into, and until it was passed the only way a declaration reached
+		// the store was a process opening this database behind the API's back.
+		Catalog:       plugins,
+		CatalogWriter: plugins,
 		// The two copies of a step's log. Without them the run view's log
 		// endpoint answers "this server was built without an object store"
 		// for every step in every run — which it did, in a real deployment,
