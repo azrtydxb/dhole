@@ -259,17 +259,35 @@ func shaped(id, name string) (*dholev1.Pipeline, error) {
 	case "cacheable":
 		// Two pure steps, the second consuming the first: what a cache hit on
 		// a second run is visible against.
+		// The redirections are load-bearing. A declared output is a FILE in
+		// the sandbox named after its port, so `printf one` — which writes to
+		// stdout — leaves no "out" to collect and the step fails every time
+		// with `get "out": reader exited 1`. It did, and it took three e2e
+		// tests down with it while looking like a product bug.
 		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
-			step("first", "printf one", dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
-			step("second", "cat", dholev1.EffectClass_EFFECT_CLASS_PURE, []string{"in"}, []string{"out"}),
+			step("first", "printf one > out", dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
+			step("second", "cat in > out", dholev1.EffectClass_EFFECT_CLASS_PURE, []string{"in"}, []string{"out"}),
 		}, Edges: []*dholev1.Edge{
 			{FromStep: "first", FromPort: "out", ToStep: "second", ToPort: "in"},
+		}}, nil
+	case "slow":
+		// A step slow enough to be caught in the act. The cacheable shape
+		// finishes in milliseconds, so a test that means to watch the log
+		// switch from the ephemeral subject to the stored object never sees
+		// the live half at all — it observes "stored" on its first look and
+		// fails claiming the live source is broken when it is merely over.
+		//
+		// It prints BEFORE it sleeps, so there is something to tail rather
+		// than an open stream carrying nothing.
+		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
+			step("first", "echo starting; sleep 5; printf one > out",
+				dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
 		}}, nil
 	case "impure":
 		// No effect class, so cache.Eligible refuses it and the run view must
 		// show the reason rather than a blank.
 		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
-			step("first", "printf one", dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED, nil, []string{"out"}),
+			step("first", "printf one > out", dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED, nil, []string{"out"}),
 		}}, nil
 	default:
 		return nil, fmt.Errorf("seed: unknown shape %q", name)

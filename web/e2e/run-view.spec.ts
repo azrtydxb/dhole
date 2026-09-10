@@ -185,9 +185,13 @@ test("the view switches from the live subject to the stored object when the run 
   page,
   request,
 }) => {
+  // The SLOW shape, because this test has to catch a step in the act. The
+  // cacheable one finishes in milliseconds and the view goes straight to
+  // "stored", which fails here as though the live source were broken when it
+  // is only over.
   const runID = await startRun(
     request,
-    (await seedShape(request, "cacheable")).pipelineId,
+    (await seedShape(request, "slow")).pipelineId,
   );
   await openRun(page, runID);
 
