@@ -1,28 +1,28 @@
 /**
- * The generator node, in the editor and in the run view.
+ * The generator, drawn twice by the real application, and the two drawings
+ * deliberately disagree about what is on screen.
  *
- * One property, two halves, and the whole point is that they DISAGREE about
- * what is on screen:
- *
- *  1. In the EDITOR a generator is opaque. The authored graph cannot know
- *     what the generator will emit — that is decided at runtime, from a
- *     directory listing or an API — so a canvas that drew any steps inside it
- *     would be drawing a guess. It says "expands at runtime" and stops.
+ *  1. In the EDITOR a generator is opaque. The authored graph cannot know what
+ *     the generator will emit — that is decided at runtime, from a directory
+ *     listing or an API — so a canvas that drew any steps inside it would be
+ *     drawing a guess, and the first time the generator emitted a different
+ *     number the picture would be a lie nobody could see. It says "expands at
+ *     runtime", draws the ports the step actually declares, and stops.
  *  2. In the RUN VIEW the realised steps are there, by name, because the run
- *     log holds the fragment that was actually realised (ADR 0003).
+ *     log holds the fragment that was realised (ADR 0003). Nothing is
+ *     recomputed from the definition, which never contained these steps.
  *
- * The authored half is end to end: the step is added to a real pipeline
- * through the real ApplyOperation, and the editor draws what GetPipeline
- * hands back. The realised half reads e2e/testdata/generator-record.json,
- * which is the payload internal/dynamic writes into the run log verbatim —
- * internal/dynamic's own tests fail if that file stops being a record the Go
- * code can produce and decode, so the two languages cannot drift apart
- * quietly. It is a fixture rather than a live run because no generator step
- * runs on the plane yet: Task 55 produces the step type, and the scheduler
- * that dispatches one is not wired.
+ * Both halves are the shipping screens: `?pipeline=…&revision=…` is the
+ * canvas, `#/runs/…` is the run view. This used to mount a harness module
+ * instead, because neither screen knew what a generator was; they do now.
+ *
+ * The authored half is end to end through the real ApplyOperation. The
+ * realised half is a run SEEDED with a fragment, because no generator step is
+ * dispatched by the plane yet — the scheduler splices what is in the log, and
+ * the step type that writes it there is not wired to an executor. The record
+ * is not invented by the seeder either: internal/dynamic writes it, against
+ * this pipeline, and refuses a fragment that does not fit where it is spliced.
  */
-import { readFileSync } from "node:fs";
-
 import {
   expect,
   test,
@@ -34,6 +34,7 @@ import {
   apiUrl,
   bootstrapToken,
   createPipeline,
+  seedUrl,
   type Seeded,
 } from "./plane.js";
 
@@ -41,18 +42,10 @@ import {
 const generatorPluginRef = "builtin:generator";
 const generatorStep = "fan-out";
 
-/** The realised record, exactly as internal/dynamic wrote it into a run log. */
-function realisedRecord(): string {
-  const path = new URL("./testdata/generator-record.json", import.meta.url);
-  return readFileSync(path, "utf8").trim();
-}
-
-/** The step ids that record realised, read out of the record itself rather
- * than retyped: a test that hard-codes them cannot notice the fixture and the
- * page disagreeing. */
-function realisedStepIDs(): string[] {
-  return (JSON.parse(realisedRecord()) as { steps?: string[] }).steps ?? [];
-}
+/** The steps the seeded generator emits. They are named here and asserted
+ * everywhere else off what came back from the plane, so a fragment that
+ * realised something else fails rather than passing quietly. */
+const shards = ["shard-a", "shard-b", "shard-c"];
 
 /** apply sends one operation through the real contract and returns the new
  * revision, so the next edit has something to base itself on. */
@@ -102,22 +95,34 @@ async function seedGenerator(request: APIRequestContext): Promise<Seeded> {
   return { pipelineId: seed.pipelineId, revisionId: revision };
 }
 
-/** openGenerator mounts the generator node's harness on the running app,
- * signed in with the plane's own bootstrap credential. */
-async function openGenerator(page: Page, seed: Seeded): Promise<void> {
+/** realiseFragment seeds a run of this pipeline whose log holds the fragment
+ * the generator emitted, and answers with the run to open. */
+async function realiseFragment(
+  request: APIRequestContext,
+  seed: Seeded,
+): Promise<{ runId: string; steps: string[] }> {
+  const query = new URLSearchParams({
+    pipeline: seed.pipelineId,
+    revision: seed.revisionId,
+    step: generatorStep,
+  });
+  for (const id of shards) {
+    query.append("shard", id);
+  }
+  const response = await request.post(`${seedUrl}/generator-run?${query}`);
+  expect(
+    response.ok(),
+    `seeding a realised fragment: ${response.status()} ${await response.text()}`,
+  ).toBe(true);
+  return (await response.json()) as { runId: string; steps: string[] };
+}
+
+/** signIn stores the plane's own bootstrap credential, which is what the app
+ * reads. A spec that invented a token would be testing its own fake. */
+async function signIn(page: Page): Promise<void> {
   await page.addInitScript((value: string) => {
     window.localStorage.setItem("dhole.token", value);
   }, bootstrapToken());
-  await page.goto(
-    `/?generator.pipeline=${encodeURIComponent(seed.pipelineId)}` +
-      `&generator.revision=${encodeURIComponent(seed.revisionId)}` +
-      `&generator.step=${encodeURIComponent(generatorStep)}` +
-      `&generator.record=${encodeURIComponent(realisedRecord())}`,
-  );
-  await page.addScriptTag({
-    url: "/src/canvas/GeneratorNode.harness.tsx",
-    type: "module",
-  });
 }
 
 test("the editor draws a generator as opaque and the run view draws what it realised", async ({
@@ -125,12 +130,16 @@ test("the editor draws a generator as opaque and the run view draws what it real
   request,
 }) => {
   const seed = await seedGenerator(request);
-  const realised = realisedStepIDs();
-  expect(realised.length).toBeGreaterThan(1);
+  const realised = await realiseFragment(request, seed);
+  expect(realised.steps).toEqual(shards);
 
-  await openGenerator(page, seed);
+  await signIn(page);
 
-  // The editor. Opaque, and honest about why.
+  // The editor: the canvas of the real application, on the real revision.
+  await page.goto(
+    `/?pipeline=${encodeURIComponent(seed.pipelineId)}` +
+      `&revision=${encodeURIComponent(seed.revisionId)}`,
+  );
   const authored = page.getByTestId(`generator-node-${generatorStep}`);
   await expect(authored).toBeVisible();
   await expect(authored).toContainText("expands at runtime");
@@ -140,17 +149,24 @@ test("the editor draws a generator as opaque and the run view draws what it real
   await expect(
     page.getByTestId(`generator-port-out-${generatorStep}-shard`),
   ).toBeVisible();
-  for (const id of realised) {
+  for (const id of realised.steps) {
     await expect(authored).not.toContainText(id);
+    // Nor anywhere else on the canvas: the realised steps are not in this
+    // definition and there is nothing for them to be drawn as.
+    await expect(page.getByTestId(`step-node-${id}`)).toHaveCount(0);
   }
+  // And it is NOT drawn as an ordinary step: the whole point is that the two
+  // are told apart on sight.
+  await expect(page.getByTestId(`step-node-${generatorStep}`)).toHaveCount(0);
 
-  // The run view. The realised steps, by name, out of the recorded fragment.
+  // The run view: the same generator, in a run that expanded it.
+  await page.goto(`/#/runs/${encodeURIComponent(realised.runId)}`);
   const run = page.getByTestId(`realised-generator-${generatorStep}`);
   await expect(run).toBeVisible();
   await expect(run).not.toContainText("expands at runtime");
   const steps = page.getByTestId("realised-step");
-  await expect(steps).toHaveCount(realised.length);
-  for (const id of realised) {
+  await expect(steps).toHaveCount(realised.steps.length);
+  for (const id of realised.steps) {
     await expect(
       page.locator(`[data-testid="realised-step"][data-step-id="${id}"]`),
     ).toBeVisible();

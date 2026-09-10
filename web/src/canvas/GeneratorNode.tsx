@@ -20,6 +20,10 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
 import type { Port, Step } from "../gen/dhole/v1/pipeline_pb.js";
+// The record is READ where the run log is folded, in ../run/events.ts, and
+// this half only draws it: a second decoder living here would be a second
+// opinion about what internal/dynamic wrote.
+import type { RealisedFragment } from "../run/events.js";
 
 /** The plugin ref a generator node carries — internal/dynamic.PluginRef. It
  * is a well-known builtin rather than a plugin the registry resolves, because
@@ -122,54 +126,6 @@ export function GeneratorNode({ data }: NodeProps<GeneratorNodeType>) {
       ))}
     </div>
   );
-}
-
-/**
- * RealisedFragment is one GENERATOR_FRAGMENT_REALISED payload, as
- * internal/dynamic.Record writes it.
- *
- * `steps` is enough to draw the realised graph; `fragment` is the pipeline
- * itself on the wire, kept because it is what a replay rebuilds the graph
- * from and a view that threw it away would be reading a summary.
- */
-export interface RealisedFragment {
-  readonly generator: string;
-  readonly steps: readonly string[];
-  readonly fragment: string;
-}
-
-/** parseRealisedRecord decodes a run-log payload, returning null for anything
- * that is not one. A frame this view cannot read is dropped rather than
- * taking the run view down with it. */
-export function parseRealisedRecord(payload: string): RealisedFragment | null {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(payload);
-  } catch {
-    return null;
-  }
-  if (typeof decoded !== "object" || decoded === null) {
-    return null;
-  }
-  const record = decoded as {
-    generator?: unknown;
-    steps?: unknown;
-    fragment?: unknown;
-  };
-  if (typeof record.generator !== "string" || record.generator === "") {
-    return null;
-  }
-  if (
-    !Array.isArray(record.steps) ||
-    !record.steps.every((id) => typeof id === "string")
-  ) {
-    return null;
-  }
-  return {
-    generator: record.generator,
-    steps: record.steps,
-    fragment: typeof record.fragment === "string" ? record.fragment : "",
-  };
 }
 
 /** RealisedGeneratorProps is the recorded fragment and nothing else: there is

@@ -341,62 +341,9 @@ func TestNestedGeneratorsShareTheRunsExpansionBudget(t *testing.T) {
 	})
 }
 
-// TestTheEditorsFixtureIsTheRecordThisPackageWrites keeps the browser and the
-// control plane speaking one language.
-//
-// web/e2e/testdata/generator-record.json is a GENERATOR_FRAGMENT_REALISED
-// payload, byte for byte as this package writes it, and the Playwright suite
-// renders the run view from it. A fixture the browser reads and nothing
-// checks is a fixture that quietly stops matching the day a json tag changes
-// — and the run view would then be drawing a shape the plane no longer emits.
-// So this reproduces the payload from the real recording path and requires
-// the checked-in file to decode to the same record.
-//
-// Regenerate with DHOLE_UPDATE_FIXTURE=1 go test ./internal/dynamic.
-func TestTheEditorsFixtureIsTheRecordThisPackageWrites(t *testing.T) {
-	ctx := testContext(t)
-	store := openStore(t)
-	tenant := uniqueTenant(t)
-
-	g, err := dynamic.New(dynamic.Options{
-		Store: store, TenantID: tenant, MaxExpansions: 4,
-		Emit: func(context.Context, dynamic.Input) (*dholev1.Pipeline, error) {
-			return shards("shard-a", "shard-b", "shard-c"), nil
-		},
-	})
-	require.NoError(t, err)
-	_, err = g.Realise(ctx, testRun, generatorStep, authored())
-	require.NoError(t, err)
-	written := onlyEvent(ctx, t, store, tenant, dynamic.EventFragmentRealised).Payload
-
-	if os.Getenv("DHOLE_UPDATE_FIXTURE") != "" {
-		require.NoError(t, os.MkdirAll(filepath.Dir(editorFixture), 0o755))
-		require.NoError(t, os.WriteFile(editorFixture, append(written, '\n'), 0o644))
-	}
-
-	onDisk, err := os.ReadFile(editorFixture)
-	require.NoError(t, err, "the editor's fixture is missing")
-
-	fromDisk, err := dynamic.UnmarshalRecord(onDisk)
-	require.NoError(t, err)
-	fromCode, err := dynamic.UnmarshalRecord(written)
-	require.NoError(t, err)
-	require.Equal(t, fromCode.Generator, fromDisk.Generator)
-	require.Equal(t, fromCode.Steps, fromDisk.Steps)
-
-	// And it still decodes to a pipeline, which is what makes it a record
-	// rather than a list of names the browser could have invented.
-	fragment, err := fromDisk.Fragment()
-	require.NoError(t, err)
-	require.Equal(t, fromCode.Steps, stepIDs(fragment))
-}
-
 // --- fixtures -----------------------------------------------------------
 
 const shardSchema = "https://dhole.dev/schemas/shard.json"
-
-// editorFixture is the run-log payload the Playwright suite renders.
-const editorFixture = "../../web/e2e/testdata/generator-record.json"
 
 func noEmit(context.Context, dynamic.Input) (*dholev1.Pipeline, error) { return nil, nil }
 
@@ -508,15 +455,6 @@ func eventsOfType(
 		}
 	}
 	return out
-}
-
-func onlyEvent(
-	ctx context.Context, t *testing.T, store runstore.Store, tenant string, kind runstore.EventType,
-) runstore.Event {
-	t.Helper()
-	found := eventsOfType(ctx, t, store, tenant, kind)
-	require.Len(t, found, 1, "expected exactly one %s event", kind)
-	return found[0]
 }
 
 func testContext(t *testing.T) context.Context {

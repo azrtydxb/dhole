@@ -39,6 +39,49 @@ export interface LoopIteration {
   finished: boolean;
 }
 
+/**
+ * RealisedFragment is one GENERATOR_FRAGMENT_REALISED payload, as
+ * internal/dynamic.Record writes it.
+ *
+ * `steps` is enough to draw the realised graph; `fragment` is the pipeline
+ * itself on the wire, kept because it is what a replay rebuilds the graph from
+ * and a view that threw it away would be holding a summary of the run rather
+ * than the run.
+ */
+export interface RealisedFragment {
+  readonly generator: string;
+  readonly steps: readonly string[];
+  readonly fragment: string;
+}
+
+/** parseRealisedRecord reads one realised record off an event, returning null
+ * for anything that is not one. A frame this client cannot read is dropped
+ * rather than taking the run view down with it. */
+export function parseRealisedRecord(payload: unknown): RealisedFragment | null {
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+  const record = payload as {
+    generator?: unknown;
+    steps?: unknown;
+    fragment?: unknown;
+  };
+  if (typeof record.generator !== "string" || record.generator === "") {
+    return null;
+  }
+  if (
+    !Array.isArray(record.steps) ||
+    !record.steps.every((id) => typeof id === "string")
+  ) {
+    return null;
+  }
+  return {
+    generator: record.generator,
+    steps: record.steps,
+    fragment: typeof record.fragment === "string" ? record.fragment : "",
+  };
+}
+
 /** RunNode is one node of the realised graph. */
 export interface RunNode {
   id: string;
@@ -54,6 +97,10 @@ export interface RunNode {
   /** A bounded loop is one container node with its iterations inside it. */
   loop: boolean;
   iterations: LoopIteration[];
+  /** What a generator step emitted, once it has. It is undefined until the
+   * plane records the fragment, because until then nobody — not this view,
+   * not the definition, not the generator's author — knows what it will be. */
+  realised?: RealisedFragment;
 }
 
 /** RunModel is the whole view state. */
@@ -126,6 +173,18 @@ export function applyEvent(model: RunModel, event: RunEvent): RunModel {
   if (node === undefined) {
     node = newNode(stepId);
     next.nodes.push(node);
+  }
+
+  // A generator is the one step whose subgraph the DEFINITION does not
+  // contain: it decided what to run at runtime. The fragment it emitted is in
+  // the log and nowhere else (ADR 0003), so this is where the run view learns
+  // the realised steps — and it reads them rather than recomputing anything.
+  if (event.type === "GENERATOR_FRAGMENT_REALISED") {
+    const record = parseRealisedRecord(event.payload);
+    if (record !== null) {
+      node.realised = record;
+    }
+    return next;
   }
 
   if (loopEvents.has(event.type)) {

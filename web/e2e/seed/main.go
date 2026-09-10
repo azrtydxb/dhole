@@ -27,6 +27,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,8 +42,10 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/catalog"
 	"github.com/azrtydxb/dhole/internal/defstore"
+	"github.com/azrtydxb/dhole/internal/dynamic"
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/scheduler"
 )
 
 // issued is a credential minted for one tenant. `dhole serve` prints the
@@ -92,6 +95,34 @@ func digestOf(schema []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// realisedRun is one seeded run holding a realised fragment: the run to open,
+// and the steps the generator emitted into it.
+type realisedRun struct {
+	RunID string   `json:"runId"`
+	Steps []string `json:"steps"`
+}
+
+// shardsOf is the fragment a generator emitted: independent steps, each
+// consuming the generator's declared output port by name, which is how
+// dynamic.Splice grafts them below it.
+func shardsOf(generator string, ids []string) *dholev1.Pipeline {
+	p := &dholev1.Pipeline{Id: generator + "-fragment"}
+	for _, id := range ids {
+		p.Steps = append(p.Steps, &dholev1.Step{
+			Id:          id,
+			Name:        id,
+			PluginRef:   commandRef("printf one > shard"),
+			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+			LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
+			Inputs: []*dholev1.Port{{
+				Name: "shard",
+				Type: &dholev1.PortType{Kind: &dholev1.PortType_Blob{Blob: &dholev1.BlobType{}}},
+			}},
+		})
+	}
+	return p
+}
+
 func run(addr, dsn, waitFor string) error {
 	if err := awaitListener(waitFor); err != nil {
 		return err
@@ -113,6 +144,13 @@ func run(addr, dsn, waitFor string) error {
 	// would; a SHAPE carries steps with commands, which no operation can set,
 	// and there is nothing to pin — saying so beats leaving it to chance.
 	defs := defstore.NewWithDialect(db, runstore.DialectSQLite, defstore.WithoutPinning())
+	// The run log, opened as this process's own handle on the plane's
+	// database. It is what internal/dynamic records a realised fragment into.
+	runs, err := runstore.NewSQLite(dsn)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = runs.Close() }()
 	// One counter, so two shapes of the same name are two pipelines.
 	var n atomic.Uint64
 
@@ -201,6 +239,54 @@ func run(addr, dsn, waitFor string) error {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(seeded{PipelineID: id, RevisionID: rev.ID})
+	})
+
+	// A run whose log holds a REALISED FRAGMENT, which is the only place the
+	// steps a generator emitted exist. It is seeded rather than run because no
+	// generator step is dispatched by the plane yet — that is a later task —
+	// but the record itself is not invented here: internal/dynamic writes it,
+	// against the caller's own authored pipeline, and refuses a fragment that
+	// does not fit. A hand-written payload would let the run view render a
+	// shape the control plane never produces.
+	mux.HandleFunc("POST /generator-run", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		parent, err := defs.Get(r.Context(), "default", q.Get("pipeline"), q.Get("revision"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		runID := fmt.Sprintf("generator-run-%d", n.Add(1))
+		created, err := scheduler.MarshalRunCreated(scheduler.RunCreated{
+			PipelineID: q.Get("pipeline"), RevisionID: q.Get("revision"),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := runs.Append(r.Context(), "default", runstore.Event{
+			RunID: runID, Type: runstore.RunCreated, Payload: created, At: time.Now().UTC(),
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		stepID := q.Get("step")
+		fragment := shardsOf(stepID, q["shard"])
+		g, err := dynamic.New(dynamic.Options{
+			Store: runs, TenantID: "default", MaxExpansions: 4,
+			Emit: func(context.Context, dynamic.Input) (*dholev1.Pipeline, error) {
+				return fragment, nil
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := g.Realise(r.Context(), runID, stepID, parent); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(realisedRun{RunID: runID, Steps: q["shard"]})
 	})
 
 	listener, err := net.Listen("tcp", addr)

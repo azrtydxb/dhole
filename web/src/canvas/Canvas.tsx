@@ -46,6 +46,11 @@ import {
   type Port,
 } from "../gen/dhole/v1/pipeline_pb.js";
 import { refusalFor } from "./edges.js";
+import {
+  GeneratorNode,
+  isGenerator,
+  type GeneratorNodeType,
+} from "./GeneratorNode.js";
 import { Presence, RebasePrompt, rebaseNotice } from "./Presence.js";
 import { autoLayout } from "./layout.js";
 import { StepNode, type StepNodeType } from "./StepNode.js";
@@ -59,8 +64,13 @@ export interface CanvasProps {
 }
 
 /** nodeTypes is module-level because React Flow re-mounts every node when the
- * object identity changes. */
-const nodeTypes = { step: StepNode };
+ * object identity changes.
+ *
+ * A generator is drawn by its own node rather than as an ordinary step: the
+ * authored graph cannot contain the steps it will emit — they are decided at
+ * runtime — so it is drawn OPAQUE, saying so, instead of as a box that looks
+ * like everything else and hides that it expands. */
+const nodeTypes = { step: StepNode, generator: GeneratorNode };
 
 /** The schema id the structured ports in the palette carry. A canvas cannot
  * invent types; these stand in until Task 47 reads them off a plugin. */
@@ -206,14 +216,23 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
   const nodes = useMemo<FlowNode[]>(() => {
     const drawn = pipeline?.steps ?? [];
     const positions = autoLayout(drawn, pipeline?.edges ?? []);
-    return drawn.map((step): StepNodeType => {
+    return drawn.map((step): StepNodeType | GeneratorNodeType => {
       const at = positions.get(step.id) ?? { x: 0, y: 0 };
-      return {
-        id: step.id,
-        type: "step",
-        position: { x: at.x, y: at.y },
-        data: { step },
-      };
+      // One comparison, in one place (isGenerator), so the editor and the run
+      // view cannot disagree about what a generator is.
+      return isGenerator(step)
+        ? {
+            id: step.id,
+            type: "generator",
+            position: { x: at.x, y: at.y },
+            data: { step },
+          }
+        : {
+            id: step.id,
+            type: "step",
+            position: { x: at.x, y: at.y },
+            data: { step },
+          };
     });
   }, [pipeline]);
 
