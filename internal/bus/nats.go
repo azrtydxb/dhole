@@ -250,7 +250,18 @@ func (n *NATS) SubscribePull(ctx context.Context, stream, consumer, subject stri
 // refusal has already been recorded on the connection. Matching the subject
 // keeps an unrelated earlier error from being blamed on this call.
 func (n *NATS) confirmSubscribed(ctx context.Context, sub *nats.Subscription, subject string) error {
-	flushErr := n.conn.FlushWithContext(ctx)
+	// The flush needs a deadline of its own, and the caller's context is the
+	// wrong place to get one: it governs how long the SUBSCRIPTION lives, and
+	// a live log tail deliberately lives as long as the viewer's connection —
+	// no deadline at all. FlushWithContext refuses such a context outright,
+	// which meant every live log subscription in the product failed with
+	// "context requires a deadline" and fell back to nothing.
+	//
+	// So the round trip is bounded here, where the bound belongs, while
+	// cancellation still follows the caller.
+	flushCtx, cancelFlush := context.WithTimeout(ctx, flushTimeout)
+	defer cancelFlush()
+	flushErr := n.conn.FlushWithContext(flushCtx)
 	if err := n.conn.LastError(); err != nil &&
 		errors.Is(err, nats.ErrPermissionViolation) &&
 		strings.Contains(err.Error(), subject) {
@@ -263,6 +274,12 @@ func (n *NATS) confirmSubscribed(ctx context.Context, sub *nats.Subscription, su
 	}
 	return nil
 }
+
+// flushTimeout bounds the server round trip that confirms a subscription. It
+// is a round trip to a bus this process is already connected to: generous
+// enough to survive a slow moment, short enough that a viewer waiting on a log
+// is not left staring at nothing.
+const flushTimeout = 10 * time.Second
 
 // streamFor names the stream covering subject, or "" when none does.
 func (n *NATS) streamFor(ctx context.Context, subject string) (string, error) {

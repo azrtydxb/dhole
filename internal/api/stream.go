@@ -283,7 +283,12 @@ func (s *Server) tailLive(
 		}
 	})
 	if err != nil {
-		_ = sse.send("", "source", sourceFrame{Source: sourceNone, Reason: "subscribing to the live log failed"})
+		// The error is carried, not summarised. "subscribing to the live log
+		// failed" was the whole message once, and it took an instrumented
+		// test to learn that the cause was a subject permission — which the
+		// error names and the summary threw away.
+		_ = sse.send("", "source", sourceFrame{Source: sourceNone,
+			Reason: "subscribing to the live log failed: " + err.Error()})
 		return
 	}
 	defer unsubscribe()

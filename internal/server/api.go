@@ -125,8 +125,19 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// second control plane on the same bus.
 		Presence: s.infra.plane,
 		Catalog:  catalog.New(s.infra.db, s.infra.dialect),
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
+		// The two copies of a step's log. Without them the run view's log
+		// endpoint answers "this server was built without an object store"
+		// for every step in every run — which it did, in a real deployment,
+		// while the store sat right here on the same struct.
+		//
+		// The live copy is the plane's own bus connection rather than a new
+		// one: the ephemeral log subject is the same subject the engine
+		// publishes to, and a second connection here would be a second
+		// control plane on the same bus.
+		LiveLogs:   s.infra.plane,
+		LogArchive: s.infra.blobs,
+		OS:         runtime.GOOS,
+		Arch:       runtime.GOARCH,
 	}
 	// Assigned only when there is one. A nil executor.Executor stored in the
 	// interface field would be a non-nil interface holding nil, and Plan's

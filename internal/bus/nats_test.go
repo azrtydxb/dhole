@@ -147,3 +147,49 @@ func TestPublishToDurableSubjectReportsRefusal(t *testing.T) {
 		&dholev1.JobDispatch{RunId: "run-1", StepId: "smuggled"})
 	require.Error(t, err, "an engine must not be able to enqueue its own dispatch")
 }
+
+// A subscription that outlives any deadline is the normal case, not an edge
+// one: the run view tails a step's log for as long as a person watches it, and
+// the request context behind that has no deadline at all. Confirming the
+// subscription used to flush on the CALLER's context, and the NATS client
+// refuses a deadline-free context outright — so every live log subscription in
+// the product failed with "context requires a deadline" and the run view
+// silently fell back to no log.
+func TestSubscribingWithADeadlinelessContextWorks(t *testing.T) {
+	// Deliberately cancel-only: no deadline, which is what an HTTP request
+	// context is.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer dialCancel()
+	conn, err := bus.Connect(dialCtx, srv.URL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+
+	got := make(chan []byte, 1)
+	stop, err := conn.SubscribeEphemeral(ctx, bus.SubjectLogs("run-1", "step-1"), func(b []byte) {
+		select {
+		case got <- b:
+		default:
+		}
+	})
+	require.NoError(t, err, "a subscription with no deadline was refused")
+	t.Cleanup(stop)
+
+	publisher, err := bus.Connect(dialCtx, srv.URL())
+	require.NoError(t, err)
+	t.Cleanup(publisher.Close)
+	require.NoError(t, publisher.Publish(ctx, bus.SubjectLogs("run-1", "step-1"),
+		&dholev1.LogChunk{RunId: "run-1", StepId: "step-1"}))
+
+	select {
+	case <-got:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the subscription reported success but delivered nothing")
+	}
+}
