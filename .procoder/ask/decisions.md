@@ -286,3 +286,54 @@ Two further facts worth having before deciding:
   runner before any of it is verified rather than merely written.
 - Build it behind the skip, as a designed-and-untested backend, and say so in
   the docs.
+
+## Three step-type gaps that need a design decision (2026-09-10)
+
+`dhole serve` now hosts its own step types — `builtin:wait`, `builtin:approval`,
+`builtin:llm`, `builtin:loop` — where this morning it imported none of them. Three
+gaps remain, and each is an architecture question rather than a wiring one, so I
+have implemented none of them.
+
+### (a) An agent step has no action space
+
+`internal/steps/agent` has the taint check and the per-action approval, and no
+`builtin:agent`, because an agent step needs an INVOKER for the actions it may take
+and nothing supplies one. The question is what an agent is allowed to do: call
+other pipelines, reach the API as its own principal, run a tool in a sandbox, or
+something narrower.
+
+- An agent invokes only Dhole itself — start a run, read a run, decide a gate —
+  as a principal with its own quota and audit trail.
+- An agent invokes a declared tool set, resolved like a plugin, run in a sandbox.
+- Both, with the tool set gated by trust tier and the policy engine.
+
+### (b) The plane cannot hold a model credential
+
+`builtin:llm` needs `server.Config.Models`, and the CLI passes none. A model client
+holds an API key, and this system deliberately leases the PLANE no secret: ADR 0010
+says engines receive references, never values, and there is no plane-side
+equivalent. A plane with no factory fails such a step with that exact reason rather
+than pretending.
+
+- Give the plane a secret resolver of its own — the same broker engines redeem
+  against, with the plane as a principal.
+- Configure model credentials as plain deployment configuration (env or a Secret),
+  accepting that the plane holds a value at rest, and say so in the docs.
+- Move the model call to an ENGINE step type, so the credential is leased the way
+  every other secret already is.
+
+### (c) A loop body is one builtin reference, not a subgraph
+
+`config.body` names a single builtin. The definition format has no syntax for a
+subgraph and no run can contain another, so a loop whose body dispatches to engines
+needs nested runs — which is a change to what a run IS (ADR 0003), not a step type.
+
+- Nested runs: a body is a pipeline, and an iteration starts a child run the parent
+  waits on.
+- Splice instead: reuse the generator machinery (`internal/dynamic`) so an iteration
+  realises its body into the SAME run, which keeps one run one graph.
+- Leave it: a loop body stays a single step, and anything larger is a pipeline the
+  loop triggers.
+
+My inclination is the splice for (c) — the machinery exists and it keeps one run one
+graph — but it is your call, and (a) and (b) are more open than that.
