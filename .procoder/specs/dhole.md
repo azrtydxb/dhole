@@ -52,6 +52,9 @@ and agent orchestration are profiles over a shared core.
 - [S-5] NATS + JetStream transport: request/reply, durable work queues with pull consumers,
   ephemeral log streaming, KV instance registry, accounts mapped to trust tiers.
 - [S-6] Pluggable executors with capability advertisement and explicit lease scopes
+- [S-22] A VM executor (Firecracker, with QEMU as the portable fallback) providing the
+  strong-isolation tier: a step runs in a microVM rather than a namespace, and its
+  environment identity is the rootfs snapshot it booted from
   (`step`, `job`, `pipeline`, `pool`, `service`). v1 ships three: containerd/OCI, local
   process (also the in-process engine for single-binary mode), and Kubernetes.
 - [S-7] Pluggable triggers bound to typed pipeline inputs. v1 ships four: schedule (cron),
@@ -98,9 +101,9 @@ and agent orchestration are profiles over a shared core.
 - Any forge integration beyond the one-way git mirror and a webhook trigger — no PR
   status reporting, no checks API, no forge-native review.
 - Multiplayer/concurrent editing of a single pipeline definition.
-- VM executor (Firecracker/QEMU) and the strong-isolation tier it enables, including
-  macOS, Windows, nested-virt and RouterOS CHR targets. Designed for by the executor
-  interface, not implemented in v1.
+- RouterOS CHR as a VM target, and the macOS and Windows VM hosts. The VM executor
+  below runs on Linux with `/dev/kvm`; the other hosts need their own hypervisors and
+  are not built.
 
 ## Constraints
 
@@ -149,7 +152,7 @@ and agent orchestration are profiles over a shared core.
 ## Data
 
 - Run event log — append-only, per-transition, deduplicated on `(run, step, attempt,
-  sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
+sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
 - Pipeline definitions — DB-primary, YAML format, content-hash revision identity, approval
   state, plugin lockfile per revision. Mirrored one-way to git.
 - Catalog — step/plugin/engine/trigger types, schemas, versions, detached signature
@@ -260,6 +263,14 @@ and agent orchestration are profiles over a shared core.
 - [ ] [S-6] The same pipeline runs unmodified on the containerd, local-process and
       Kubernetes engines, and `dhole plan` reports the engine each step lands on —
       `TestSamePipelineAcrossThreeEngines`.
+- [ ] [S-22] The VM executor satisfies the same shared executor contract every other
+      backend does, against a real hypervisor on a host with `/dev/kvm` —
+      `TestVMExecutorContract`. A microVM's environment identity is the rootfs snapshot
+      it booted from, so two steps on different snapshots do not share a cache key —
+      `TestEnvironmentIdentityIsSnapshotDigest`.
+- [ ] [S-22] `Capabilities()` omits nested virtualisation on a host that cannot grant it,
+      rather than advertising a promise the backend cannot keep —
+      `TestNestedVirtCapabilityIsAdvertisedOnlyWhenAvailable`.
 - [ ] [S-6] A step run under a `pool` lease is reported non-cacheable with its reason
       visible in the run view — `TestPoolLeaseMarksStepNonCacheable`.
 - [ ] [S-7] One pipeline is started by cron, an HTTP call, a git webhook and another
@@ -328,8 +339,8 @@ and agent orchestration are profiles over a shared core.
 - [ ] [S-1] [S-9] [S-6] `TestAcceptanceCICacheHit` (`make acceptance-ci`): the CI acceptance
       pipeline builds a container image and hits the cache on a second run with unchanged
       inputs; fails if the second run rebuilds the image or reports no cache hit.
-- [ ] [S-3] [S-7] [S-20] `TestAcceptanceAutomationTriggersAndWait` (`make
-      acceptance-automation`): the automation acceptance pipeline runs from both a schedule
+- [ ] [S-3] [S-7] [S-20] `TestAcceptanceAutomationTriggersAndWait`, run by the
+      `acceptance-automation` target: the automation acceptance pipeline runs from a schedule
       and an API trigger, holds a long wait, and executes across two engine types; fails if
       either trigger does not start the pipeline, the wait does not survive a control-plane
       restart, or both steps land on the same engine type.
