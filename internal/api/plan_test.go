@@ -866,3 +866,92 @@ func TestValidateReportsAnEngineTypeNoEngineOffers(t *testing.T) {
 		"a step naming an engine type nothing offers must say so before the run: got %v",
 		got.Msg.GetDiagnostics())
 }
+
+// TestADeclaredFileIsPartOfTheStepsCacheKey is the property ADR 0023 gets for
+// free by making a file an INPUT like any other: the file's digest is folded
+// into the key, so replacing the file is a cache MISS rather than a hit that
+// serves the outputs of bytes nobody is running any more.
+//
+// It asserts the miss and the hit in one pass, because either alone would pass
+// for the wrong reason: a key that ignored files entirely would report the hit
+// and fail the miss, and a key nobody could compute would report the miss and
+// fail the hit.
+func TestADeclaredFileIsPartOfTheStepsCacheKey(t *testing.T) {
+	h := newPlanHarness(t, staticFleet{readyEngine()})
+	ctx := context.Background()
+
+	withFile := func(hexDigest string) *dholev1.Pipeline {
+		p := &dholev1.Pipeline{
+			Id:     "planned-files",
+			Tenant: &dholev1.Tenant{Id: tenantA},
+			Steps: []*dholev1.Step{{
+				Id: "build", Name: "build",
+				EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+				LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
+				Inputs:      []*dholev1.Port{blobPort("context")},
+				Outputs:     []*dholev1.Port{blobPort("image")},
+				FileInputs:  []*dholev1.FileInput{{Port: "context", Path: "Dockerfile"}},
+			}},
+			Files: []*dholev1.File{{
+				Path: "Dockerfile", Digest: digest(hexDigest), SizeBytes: 4,
+			}},
+		}
+		return p
+	}
+
+	first := withFile("1111")
+	rev := savePlanned(t, h, tenantA, first)
+	// The step has run once, against the bytes the definition declares.
+	recordCacheEntry(t, h, tenantA, stepByID(t, first, "build"),
+		[]*dholev1.Digest{digest("1111")}, rev.Lockfile,
+		[]*dholev1.OutputRef{{Port: "image", Digest: digest("aaaa")}})
+
+	planned, err := h.client.Plan(ctx, authed(&dholev1.PlanRequest{
+		PipelineId: first.GetId(), RevisionId: rev.ID,
+	}, tokenAlice))
+	require.NoError(t, err)
+	require.True(t, plannedByID(t, planned.Msg.GetSteps(), "build").GetCacheHit(),
+		"the step declares exactly the file it ran against, so its key must be the one that was recorded")
+
+	// The same step, the same everything, a different file.
+	second := withFile("2222")
+	revTwo := savePlanned(t, h, tenantA, second)
+	require.NotEqual(t, rev.ID, revTwo.ID, "changing a carried file left the revision unchanged")
+
+	planned, err = h.client.Plan(ctx, authed(&dholev1.PlanRequest{
+		PipelineId: second.GetId(), RevisionId: revTwo.ID,
+	}, tokenAlice))
+	require.NoError(t, err)
+	require.False(t, plannedByID(t, planned.Msg.GetSteps(), "build").GetCacheHit(),
+		"a step whose file changed was served from the cache of the file it no longer reads")
+	require.Empty(t, plannedByID(t, planned.Msg.GetSteps(), "build").GetNonCacheableReason(),
+		"the step is perfectly cacheable; it has simply never run with these bytes")
+}
+
+// TestValidateReportsAFileBindingThatNamesNothing: the editor draws markers on
+// the ports it is told about, and a step bound to a file the definition does
+// not carry is a port that will have nothing on it. Reported here, before a
+// run, rather than as an engine failing to fetch an input.
+func TestValidateReportsAFileBindingThatNamesNothing(t *testing.T) {
+	h := newPlanHarness(t, staticFleet{readyEngine()})
+
+	p := cacheablePipeline(tenantA)
+	stepByID(t, p, "b").FileInputs = []*dholev1.FileInput{{Port: "in", Path: "Dockerfile"}}
+
+	got, err := h.client.Validate(context.Background(), authed(&dholev1.ValidateRequest{
+		Pipeline: p,
+	}, tokenAlice))
+	require.NoError(t, err)
+
+	var found *dholev1.Diagnostic
+	for _, d := range got.Msg.GetDiagnostics() {
+		if strings.Contains(d.GetMessage(), "Dockerfile") {
+			found = d
+		}
+	}
+	require.NotNil(t, found, "a binding naming no file was not reported: %v", got.Msg.GetDiagnostics())
+	require.Equal(t, "error", found.GetSeverity())
+	require.Equal(t, "b", found.GetStepId())
+	require.Equal(t, "in", found.GetPort(),
+		"the diagnostic must name the port, or the editor cannot draw it")
+}

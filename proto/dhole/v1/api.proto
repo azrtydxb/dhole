@@ -80,6 +80,35 @@ message Rename {
   string name = 2;
 }
 
+// SetFile attaches, replaces or detaches one file the definition carries
+// (ADR 0023).
+//
+// One path at a time, and never a whole file list, so that every edit has an
+// exact inverse expressible as another SetFile: attaching a file at a path
+// that had none inverts to detaching it, replacing one inverts to restoring
+// the File that was there, and detaching inverts to attaching that File back.
+//
+// Detaching a path that carries no file is REFUSED, exactly as removing an
+// edge that does not exist is: the "inverse" of a removal that removed nothing
+// would attach a file the definition never had.
+//
+// Detaching a file a step still declares as an input is refused too, for the
+// same reason RemoveStep refuses a connected step — the inverse would have to
+// restore the file AND the bindings that named it, which makes the inverse of
+// one operation depend on graph state the operation did not name.
+//
+// A detached file is NOT deleted from the content-addressed store. It becomes
+// unreferenced, and the collector reclaims it when nothing points at it; that
+// is also what makes the inverse work, because the bytes the inverse names are
+// still there.
+message SetFile {
+  // Path within the definition. Required.
+  string path = 1;
+  // The file to put at that path. Its own path field is ignored — path above
+  // is the one that counts. Unset DETACHES whatever file is there.
+  File file = 2;
+}
+
 // Operation is one edit. The GUI emits one per interaction; the CLI and an
 // agent emit exactly the same ones. There is no document-level write: an
 // editor that sends whole documents cannot merge concurrent edits and cannot
@@ -93,6 +122,7 @@ message Operation {
     Rename rename = 5;
     RemoveStep remove_step = 6;
     SetStepConfig set_step_config = 7;
+    SetFile set_file = 8;
   }
 }
 
@@ -104,15 +134,21 @@ enum ChangeKind {
   CHANGE_KIND_CHANGED = 3;
 }
 
-// Change is one element the operation touched. Exactly one of step_id and
-// edge is populated: a change that names neither describes nothing.
+// Change is one element the operation touched. Exactly one of step_id, edge
+// and file_path is populated: a change that names none of them describes
+// nothing.
 message Change {
   ChangeKind kind = 1;
   string step_id = 2;
   Edge edge = 3;
-  // Human-readable, and it names the step or the edge it is about, because
-  // this string is what a GUI shows and what an agent quotes back.
+  // Human-readable, and it names the step, the edge or the file it is about,
+  // because this string is what a GUI shows and what an agent quotes back.
   string summary = 4;
+  // The path of the file a set_file operation attached, replaced or detached.
+  // It exists because a file change names neither a step nor an edge, and a
+  // change that named nothing would be indistinguishable from one that did
+  // nothing (ADR 0023).
+  string file_path = 5;
 }
 
 // Diff is what an operation changed.
@@ -622,6 +658,28 @@ message UpdatePresenceRequest {
 // here would be state this call had accumulated somewhere.
 message UpdatePresenceResponse {}
 
+// PutDefinitionFileRequest uploads the bytes of a file a definition will
+// carry. It is a separate call from the edit that declares the file because
+// the two are different kinds of thing: the bytes are content-addressed and
+// shared, and the declaration is a revision-making edit that must stay small
+// enough to invert.
+message PutDefinitionFileRequest {
+  // The content. It is charged against the tenant's max_cas_bytes quota, so
+  // an oversized definition is refused by the limit that already exists.
+  bytes content = 1;
+  // The path the file will be known by. It is not part of the stored object —
+  // the store is addressed by content — and is echoed in the response so what
+  // comes back is exactly the File a set_file operation takes.
+  string path = 2;
+  // Advisory media type, echoed the same way.
+  string media_type = 3;
+}
+
+// PutDefinitionFileResponse is the stored file, ready to hand to set_file.
+message PutDefinitionFileResponse {
+  File file = 1;
+}
+
 // PipelineService is the one API contract. The GUI has no privileged
 // endpoints: it is one client of this service among the CLI and agents
 // (ADR 0013). Every RPC is authenticated and tenant-scoped — the tenant comes
@@ -636,6 +694,11 @@ service PipelineService {
   rpc GetPipeline(GetPipelineRequest) returns (GetPipelineResponse);
   // ApplyOperation applies one edit and returns the diff and its inverse.
   rpc ApplyOperation(ApplyOperationRequest) returns (ApplyOperationResponse);
+  // PutDefinitionFile stores the bytes of a file a definition carries and
+  // returns the File that names them. Without it a set_file operation could
+  // only name a digest nobody had uploaded, and a definition could not carry
+  // a file at all (ADR 0023).
+  rpc PutDefinitionFile(PutDefinitionFileRequest) returns (PutDefinitionFileResponse);
   // Validate returns structured diagnostics with source positions.
   rpc Validate(ValidateRequest) returns (ValidateResponse);
   // Plan is a dry run: what would execute, what is a cache hit, and which

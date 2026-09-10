@@ -63,6 +63,8 @@ func Apply(
 		change, inverse, err = applySetProperty(next, kind.SetProperty)
 	case *dholev1.Operation_SetStepConfig:
 		change, inverse, err = applySetStepConfig(next, kind.SetStepConfig)
+	case *dholev1.Operation_SetFile:
+		change, inverse, err = applySetFile(next, kind.SetFile)
 	case *dholev1.Operation_Rename:
 		change, inverse, err = applyRename(next, kind.Rename)
 	default:
@@ -301,6 +303,106 @@ func applySetStepConfig(p *dholev1.Pipeline, op *dholev1.SetStepConfig) (*dholev
 
 	return &dholev1.Change{Kind: kind, StepId: op.GetStepId(), Summary: summary},
 		&dholev1.Operation{Kind: &dholev1.Operation_SetStepConfig{SetStepConfig: inverse}}, nil
+}
+
+// applySetFile attaches, replaces or detaches one file the definition carries
+// (ADR 0023).
+//
+// The inverse is exact in all three directions: attaching a file where there
+// was none inverts to detaching it, replacing one inverts to restoring exactly
+// the File that was there, and detaching inverts to attaching that File back.
+// The bytes the inverse names are still in the content-addressed store,
+// because a detachment removes a declaration and never an object — the file
+// becomes unreferenced and the collector reclaims it when nothing points at
+// it.
+//
+// Two removals are refused rather than approximated, and both for the reason
+// ADR 0020 gives:
+//
+//   - Detaching a path that carries no file: the "inverse" of a removal that
+//     removed nothing would ATTACH a file the definition never had.
+//   - Detaching a file a step still binds: the inverse would have to restore
+//     the file AND the bindings that named it, which makes the inverse of one
+//     operation depend on state the operation did not name — the same reason
+//     RemoveStep refuses a connected step.
+func applySetFile(p *dholev1.Pipeline, op *dholev1.SetFile) (*dholev1.Change, *dholev1.Operation, error) {
+	path := op.GetPath()
+	if path == "" {
+		return nil, nil, errors.New("set_file: a path is required")
+	}
+	index := slices.IndexFunc(p.GetFiles(), func(f *dholev1.File) bool { return f.GetPath() == path })
+
+	var previous *dholev1.File
+	if index >= 0 {
+		clone, ok := proto.Clone(p.GetFiles()[index]).(*dholev1.File)
+		if !ok {
+			return nil, nil, errors.New("set_file: cloned file is not a file")
+		}
+		previous = clone
+	}
+	inverse := &dholev1.Operation{Kind: &dholev1.Operation_SetFile{
+		SetFile: &dholev1.SetFile{Path: path, File: previous},
+	}}
+
+	var (
+		kind    dholev1.ChangeKind
+		summary string
+	)
+	switch {
+	case op.GetFile() == nil:
+		if previous == nil {
+			return nil, nil, fmt.Errorf("set_file: the definition carries no file at %q to detach", path)
+		}
+		for _, step := range p.GetSteps() {
+			for _, in := range step.GetFileInputs() {
+				if in.GetPath() == path {
+					return nil, nil, fmt.Errorf(
+						"set_file: file %q is still read by step %q on port %q; "+
+							"remove that binding first", path, step.GetId(), in.GetPort())
+				}
+			}
+		}
+		p.Files = slices.Delete(p.GetFiles(), index, index+1)
+		// An empty list and no list at all are the same definition to a reader
+		// and DIFFERENT bytes to the content hash, so the last file removed
+		// leaves the field unset — which is what a definition that never
+		// carried one encodes as, and therefore what the inverse must land
+		// back on.
+		if len(p.GetFiles()) == 0 {
+			p.Files = nil
+		}
+		kind = dholev1.ChangeKind_CHANGE_KIND_REMOVED
+		summary = fmt.Sprintf("detached file %q, which was %s", path, digestText(previous.GetDigest()))
+	default:
+		attached, ok := proto.Clone(op.GetFile()).(*dholev1.File)
+		if !ok {
+			return nil, nil, errors.New("set_file: cloned file is not a file")
+		}
+		// The operation's own path wins over the one inside the File, so a
+		// caller cannot attach at one path a file that says it is at another
+		// and leave the two disagreeing in the stored definition.
+		attached.Path = path
+		if index >= 0 {
+			p.Files[index] = attached
+			kind = dholev1.ChangeKind_CHANGE_KIND_CHANGED
+			summary = fmt.Sprintf("replaced file %q: %s is now %s",
+				path, digestText(previous.GetDigest()), digestText(attached.GetDigest()))
+		} else {
+			p.Files = append(p.GetFiles(), attached)
+			kind = dholev1.ChangeKind_CHANGE_KIND_ADDED
+			summary = fmt.Sprintf("attached file %q as %s", path, digestText(attached.GetDigest()))
+		}
+	}
+
+	return &dholev1.Change{Kind: kind, FilePath: path, Summary: summary}, inverse, nil
+}
+
+// digestText names a digest the way a diff shows it.
+func digestText(d *dholev1.Digest) string {
+	if d.GetHex() == "" {
+		return "nothing"
+	}
+	return d.GetAlgo() + ":" + d.GetHex()
 }
 
 // applyRename changes a step's display name. Its inverse restores the old one,

@@ -443,3 +443,61 @@ func TestContentHashMarshalsDeterministically(t *testing.T) {
 	require.Contains(t, string(source), "Deterministic: true",
 		"the content hash must marshal deterministically or map ordering makes it unstable")
 }
+
+// TestARevisionPinsTheBytesOfEveryFileItCarries is what makes a definition
+// file safe to run against: the file's digest is inside the content hash, so
+// two definitions that differ only in what a carried file CONTAINS are two
+// revisions and not one.
+//
+// Without it the whole of ADR 0023 is unsound. A revision is what a run pins,
+// and a run that pinned a revision whose file bytes could change underneath it
+// would be running something nobody can name afterwards — the same defect the
+// unpinned image tag has.
+func TestARevisionPinsTheBytesOfEveryFileItCarries(t *testing.T) {
+	withFile := func(hex string) *dholev1.Pipeline {
+		p := pipeline("p1", "oci://dhole/build:1")
+		p.Files = []*dholev1.File{{
+			Path:      "Dockerfile",
+			Digest:    &dholev1.Digest{Algo: "sha256", Hex: hex},
+			SizeBytes: 12,
+		}}
+		p.GetSteps()[0].FileInputs = []*dholev1.FileInput{{Port: "context", Path: "Dockerfile"}}
+		return p
+	}
+
+	one := defstore.ContentHash(withFile("aa"))
+	same := defstore.ContentHash(withFile("aa"))
+	other := defstore.ContentHash(withFile("bb"))
+
+	require.Equal(t, one, same, "equal definitions must be one revision")
+	require.NotEqual(t, one, other,
+		"a definition whose file holds different bytes is a different revision, or a run cannot pin what it runs")
+	require.NotEqual(t, goldenHash, one,
+		"attaching a file changed nothing in the hash, so the file is outside what a revision pins")
+}
+
+// TestARevisionRoundTripsTheFilesItCarries: the stored definition is what a
+// run reads back, so a file declared on the way in has to come back out with
+// the same digest. A field the store dropped would leave a step declaring an
+// input nothing can satisfy, discovered at run time on an engine.
+func TestARevisionRoundTripsTheFilesItCarries(t *testing.T) {
+	db := openTestDB(t)
+	store := defstore.New(db, defstore.WithoutPinning())
+	ctx := context.Background()
+
+	p := pipeline("p1", "oci://dhole/build:1")
+	p.Files = []*dholev1.File{{
+		Path:      "Dockerfile",
+		Digest:    &dholev1.Digest{Algo: "sha256", Hex: "cafe"},
+		SizeBytes: 7,
+		MediaType: "text/plain",
+	}}
+	p.GetSteps()[0].FileInputs = []*dholev1.FileInput{{Port: "context", Path: "Dockerfile"}}
+
+	rev, err := store.Save(ctx, tenant, p, "alice")
+	require.NoError(t, err)
+
+	got, err := store.Get(ctx, tenant, "p1", rev.ID)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(p, got), "the stored definition lost the file it carried:\nwant %v\ngot  %v", p, got)
+}

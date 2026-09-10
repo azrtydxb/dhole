@@ -925,3 +925,43 @@ func TestAStepIsDispatchedToTheEngineKindItNamed(t *testing.T) {
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"a"}, h.drain(ctx, t))
 }
+
+// TestAFileTheDefinitionCarriesReachesTheEngineAsADeclaredInput is how a step
+// gets a file under ADR 0023: not from a repository — this system has none to
+// read — but from the definition, as an input like any other.
+//
+// The assertion is on the DISPATCH, because that is the whole contract with an
+// engine: an engine never calls back to ask what to run, so a file that did
+// not travel in the dispatch does not exist as far as the step is concerned.
+// It must arrive as an InputRef bearing the file's digest, which is what the
+// engine materialises at inputs/<port> exactly as it does an edge's bytes.
+func TestAFileTheDefinitionCarriesReachesTheEngineAsADeclaredInput(t *testing.T) {
+	ctx := testContext(t)
+
+	fileDigest := &dholev1.Digest{Algo: "sha256", Hex: "d0cke7"}
+	pipeline := &dholev1.Pipeline{
+		Id:     testPipeline,
+		Tenant: &dholev1.Tenant{Id: testTenant},
+		Steps: []*dholev1.Step{{
+			Id:          "build",
+			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+			Inputs:      []*dholev1.Port{{Name: "context"}},
+			Outputs:     []*dholev1.Port{{Name: "image"}},
+			FileInputs:  []*dholev1.FileInput{{Port: "context", Path: "Dockerfile"}},
+		}},
+		Files: []*dholev1.File{{Path: "Dockerfile", Digest: fileDigest, SizeBytes: 18}},
+	}
+	h := newHarnessWith(ctx, t, pipeline, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"build"}, h.drain(ctx, t),
+		"a step whose only input is a carried file has no predecessor to wait for")
+
+	dispatches := h.bus.dispatches(t)
+	require.Len(t, dispatches, 1)
+	inputs := dispatches[0].GetInputs()
+	require.Len(t, inputs, 1, "the file the definition carries did not travel in the dispatch")
+	require.Equal(t, "context", inputs[0].GetPort())
+	require.Equal(t, fileDigest.GetHex(), inputs[0].GetDigest().GetHex(),
+		"the engine was pointed at bytes that are not the ones the revision pins")
+}

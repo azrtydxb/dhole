@@ -895,6 +895,17 @@ func (s *Scheduler) reportTier(state, msg string, args ...any) {
 // a key for a different step.
 func inputDigests(p *dholev1.Pipeline, stepID string, state *runState) ([]*dholev1.Digest, bool) {
 	var digests []*dholev1.Digest
+	// The files the definition carries are always resolved: a revision pins
+	// their bytes, so nothing has to run first. A binding that names no file
+	// leaves the key an input short — which would collide with the same step
+	// reading nothing — so it means no key rather than a shorter one.
+	files, err := dag.FileInputs(p, stepByID(p, stepID))
+	if err != nil {
+		return nil, false
+	}
+	for _, f := range files {
+		digests = append(digests, f.GetDigest())
+	}
 	for _, e := range p.GetEdges() {
 		if e.GetToStep() != stepID {
 			continue
@@ -1693,13 +1704,17 @@ func (s *Scheduler) buildDispatch(
 	if err != nil {
 		return nil, err
 	}
+	inputs, err := inputsFor(pipeline, step, state)
+	if err != nil {
+		return nil, err
+	}
 	return &dholev1.JobDispatch{
 		RunId:           runID,
 		StepId:          step.GetId(),
 		Attempt:         attempt,
 		FenceToken:      EncodeFence(tenantID, token),
 		Step:            step,
-		Inputs:          inputsFor(pipeline, step.GetId(), state),
+		Inputs:          inputs,
 		OutputPrefix:    fmt.Sprintf("runs/%s/%s/%s/%d", tenantID, runID, step.GetId(), attempt),
 		ProtocolVersion: version,
 		Tenant:          &dholev1.Tenant{Id: tenantID},
@@ -1739,12 +1754,22 @@ func dispatchVersion(engines []registry.Instance) uint32 {
 	return version
 }
 
-// inputsFor resolves what a step consumes from what its predecessors produced.
-// The edges are the only source of this: a step reaches its predecessor's data
-// by connecting a port to it and by no other means, so nothing here can drift
-// from what the DAG says (ADR 0001).
-func inputsFor(p *dholev1.Pipeline, stepID string, state *runState) []*dholev1.InputRef {
-	var inputs []*dholev1.InputRef
+// inputsFor resolves what a step consumes: the outputs its predecessors
+// produced, and the files the DEFINITION carries for it (ADR 0023).
+//
+// Both are DECLARED. A step reaches its predecessor's data by connecting a
+// port to it and reaches a file by binding a port to it, and by no other
+// means, so nothing here can drift from what the definition says and no step
+// inherits ambient filesystem state (ADR 0001).
+func inputsFor(p *dholev1.Pipeline, step *dholev1.Step, state *runState) ([]*dholev1.InputRef, error) {
+	// The carried files first, and resolved through the same helper the
+	// planner keys against: a file that reached the dispatch and not the key
+	// would be a step keyed on bytes it does not receive.
+	inputs, err := dag.FileInputs(p, step)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: dispatching %s: %w", step.GetId(), err)
+	}
+	stepID := step.GetId()
 	for _, e := range p.GetEdges() {
 		if e.GetToStep() != stepID {
 			continue
@@ -1760,7 +1785,7 @@ func inputsFor(p *dholev1.Pipeline, stepID string, state *runState) []*dholev1.I
 			})
 		}
 	}
-	return inputs
+	return inputs, nil
 }
 
 // recordUnschedulable writes why a ready step could not be placed, once per

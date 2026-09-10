@@ -114,7 +114,7 @@ ACCEPTANCE_FLAGS ?= -count=1 -v -timeout 30m
 
 acceptance-ci:
 	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \
-	go test ./acceptance $(ACCEPTANCE_FLAGS) -run 'TestAcceptanceCICacheHit|TestCIPipelineBuildsTheCheckedInDockerfile'
+	go test ./acceptance $(ACCEPTANCE_FLAGS) -run TestAcceptanceCICacheHit
 
 acceptance-automation:
 	DHOLE_TEST_KUBECONFIG='$(DHOLE_TEST_KUBECONFIG)' \

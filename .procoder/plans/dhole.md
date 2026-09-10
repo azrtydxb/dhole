@@ -64,7 +64,11 @@ decide what may be cached and what may be retried.
   0024 triggers (the stored trigger table behind CreateTrigger/ListTriggers/
   DeleteTrigger — before it, an event source could only be DECLARED in the
   plane's `--triggers` file, so creating one needed a shell on that host and a
-  restart). A task
+  restart). Definition-attached files (ADR 0023) took NO number and added no
+  table on purpose: the declaration is a field of the definition proto, which
+  the `revisions` row already stores whole, and the bytes live in the CAS,
+  which is not SQL — a table binding revision to file would be a second copy of
+  what the definition already says. A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -534,32 +538,41 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
 - [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
       template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
       through the dispatch (`JobDispatch.step` already carries the whole step),
-      and it is what the cache key is hashed against. Still open in this item:
-      it **cannot reference a file from the repository** and **has no syntax for
-      a loop's body**. A trigger's bound inputs reach the sink and no run
-      carries them.
+      and it is what the cache key is hashed against.
 
-      The file reference NEEDS A DECISION, not an implementation, and the
-      reason is that the phrase "the definition's repository" names something
-      this system does not have. Git is a one-way MIRROR OUT of the definition
-      store (ADR 0008, `internal/mirror`): the database is canonical and the
-      repository is an export nobody may push to meaningfully. The git TRIGGER
-      parses a forge's webhook and never clones — there is no fetch, no
-      credential for a source remote, and no checkout anywhere in the tree. So
-      there is no repository to read a file FROM, and adding one is a decision
-      about what a pipeline's source of truth is, which is the shape of an ADR.
-      The options, with what each costs:
+      **It cannot reference a file from the repository** — CLOSED by ADR 0023,
+      option 1 below. A file a step needs is part of the DEFINITION, not of a
+      repository: `Pipeline.files` carries `File{path, digest, size, media
+      type}`, a step binds one to an input port with `Step.file_inputs`, and
+      `dag.FileInputs` resolves the binding into the same `InputRef` an edge
+      produces — so the engine materialises it at `inputs/<port>` with no
+      engine change at all, ADR 0001 holds, and the digest lands in the cache
+      key for free (`TestADeclaredFileIsPartOfTheStepsCacheKey` asserts the
+      miss and the hit together). `PutDefinitionFile` uploads the bytes through
+      the guarded CAS, so a definition's ceiling is the tenant's `MaxCASBytes`
+      and not a constant; `dhole pipeline push-file` is the CLI surface;
+      `SetFile` is the sixth-and-a-half editing operation, closed under
+      inversion (ADR 0020) in all three directions, refusing a detach of a path
+      that carries nothing and of a file a step still reads; the git mirror
+      exports the bytes beside the YAML under `pipelines/<id>.files/<path>`.
+      NO MIGRATION was needed: the declaration lives in the definition proto,
+      which the `revisions` row already stores whole, and the bytes live in the
+      CAS, which is not SQL. `acceptance/ci/pipeline.yaml` now DECLARES the
+      Dockerfile and `TestCIPipelineBuildsTheCheckedInDockerfile` is GONE —
+      which was the point: the test existed only because the feature did not.
+      Verified against the live cluster: `TestAcceptanceCICacheHit` passes with
+      a 10.5s first run and a 30ms second.
 
-      1. **Definition-attached files.** A file is part of the DEFINITION: stored
-         with the revision in `internal/defstore`, content-addressed, and named
-         by a step as an input the plane materialises. Preserves ADR 0001 (the
-         file is declared, the DAG still derives from declarations, no ambient
-         filesystem state) and ADR 0008 (nothing outside the database decides
-         what runs). It is part of the content hash, so it is part of the cache
-         key for free. Costs: an upload path through the API and the CLI, a size
-         ceiling, a `defstore` schema change, and the mirror has to export them.
-         This is the smallest answer that closes the acceptance pipeline's
-         embedded Dockerfile.
+      Still open in this item: a pipeline **has no syntax for a loop's body**,
+      and a trigger's bound inputs reach the sink and no run carries them.
+
+      What ADR 0023 does NOT give anyone is a checkout. A pipeline that wants a
+      whole repository at a commit still cannot have one; if that becomes the
+      common case, option 2 supersedes this rather than extending it. The
+      options as they stood, with what each costs, kept because the rejection
+      of option 3 is worth not re-proposing:
+
+      1. **Definition-attached files.** CHOSEN — ADR 0023.
       2. **A source-fetch step.** A builtin step clones a repository at a pinned
          commit and emits it on an output port; every consumer reads it through
          an edge. Mechanically ADR 0001-clean, and it is the CI-shaped answer.
@@ -575,10 +588,6 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       4. **Trigger inputs reaching the step.** Already open above. It delivers a
          commit sha and a payload, never file bytes, so it is a prerequisite for
          option 2 and not an answer on its own.
-
-      Until one is chosen, `acceptance/ci/pipeline.yaml` keeps carrying the
-      Dockerfile's text and `TestCIPipelineBuildsTheCheckedInDockerfile` keeps
-      that copy equal to the checked-in file.
 - [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
       Closed: giving up now records `STEP_FAILED` and nothing else, so whether

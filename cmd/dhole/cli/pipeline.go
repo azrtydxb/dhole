@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -453,4 +454,90 @@ func pipelineAnnounceCmd(o *options) *cobra.Command {
 	cmd.Flags().StringVar(&selection, "selection", "", "the step this session has selected")
 	cmd.Flags().BoolVar(&gone, "gone", false, "withdraw this session's announcement")
 	return cmd
+}
+
+// pipelinePushFileCmd uploads a file a definition carries, and — when told
+// which pipeline to attach it to — declares it there in the same command.
+//
+// The two halves are one command because they are one intention: `dhole
+// pipeline push-file ./Dockerfile --pipeline ci --base rev_...` is what ADR
+// 0023 means by uploading a file BESIDE the definition. They stay two calls
+// underneath because the bytes are content-addressed and shared while the
+// declaration is a revision-making edit that has to be invertible; a caller
+// that only wants the digest omits --pipeline and gets it.
+func pipelinePushFileCmd(o *options) *cobra.Command {
+	var pipelineID, base, at, mediaType string
+	cmd := &cobra.Command{
+		Use:   "push-file <local-file>",
+		Short: "upload a file a definition carries, and optionally attach it",
+		Long: "The file becomes part of the DEFINITION rather than of any repository\n" +
+			"(ADR 0023): it is content-addressed, a revision pins its bytes, and a\n" +
+			"step reads it by binding an input port to its path. Without\n" +
+			"--pipeline this only uploads and prints the digest; with it, the\n" +
+			"file is attached to that pipeline in a second, invertible edit.\n" +
+			"The upload is charged against the tenant's storage quota, which is\n" +
+			"the only ceiling on how large a definition may become.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := o.checkOutput(cmd); err != nil {
+				return err
+			}
+			content, err := os.ReadFile(args[0]) //nolint:gosec // the path is the user's own argument
+			if err != nil {
+				return fmt.Errorf("read %s: %w", args[0], err)
+			}
+			path := at
+			if path == "" {
+				path = filepath.Base(args[0])
+			}
+			if pipelineID != "" && base == "" {
+				return &usageError{cmd: cmd, err: fmt.Errorf(
+					"--base is required with --pipeline: an edit that cannot conflict overwrites somebody else's silently")}
+			}
+
+			ctx, cancel := o.context(cmd)
+			defer cancel()
+
+			put, err := o.client().PutDefinitionFile(ctx, connect.NewRequest(&dholev1.PutDefinitionFileRequest{
+				Content: content, Path: path, MediaType: mediaType,
+			}))
+			if err != nil {
+				return o.fail("push file", err)
+			}
+			file := put.Msg.GetFile()
+			if pipelineID == "" {
+				return o.emit(put.Msg, func(w io.Writer) { printFile(w, file) })
+			}
+
+			applied, err := o.client().ApplyOperation(ctx, connect.NewRequest(&dholev1.ApplyOperationRequest{
+				PipelineId:   pipelineID,
+				BaseRevision: base,
+				Operation: &dholev1.Operation{Kind: &dholev1.Operation_SetFile{
+					SetFile: &dholev1.SetFile{Path: path, File: file},
+				}},
+			}))
+			if err != nil {
+				return o.fail("attach file", err)
+			}
+			return o.emit(applied.Msg, func(w io.Writer) {
+				printFile(w, file)
+				printRevision(w, applied.Msg.GetRevision())
+				for _, change := range applied.Msg.GetDiff().GetChanges() {
+					_, _ = fmt.Fprintf(w, "%s %s\n", changeKind(change.GetKind()), change.GetSummary())
+				}
+			})
+		},
+	}
+	cmd.Flags().StringVar(&pipelineID, "pipeline", "", "attach the file to this pipeline as well as uploading it")
+	cmd.Flags().StringVar(&base, "base", "", "the revision the attaching edit was made against")
+	cmd.Flags().StringVar(&at, "at", "", "path within the definition; default is the local file's base name")
+	cmd.Flags().StringVar(&mediaType, "media-type", "", "advisory media type, e.g. text/plain")
+	return cmd
+}
+
+// printFile is how an uploaded file is reported: the path a step binds by and
+// the digest a revision pins.
+func printFile(w io.Writer, f *dholev1.File) {
+	_, _ = fmt.Fprintf(w, "file %s %s:%s (%d bytes)\n",
+		f.GetPath(), f.GetDigest().GetAlgo(), f.GetDigest().GetHex(), f.GetSizeBytes())
 }

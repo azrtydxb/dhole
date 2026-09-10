@@ -1,7 +1,10 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
@@ -18,6 +21,7 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/gen/dhole/v1/dholev1connect"
 	"github.com/azrtydxb/dhole/internal/api"
+	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/runstore"
@@ -213,11 +217,22 @@ func newHarness(t *testing.T, defs defstore.Store) *harness {
 	t.Cleanup(func() { _ = runs.Close() })
 
 	adv := &recordingAdvancer{}
+	// A real content-addressed store, holding the bytes every file fixture
+	// names. The server verifies that a file a definition declares has bytes
+	// somebody uploaded, so a fake that answered "yes" to everything would
+	// hide the check entirely.
+	files := cas.NewFilesystem(filepath.Join(t.TempDir(), "cas"))
+	for _, tenantID := range []string{tenantA, tenantB} {
+		_, err := files.Put(context.Background(), tenantID, bytes.NewReader(fixtureFileBytes))
+		require.NoError(t, err)
+	}
+
 	srv, err := api.NewServer(api.Config{
 		Definitions:  defs,
 		Auth:         fakeAuth{},
 		Runs:         runs,
 		Advancer:     adv,
+		Files:        files,
 		PollInterval: 2 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -337,7 +352,31 @@ var operationFixtures = map[string]*dholev1.Operation{
 	"set_step_config": {Kind: &dholev1.Operation_SetStepConfig{
 		SetStepConfig: &dholev1.SetStepConfig{StepId: "c", Key: "target", Value: "staging"},
 	}},
+	// Attaching a file the harness has already uploaded, so the definition
+	// names bytes that really exist — a set_file naming a digest nobody put
+	// is refused, which is what stops a revision pointing at nothing.
+	"set_file": {Kind: &dholev1.Operation_SetFile{SetFile: &dholev1.SetFile{
+		Path: "Dockerfile",
+		File: &dholev1.File{
+			Path:      "Dockerfile",
+			Digest:    &dholev1.Digest{Algo: "sha256", Hex: fixtureFileHex},
+			SizeBytes: uint64(len(fixtureFileBytes)),
+			MediaType: "text/plain",
+		},
+	}}},
 }
+
+// The bytes every file fixture in this package attaches, and their digest.
+// The digest is COMPUTED rather than written down: a literal would be a second
+// copy of the content that could drift from it, which is exactly the defect
+// ADR 0023 exists to remove.
+var (
+	fixtureFileBytes = []byte("FROM busybox:1.36\n")
+	fixtureFileHex   = func() string {
+		sum := sha256.Sum256(fixtureFileBytes)
+		return hex.EncodeToString(sum[:])
+	}()
+)
 
 // operationKinds is every field of the Operation oneof, read from the
 // descriptor rather than a hand-written list.
@@ -490,8 +529,10 @@ func TestEveryOperationReturnsANonEmptyDiff(t *testing.T) {
 					require.Contains(t, ch.GetSummary(), ch.GetEdge().GetToStep())
 				case ch.GetStepId() != "":
 					require.Contains(t, ch.GetSummary(), ch.GetStepId())
+				case ch.GetFilePath() != "":
+					require.Contains(t, ch.GetSummary(), ch.GetFilePath())
 				default:
-					t.Fatalf("change names neither a step nor an edge: %v", ch)
+					t.Fatalf("change names neither a step, an edge nor a file: %v", ch)
 				}
 			}
 		})
@@ -698,6 +739,11 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 	case "DecideApproval":
 		_, err := h.client.DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
 			RunId: "run-x", StepId: "approve", Approved: true,
+		}))
+		return err
+	case "PutDefinitionFile":
+		_, err := h.client.PutDefinitionFile(ctx, connect.NewRequest(&dholev1.PutDefinitionFileRequest{
+			Content: []byte("FROM busybox:1.36\n"), Path: "Dockerfile",
 		}))
 		return err
 	case "UpdatePresence":
@@ -1134,4 +1180,216 @@ func TestStepConfigIsPartOfTheContentHash(t *testing.T) {
 	two.GetSteps()[2].Config = map[string]string{"target": "staging"}
 	require.NotEqual(t, defstore.ContentHash(one), defstore.ContentHash(two),
 		"changing a step's configuration did not change the revision")
+}
+
+// TestSetFileInvertsInEveryDirection is ADR 0020's property for the operation
+// ADR 0023 added: attaching, replacing and detaching a file are each undoable
+// exactly, and the two removals whose "inverse" would invent something are
+// refused instead.
+//
+// Every direction gets its OWN harness. An edit and its undo leave the
+// pipeline's head where they found it, so two directions sharing one pipeline
+// would have the second rebased onto a head that no longer carries what it is
+// about — a conflict that says nothing about inversion.
+func TestSetFileInvertsInEveryDirection(t *testing.T) {
+	// A second blob, so "replace" has something real to replace with.
+	other := []byte("FROM alpine:3.19\n")
+	otherSum := sha256.Sum256(other)
+	otherHex := hex.EncodeToString(otherSum[:])
+
+	file := func(hexDigest string, size int) *dholev1.File {
+		return &dholev1.File{
+			Path:      "Dockerfile",
+			Digest:    &dholev1.Digest{Algo: "sha256", Hex: hexDigest},
+			SizeBytes: uint64(size),
+			MediaType: "text/plain",
+		}
+	}
+	setFile := func(op *dholev1.SetFile) *dholev1.Operation {
+		return &dholev1.Operation{Kind: &dholev1.Operation_SetFile{SetFile: op}}
+	}
+
+	// start returns a harness whose pipeline is at `base`, and — when asked —
+	// with the fixture file already attached at a head an edit may be based on.
+	start := func(t *testing.T, attach bool) (*harness, *dholev1.Pipeline, string) {
+		t.Helper()
+		h := newRealHarness(t)
+		ctx := context.Background()
+		p, base := seed(t, h, tenantA)
+		// The bytes "replace" moves to, in this harness's own store.
+		_, err := h.client.PutDefinitionFile(ctx, authed(&dholev1.PutDefinitionFileRequest{
+			Content: other, Path: "Dockerfile", MediaType: "text/plain",
+		}, tokenAlice))
+		require.NoError(t, err)
+		if !attach {
+			return h, p, base.ID
+		}
+		res, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   p.GetId(),
+			BaseRevision: base.ID,
+			Operation: setFile(&dholev1.SetFile{
+				Path: "Dockerfile", File: file(fixtureFileHex, len(fixtureFileBytes)),
+			}),
+		}, tokenAlice))
+		require.NoError(t, err)
+		return h, p, res.Msg.GetRevision().GetId()
+	}
+
+	roundTrip := func(t *testing.T, h *harness, p *dholev1.Pipeline, from string, op *dholev1.SetFile) {
+		t.Helper()
+		ctx := context.Background()
+		applied, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId: p.GetId(), BaseRevision: from, Operation: setFile(op),
+		}, tokenAlice))
+		require.NoError(t, err)
+		require.NotEqual(t, from, applied.Msg.GetRevision().GetId(), "the operation changed nothing")
+
+		undone, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   p.GetId(),
+			BaseRevision: applied.Msg.GetRevision().GetId(),
+			Operation:    applied.Msg.GetInverse(),
+		}, tokenAlice))
+		require.NoError(t, err)
+		// Revision identity IS the content hash, so landing back on the same
+		// revision id is exact equality rather than a resemblance.
+		require.Equal(t, from, undone.Msg.GetRevision().GetId(),
+			"the inverse did not restore the definition it was taken from")
+	}
+
+	t.Run("AttachingAFileWhereThereWasNoneInvertsToDetachingIt", func(t *testing.T) {
+		h, p, base := start(t, false)
+		roundTrip(t, h, p, base, &dholev1.SetFile{
+			Path: "Dockerfile", File: file(fixtureFileHex, len(fixtureFileBytes)),
+		})
+	})
+
+	t.Run("ReplacingAFileRestoresTheBytesThatWereThere", func(t *testing.T) {
+		h, p, attached := start(t, true)
+		roundTrip(t, h, p, attached, &dholev1.SetFile{
+			Path: "Dockerfile", File: file(otherHex, len(other)),
+		})
+	})
+
+	t.Run("DetachingAFileRestoresIt", func(t *testing.T) {
+		h, p, attached := start(t, true)
+		roundTrip(t, h, p, attached, &dholev1.SetFile{Path: "Dockerfile"})
+	})
+
+	t.Run("DetachingAPathThatCarriesNoFileIsRefused", func(t *testing.T) {
+		// The same reason removing an edge that does not exist is refused: the
+		// "inverse" of a removal that removed nothing would ATTACH a file the
+		// definition never had.
+		h, p, base := start(t, false)
+		_, err := h.client.ApplyOperation(context.Background(), authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   p.GetId(),
+			BaseRevision: base,
+			Operation:    setFile(&dholev1.SetFile{Path: "Dockerfile"}),
+		}, tokenAlice))
+		require.Error(t, err)
+		require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		require.Contains(t, err.Error(), "no file")
+	})
+
+	t.Run("DetachingAFileAStepStillReadsIsRefused", func(t *testing.T) {
+		// The same reason RemoveStep refuses a connected step: the inverse
+		// would have to restore the file AND the binding that named it.
+		h, p, attached := start(t, true)
+		ctx := context.Background()
+		bound, err := h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   p.GetId(),
+			BaseRevision: attached,
+			Operation: &dholev1.Operation{Kind: &dholev1.Operation_AddStep{
+				AddStep: &dholev1.AddStep{Step: &dholev1.Step{
+					Id:         "d",
+					Inputs:     []*dholev1.Port{blobPort("context")},
+					FileInputs: []*dholev1.FileInput{{Port: "context", Path: "Dockerfile"}},
+				}},
+			}},
+		}, tokenAlice))
+		require.NoError(t, err)
+
+		_, err = h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+			PipelineId:   p.GetId(),
+			BaseRevision: bound.Msg.GetRevision().GetId(),
+			Operation:    setFile(&dholev1.SetFile{Path: "Dockerfile"}),
+		}, tokenAlice))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), `step "d"`,
+			"the refusal has to name the step that still reads the file")
+
+		// And the refusal is the OPERATION's own, not the server's later
+		// consistency check. Closure under inversion is a property of the
+		// operation set (ADR 0020), so it has to hold where the set is: a
+		// second guard that happens to catch the same case would leave Apply
+		// returning an inverse that restores a file and not the binding.
+		got, err := h.client.GetPipeline(ctx, authed(&dholev1.GetPipelineRequest{
+			PipelineId: p.GetId(), RevisionId: bound.Msg.GetRevision().GetId(),
+		}, tokenAlice))
+		require.NoError(t, err)
+		_, _, _, err = api.Apply(got.Msg.GetPipeline(), setFile(&dholev1.SetFile{Path: "Dockerfile"}))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "still read by step")
+	})
+
+	t.Run("TheStoredDigestIsTheContentHashOfWhatWasUploaded", func(t *testing.T) {
+		h := newRealHarness(t)
+		put, err := h.client.PutDefinitionFile(context.Background(),
+			authed(&dholev1.PutDefinitionFileRequest{Content: other, Path: "Dockerfile"}, tokenAlice))
+		require.NoError(t, err)
+		require.Equal(t, otherHex, put.Msg.GetFile().GetDigest().GetHex(),
+			"the server stored bytes under a digest that is not their content hash")
+		require.Equal(t, uint64(len(other)), put.Msg.GetFile().GetSizeBytes())
+	})
+}
+
+// TestADefinitionMayNotNameBytesNobodyUploaded: a revision whose file digest
+// is not in the tenant's store would dispatch a step whose input cannot be
+// fetched, and the failure would land on an engine minutes later rather than
+// on the edit that caused it.
+func TestADefinitionMayNotNameBytesNobodyUploaded(t *testing.T) {
+	h := newRealHarness(t)
+	original, base := seed(t, h, tenantA)
+
+	_, err := h.client.ApplyOperation(context.Background(), authed(&dholev1.ApplyOperationRequest{
+		PipelineId:   original.GetId(),
+		BaseRevision: base.ID,
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_SetFile{
+			SetFile: &dholev1.SetFile{Path: "Dockerfile", File: &dholev1.File{
+				Digest: &dholev1.Digest{Algo: "sha256", Hex: "0000000000000000000000000000000000000000000000000000000000000000"},
+			}},
+		}},
+	}, tokenAlice))
+	require.Error(t, err)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	require.Contains(t, err.Error(), "not stored")
+}
+
+// TestADefinitionFileUploadedByOneTenantIsInvisibleToAnother: the bytes are
+// tenant-scoped like every other stored record, so a digest guessed from
+// another tenant's definition resolves to nothing here.
+func TestADefinitionFileUploadedByOneTenantIsInvisibleToAnother(t *testing.T) {
+	h := newRealHarness(t)
+	ctx := context.Background()
+
+	secret := []byte("FROM internal-registry.example/base:1\n")
+	put, err := h.client.PutDefinitionFile(ctx, authed(&dholev1.PutDefinitionFileRequest{
+		Content: secret, Path: "Dockerfile",
+	}, tokenAlice))
+	require.NoError(t, err)
+
+	created, err := h.client.CreatePipeline(ctx, authed(&dholev1.CreatePipelineRequest{
+		PipelineId: "pipe-b",
+	}, tokenBob))
+	require.NoError(t, err)
+
+	_, err = h.client.ApplyOperation(ctx, authed(&dholev1.ApplyOperationRequest{
+		PipelineId:   "pipe-b",
+		BaseRevision: created.Msg.GetRevision().GetId(),
+		Operation: &dholev1.Operation{Kind: &dholev1.Operation_SetFile{
+			SetFile: &dholev1.SetFile{Path: "Dockerfile", File: put.Msg.GetFile()},
+		}},
+	}, tokenBob))
+	require.Error(t, err,
+		"tenant-b attached tenant-a's bytes by naming their digest")
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }

@@ -94,6 +94,46 @@ func TypeCheck(p *dholev1.Pipeline) []Diagnostic {
 			})
 		}
 	}
+	diags = append(diags, checkFileBindings(p)...)
+	return diags
+}
+
+// checkFileBindings reports every step that reads a file the definition does
+// not carry, or binds one to a port it does not declare (ADR 0023).
+//
+// A file input has no edge to type-check, so nothing above sees it. Left
+// unreported, both faults surface on an ENGINE — one as an input that cannot
+// be fetched, the other as a port with nothing on it — minutes into a run and
+// a long way from the definition that caused them.
+func checkFileBindings(p *dholev1.Pipeline) []Diagnostic {
+	carried := make(map[string]bool, len(p.GetFiles()))
+	for _, f := range p.GetFiles() {
+		carried[f.GetPath()] = true
+	}
+
+	var diags []Diagnostic
+	// Over p.GetSteps() rather than the map, so the order is the definition's
+	// and an editor's marker list does not shuffle between keystrokes.
+	for _, step := range p.GetSteps() {
+		for _, in := range step.GetFileInputs() {
+			switch {
+			case !carried[in.GetPath()]:
+				diags = append(diags, Diagnostic{
+					StepID:   step.GetId(),
+					PortName: in.GetPort(),
+					Message: fmt.Sprintf("step %q reads file %q on port %s.%s, and pipeline %q carries no such file",
+						step.GetId(), in.GetPath(), step.GetId(), in.GetPort(), p.GetId()),
+				})
+			case findPort(step.GetInputs(), in.GetPort()) == nil:
+				diags = append(diags, Diagnostic{
+					StepID:   step.GetId(),
+					PortName: in.GetPort(),
+					Message: fmt.Sprintf("step %q binds file %q to input port %s.%s, which it does not declare",
+						step.GetId(), in.GetPath(), step.GetId(), in.GetPort()),
+				})
+			}
+		}
+	}
 	return diags
 }
 
