@@ -568,6 +568,30 @@ func (h *harness) exited() bool {
 
 func jobKey(runID, stepID string) string { return runID + "/" + stepID }
 
+// negotiatedVersion is the version this harness dispatches at.
+//
+// It is what the ENGINE and the plane agreed on, not the plane's own maximum.
+// The contract supports N-1 and a real control plane negotiates per engine —
+// registry.Register stores the result and dispatches against it — so an engine
+// legitimately one version behind works in production. Dispatching at the
+// harness's own maximum instead failed that engine on every case after
+// registration, which meant the executable half of the contract refused
+// engines the contract itself permits.
+//
+// Falls back to the plane's version when no registration has been seen: the
+// registration case has already failed by then and every later case is
+// skipped, so the value only has to be something.
+func (h *harness) negotiatedVersion() uint32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := len(h.regs) - 1; i >= 0; i-- {
+		if v, err := wire.Negotiate(h.regs[i].GetProtocolVersions()); err == nil {
+			return v
+		}
+	}
+	return wire.ProtocolVersion
+}
+
 func (h *harness) registrationSubject() string { return bus.SubjectEngineRegistration() }
 func (h *harness) controlSubject() string      { return bus.SubjectEngineControl(h.engineID) }
 func (h *harness) secretSubject() string       { return secretSubjectName }
@@ -601,7 +625,7 @@ func (h *harness) newDispatch(name string) *dholev1.JobDispatch {
 			LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
 		},
 		OutputPrefix:    prefix,
-		ProtocolVersion: wire.ProtocolVersion,
+		ProtocolVersion: func() uint32 { v := h.negotiatedVersion(); fmt.Fprintf(os.Stderr, "DEBUG dispatch version=%d regs=%d\n", v, len(h.regs)); return v }(),
 		Tenant:          &dholev1.Tenant{Id: "conformance"},
 	}
 }
