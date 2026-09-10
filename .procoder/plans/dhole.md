@@ -475,14 +475,17 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       the log, `Run` returns no object, and nothing partial flows downstream.
       The agent acceptance test now makes the off-schema assertion inside the
       run it is testing, and that run completes.
-- [ ] **`dhole serve` arms durable gates and never fires them.** Wiring the
-      `builtin:wait` step type into `internal/server` (two additive hunks around
-      `scheduler.New`) is what makes the atomicity fix reach the binary, but the
-      durable-timer poll is still not wired there — the item above — so a gate
-      armed by a plain `dhole serve` waits until something polls `wait.Timers`.
-      The acceptance harness supplies the poll, so acceptance is unaffected.
-      This is strictly better than what it replaced (the gate was skipped
-      entirely), and it is not finished. Found closing the gate-arming race.
+- [x] **`dhole serve` arms durable gates and never fires them.** CLOSED BY THE
+      MERGE, and neither branch could have closed it alone: the dispatcher
+      branch wired `wait.NewRunner` as `Server.timerLoop`, spawned beside the
+      outbox and the sweeper, while the atomicity branch wired the arming. Each
+      reported the other half as still missing because each was looking at a
+      tree without it. `builtin:timer` is now an ALIAS of `builtin:wait` rather
+      than a second implementation — it armed out of band, which is precisely
+      the bug the gate closes, under a different plugin_ref — so
+      `TestATimerStepMakesTheRunWaitAndThePlanesOwnPollEndsTheWait` exercises
+      arm-and-fire end to end through `server.New`/`Start` alone, with nothing
+      supplied by the test.
 - [x] **No nightly CI job runs the acceptance pipelines** — `.github/` was
       outside the task's scope. Closed: `.github/workflows/nightly.yml` provisions a kind cluster and a Postgres service, runs `make acceptance`, and FAILS the job if any acceptance test merely skipped — a skipped acceptance suite reads as a green one, which is worse than not running it.
 

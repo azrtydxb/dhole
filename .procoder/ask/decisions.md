@@ -251,3 +251,38 @@ unupdated, which is why `procoder ask` kept listing them as open.
 - **Repo visibility: public.** `github.com/azrtydxb/dhole` is public.
 - **ADR status: all accepted.** Every record in `.procoder/adr/` reads
   `Status: accepted` and `procoder adr check` is clean.
+
+## Task 54, the VM executor — a scope decision I cannot make (2026-09-10)
+
+Six open plan items build a Firecracker/QEMU VM executor and the strong-isolation
+tier it enables. They are the only substantial work left in the plan, and I have
+deliberately not started them, because the spec forbids them:
+
+> **Out of scope** — VM executor (Firecracker/QEMU) and the strong-isolation tier it
+> enables, including macOS, Windows, nested-virt and RouterOS CHR targets. Designed
+> for by the executor interface, not implemented in v1.
+
+The chain runs ADR → spec → plan → code, and it says that where reality contradicts
+the spec, the spec is updated first. So building this needs a spec change, and that
+is a product-scope call rather than an implementation one.
+
+Two further facts worth having before deciding:
+
+- It cannot be verified here. Firecracker needs `/dev/kvm` on Linux; this machine is
+  macOS and the k3s cluster is arm64 without nested virt exposed. Every test would
+  skip, which is the shape of "written and never run" that has produced most of the
+  defects found this week.
+- The interface is ready for it. The executor contract now has four backends
+  (process, kubernetes, containerd, pool) and `Sandbox.EnvironmentIdentity` moved to
+  the sandbox, so a VM backend has somewhere honest to report a snapshot digest.
+  Nothing about the design is blocking.
+
+### Options
+
+- Leave Task 54 out of scope, as the spec says. The plan items stay open and
+  annotated; nothing is lost.
+- Move the VM executor into scope: amend `.procoder/specs/dhole.md`, re-run
+  `procoder spec check`, and build it — accepting that CI needs a KVM-capable
+  runner before any of it is verified rather than merely written.
+- Build it behind the skip, as a designed-and-untested backend, and say so in
+  the docs.
