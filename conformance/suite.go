@@ -38,6 +38,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/wire"
@@ -452,21 +453,15 @@ func (h *harness) redeem(handle string) []byte {
 	return []byte(value)
 }
 
-// startEngine launches the command under test with the environment the suite
-// documents. Everything it needs to reach the bus and the object store is
-// here; nothing is inherited from the suite's own process.
-func (h *harness) startEngine(ctx context.Context) error {
-	engineCtx, cancel := context.WithCancel(ctx)
-	h.engineC = cancel
-
-	// The command is not user input reaching a server: it is the argument of
-	// a developer tool, named on the command line by whoever runs the suite,
-	// and launching it is the entire point of the package. There is nothing to
-	// sanitise -- an engine binary IS an arbitrary program.
-	// #nosec G204 -- see above.
-	// nosemgrep: dangerous-exec-command
-	cmd := exec.CommandContext(engineCtx, h.cfg.Engine[0], h.cfg.Engine[1:]...)
-	cmd.Dir = h.cfg.Dir
+// engineEnv is the environment the engine under test is handed: everything it
+// needs to reach the bus and the object store, and nothing inherited from the
+// suite's own process.
+//
+// It is a function of its own so the suite's tests can assert on it. An
+// end-to-end pass proves an engine coped with what it was given, not that it
+// was given what a deployment gives — and this suite has already shipped an
+// environment the product's own engine could not start from.
+func (h *harness) engineEnv(busURL string) []string {
 	// Both spellings of the three that had two.
 	//
 	// The suite grew its own names — DHOLE_NATS_URL, DHOLE_ENGINE_TIER,
@@ -483,22 +478,44 @@ func (h *harness) startEngine(ctx context.Context) error {
 	// The suite's older names are still set so that an engine already written
 	// against them keeps passing; they are documented as deprecated rather
 	// than removed, which is the same courtesy the wire protocol extends.
-	cmd.Env = append(os.Environ(),
-		"DHOLE_BUS_URL="+h.nats.URL(),
+	return append(os.Environ(),
+		"DHOLE_BUS_URL="+busURL,
 		"DHOLE_ENGINE_ID="+h.engineID,
 		"DHOLE_TIER="+h.tier,
 		"DHOLE_SLOTS=2",
+		// The store protocol, not a harness convention: an engine selects its
+		// backend from DHOLE_OBJECT_STORE and configures it from the
+		// variables that backend names. The suite runs the filesystem backend
+		// because it starts no bucket, and it says so rather than leaving the
+		// engine to default — an engine that required the variable, as a
+		// deployment's engine reasonably may, could not otherwise be tested.
+		"DHOLE_OBJECT_STORE="+blobstore.KindFilesystem,
 		"DHOLE_BLOB_DIR="+h.blobDir,
 		"DHOLE_DISPATCH_STREAM="+engine.DispatchStream,
 		"DHOLE_SECRET_SUBJECT="+secretSubjectName,
 
 		// Deprecated spellings, kept so engines written against the suite's
 		// original names are not broken by this correction.
-		"DHOLE_NATS_URL="+h.nats.URL(),
+		"DHOLE_NATS_URL="+busURL,
 		"DHOLE_ENGINE_TIER="+h.tier,
 		"DHOLE_ENGINE_SLOTS=2",
 	)
-	cmd.Env = append(cmd.Env, h.cfg.Env...)
+}
+
+// startEngine launches the command under test.
+func (h *harness) startEngine(ctx context.Context) error {
+	engineCtx, cancel := context.WithCancel(ctx)
+	h.engineC = cancel
+
+	// The command is not user input reaching a server: it is the argument of
+	// a developer tool, named on the command line by whoever runs the suite,
+	// and launching it is the entire point of the package. There is nothing to
+	// sanitise -- an engine binary IS an arbitrary program.
+	// #nosec G204 -- see above.
+	// nosemgrep: dangerous-exec-command
+	cmd := exec.CommandContext(engineCtx, h.cfg.Engine[0], h.cfg.Engine[1:]...)
+	cmd.Dir = h.cfg.Dir
+	cmd.Env = append(h.engineEnv(h.nats.URL()), h.cfg.Env...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

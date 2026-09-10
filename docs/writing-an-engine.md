@@ -132,25 +132,22 @@ environment variable and every connection is outbound:
 | `DHOLE_TIER`                 | yes      | the trust tier whose work it takes                           |
 | `DHOLE_SLOTS`                | no       | concurrent steps; default 1                                  |
 | `DHOLE_EXECUTOR`             | no       | `process` (default) or `kubernetes`                          |
-| `DHOLE_STATE_DIR`            | no       | where a filesystem object store lives                        |
-| `DHOLE_OBJECT_STORE`         | no       | `filesystem` (default) or `s3`                               |
-| `DHOLE_BLOB_DIR`             | no       | the directory, when the store is `filesystem`                |
-| `DHOLE_S3_BUCKET`            | for s3   | the bucket logs and artifacts go in                          |
-| `DHOLE_S3_ENDPOINT`          | no       | empty for AWS; set for MinIO or another S3-compatible server |
-| `DHOLE_S3_REGION`            | no       | the bucket's region                                          |
-| `DHOLE_S3_ACCESS_KEY_ID`     | no       | empty falls back to the ambient AWS credential chain         |
-| `DHOLE_S3_SECRET_ACCESS_KEY` | no       | with the key id above                                        |
 
-The content-addressed store is built on whatever `DHOLE_OBJECT_STORE` names,
-so there is one place to configure and no way to end up with logs in a bucket
-and artifacts on a disk.
+The object store is configured by the variables the contract defines — see
+[reaching the object store](wire-contract.md#reaching-the-object-store) — and
+they are deliberately NOT repeated here. They are a cross-engine contract, not
+this binary's knobs, and a second copy of them is a second place for them to
+drift; `TestTheEngineGuideDoesNotRestateTheObjectStoreContract` keeps this page
+from growing one back. `dhole-engine` adds one convenience of its own on top:
+`DHOLE_STATE_DIR` (default: a directory under the system temporary directory),
+whose `blobs` subdirectory is the filesystem store's directory when the
+contract's own variable for it is unset. It warns at start-up when it is on a store no other
+process can read, which is what the contract asks of an engine in that
+position.
 
-**A distributed deployment needs `s3`.** The `filesystem` store is local to the
-process: an engine writes a step's log and its outputs to its own disk, and the
-control plane — a different process, usually on a different machine — looks for
-them on its own and does not find them. Nothing errors. Every step succeeds and
-everything it produced is unreachable. The engine warns at start-up when it is
-in this position, because the symptom itself points nowhere near the cause.
+The content-addressed store is built on whatever backend is configured rather
+than beside it, so there is one place to configure and no way to end up with
+logs in a bucket and artifacts on a disk.
 
 The executor is also chosen here. `process` runs steps directly on the engine's
 host and needs nothing; `kubernetes` runs each step in a sandbox pod and needs

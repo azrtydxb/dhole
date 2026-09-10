@@ -35,7 +35,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			"command. The suite starts its own NATS and object store and plays the control\n"+
 			"plane; the engine under test needs nothing but the environment it is handed:\n"+
 			"DHOLE_BUS_URL, DHOLE_ENGINE_ID, DHOLE_TIER, DHOLE_SLOTS,\n"+
-			"DHOLE_BLOB_DIR, DHOLE_DISPATCH_STREAM, DHOLE_SECRET_SUBJECT.\n"+
+			"DHOLE_OBJECT_STORE=filesystem with DHOLE_BLOB_DIR, DHOLE_DISPATCH_STREAM,\n"+
+			"DHOLE_SECRET_SUBJECT.\n"+
 			"The older spellings DHOLE_NATS_URL, DHOLE_ENGINE_TIER and\n"+
 			"DHOLE_ENGINE_SLOTS are also set, and are deprecated.\n\n")
 		fs.PrintDefaults()
