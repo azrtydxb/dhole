@@ -395,6 +395,25 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
+- [ ] **A definition file is never collected, and ADR 0023 says it is.** That
+      record's Consequences claim "a file removed by an operation is not deleted
+      from the CAS: it is unreferenced, and the collector reclaims it when
+      nothing points at it". The first half is true and the second is not.
+      `cas.GC` enumerates `blob_refs`, and only a step OUTPUT ever writes a row
+      there (`GC.Reference`), so a definition file has no row, is never
+      enumerated, and is retained forever. The current behaviour is
+      safe-but-leaky rather than dangerous — the opposite error, collecting a
+      file a revision still carries, would break a pinned run — but a tenant
+      that replaces a large file on every edit grows without bound against the
+      MaxCASBytes quota those very files are charged to.
+      The fix is to teach the collector what a revision pins: a file carried by
+      SOME revision is retained, one carried by none is collectable. Note the
+      `blob_refs` key is `(tenant_id, digest, run_id)` and a definition file is
+      owned by a revision rather than a run, so this is a schema question, not
+      only a query. ADR 0023 is accepted and immutable; if the answer changes
+      the decision rather than completing it, supersede rather than edit.
+      Found by the agent that implemented 0023, which reported the gap in its
+      own work rather than leaving it to be discovered.
 - [ ] **What the plane still does not host, after the dispatcher landed.** ONE
       clause left of the original five. (a) is closed by ADR 0025 and
       `internal/steps/agent/contract.go` + `internal/server/agent.go`: an agent
@@ -433,8 +452,8 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       holds no value for an hour. `server.DefaultModels` builds anthropic and
       openai clients from the redeemed key and REFUSES to fall back to the
       provider libraries' `os.Getenv` default — the ambient credential is the
-      trap this design exists to avoid. `dhole serve --model-secret
-      NAME=ENVVAR` supplies the values (never on argv), and the chart's
+      trap this design exists to avoid. The `--model-secret` flag on
+      `dhole serve` supplies the values (never on argv), and the chart's
       `controlPlane.modelSecrets` reads each from an existing Kubernetes
       Secret. START-UP ORDERING is now a rule with a test: the broker serves
       BEFORE the advance loop, the builtin workers and the hosted engine, or
@@ -536,58 +555,43 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       names it between platform and capability, coarsest cause first, so a step
       that cannot be placed is reported rather than held.
 - [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
-      template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
-      through the dispatch (`JobDispatch.step` already carries the whole step),
-      and it is what the cache key is hashed against.
-
-      **It cannot reference a file from the repository** — CLOSED by ADR 0023,
-      option 1 below. A file a step needs is part of the DEFINITION, not of a
-      repository: `Pipeline.files` carries `File{path, digest, size, media
-      type}`, a step binds one to an input port with `Step.file_inputs`, and
-      `dag.FileInputs` resolves the binding into the same `InputRef` an edge
-      produces — so the engine materialises it at `inputs/<port>` with no
-      engine change at all, ADR 0001 holds, and the digest lands in the cache
-      key for free (`TestADeclaredFileIsPartOfTheStepsCacheKey` asserts the
-      miss and the hit together). `PutDefinitionFile` uploads the bytes through
-      the guarded CAS, so a definition's ceiling is the tenant's `MaxCASBytes`
-      and not a constant; `dhole pipeline push-file` is the CLI surface;
-      `SetFile` is the sixth-and-a-half editing operation, closed under
-      inversion (ADR 0020) in all three directions, refusing a detach of a path
-      that carries nothing and of a file a step still reads; the git mirror
-      exports the bytes beside the YAML under `pipelines/<id>.files/<path>`.
-      NO MIGRATION was needed: the declaration lives in the definition proto,
-      which the `revisions` row already stores whole, and the bytes live in the
-      CAS, which is not SQL. `acceptance/ci/pipeline.yaml` now DECLARES the
-      Dockerfile and `TestCIPipelineBuildsTheCheckedInDockerfile` is GONE —
-      which was the point: the test existed only because the feature did not.
-      Verified against the live cluster: `TestAcceptanceCICacheHit` passes with
-      a 10.5s first run and a 30ms second.
-
-      Still open in this item: a pipeline **has no syntax for a loop's body**,
-      and a trigger's bound inputs reach the sink and no run carries them.
-
-      What ADR 0023 does NOT give anyone is a checkout. A pipeline that wants a
-      whole repository at a commit still cannot have one; if that becomes the
-      common case, option 2 supersedes this rather than extending it. The
-      options as they stood, with what each costs, kept because the rejection
-      of option 3 is worth not re-proposing:
-
-      1. **Definition-attached files.** CHOSEN — ADR 0023.
-      2. **A source-fetch step.** A builtin step clones a repository at a pinned
-         commit and emits it on an output port; every consumer reads it through
-         an edge. Mechanically ADR 0001-clean, and it is the CI-shaped answer.
-         Costs: source credentials the plane must hold, an effect class that is
-         not pure, and a cache key that is only stable if the step names a
-         commit sha rather than a ref — a branch name is `Step.image`'s tag
-         problem again.
-      3. **Read from the git mirror.** REJECTED, and worth writing down so it is
-         not proposed again: it makes a run's behaviour depend on a repository
-         that is by design not a source of truth, so anyone with push access to
-         the mirror changes what runs, and the approval state and the run
-         history stop meaning anything (ADR 0008's opening paragraph).
-      4. **Trigger inputs reaching the step.** Already open above. It delivers a
-         commit sha and a payload, never file bytes, so it is a prerequisite for
-         option 2 and not an answer on its own.
+      template does) — CLOSED: `Step.image` reaches `executor.Spec.Image` through the dispatch
+      (`JobDispatch.step` already carries the whole step), and it is what the cache key is
+      hashed against. **It cannot reference a file from the repository** — CLOSED by ADR 0023,
+      option 1 below. A file a step needs is part of the DEFINITION, not of a repository:
+      `Pipeline.files` carries `File{path, digest, size, media type}`, a step binds one to an
+      input port with `Step.file_inputs`, and `dag.FileInputs` resolves the binding into the
+      same `InputRef` an edge produces — so the engine materialises it at `inputs/<port>` with
+      no engine change at all, ADR 0001 holds, and the digest lands in the cache key for free
+      (`TestADeclaredFileIsPartOfTheStepsCacheKey` asserts the miss and the hit together).
+      `PutDefinitionFile` uploads the bytes through the guarded CAS, so a definition's ceiling
+      is the tenant's `MaxCASBytes` and not a constant; `dhole pipeline push-file` is the CLI
+      surface; `SetFile` is the sixth-and-a-half editing operation, closed under inversion
+      (ADR 0020) in all three directions, refusing a detach of a path that carries nothing and
+      of a file a step still reads; the git mirror exports the bytes beside the YAML under
+      `pipelines/<id>.files/<path>`. NO MIGRATION was needed: the declaration lives in the
+      definition proto, which the `revisions` row already stores whole, and the bytes live in
+      the CAS, which is not SQL. `acceptance/ci/pipeline.yaml` now DECLARES the Dockerfile and
+      `TestCIPipelineBuildsTheCheckedInDockerfile` is GONE — which was the point: the test
+      existed only because the feature did not. Verified against the live cluster:
+      `TestAcceptanceCICacheHit` passes with a 10.5s first run and a 30ms second. Still open
+      in this item: a pipeline **has no syntax for a loop's body**, and a trigger's bound
+      inputs reach the sink and no run carries them. What ADR 0023 does NOT give anyone is a
+      checkout. A pipeline that wants a whole repository at a commit still cannot have one; if
+      that becomes the common case, option 2 supersedes this rather than extending it. The
+      options as they stood, with what each costs, kept because the rejection of option 3 is
+      worth not re-proposing: 1. **Definition-attached files.** CHOSEN — ADR 0023. 2. **A
+      source-fetch step.** A builtin step clones a repository at a pinned commit and emits it
+      on an output port; every consumer reads it through an edge. Mechanically ADR 0001-clean,
+      and it is the CI-shaped answer. Costs: source credentials the plane must hold, an effect
+      class that is not pure, and a cache key that is only stable if the step names a commit
+      sha rather than a ref — a branch name is `Step.image`'s tag problem again. 3. **Read
+      from the git mirror.** REJECTED, and worth writing down so it is not proposed again: it
+      makes a run's behaviour depend on a repository that is by design not a source of truth,
+      so anyone with push access to the mirror changes what runs, and the approval state and
+      the run history stop meaning anything (ADR 0008's opening paragraph). 4. **Trigger
+      inputs reaching the step.** Already open above. It delivers a commit sha and a payload,
+      never file bytes, so it is a prerequisite for option 2 and not an answer on its own.
 - [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
       Closed: giving up now records `STEP_FAILED` and nothing else, so whether
