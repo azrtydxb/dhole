@@ -46,7 +46,8 @@ spec:
       terminationGracePeriodSeconds: 120
       containers:
         - name: engine
-          image: {{ $.Values.image.registry }}/{{ .image.repository }}:{{ .image.tag | default $.Chart.AppVersion }}
+          {{- $image := .image | default dict }}
+          image: {{ $.Values.image.registry }}/{{ $image.repository | default "azrtydxb/dhole-engine" }}:{{ $image.tag | default $.Chart.AppVersion }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           securityContext:
             {{- toYaml $.Values.securityContext | nindent 12 }}
@@ -66,6 +67,17 @@ spec:
               value: {{ .slots | default 1 | quote }}
             - name: DHOLE_STATE_DIR
               value: /var/lib/dhole-engine
+            - name: DHOLE_EXECUTOR
+              value: {{ .executor | default "kubernetes" | quote }}
+            {{- if eq (.executor | default "kubernetes") "kubernetes" }}
+            {{- $sandbox := .sandbox | default dict }}
+            - name: DHOLE_SANDBOX_NAMESPACE
+              value: {{ $sandbox.namespace | default $.Release.Namespace | quote }}
+            {{- with $sandbox.serviceAccount }}
+            - name: DHOLE_SANDBOX_SERVICE_ACCOUNT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .resources | nindent 12 }}
           volumeMounts:

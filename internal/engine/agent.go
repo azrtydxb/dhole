@@ -296,9 +296,18 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 	// all, which would lose exactly the attempts anyone goes looking for.
 	defer func() { obs.EndStepSpan(span, outcome, stepErr) }()
 
+	// An engine that says nothing is indistinguishable from an engine that is
+	// not being given work, and the two have opposite fixes. Both ends of the
+	// attempt are logged so a `kubectl logs` answers "is it working?" without
+	// decoding a run event out of the database.
+	slog.Info("step accepted",
+		"engine", a.cfg.EngineID, "run", d.GetRunId(), "step", d.GetStepId(),
+		"attempt", d.GetAttempt(), "tenant", d.GetTenant().GetId())
+
 	started := time.Now()
 	status := a.run(ctx, &d)
 	outcome, stepErr = outcomeOf(status)
+	a.logOutcome(&d, status, outcome, stepErr, time.Since(started))
 	// cache_hit is false here and can only be false here: a step served from
 	// the cache is never dispatched to an engine at all, so every step this
 	// process sees really executed. The true side of the label is recorded by
@@ -315,6 +324,30 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 		return
 	}
 	_ = msg.Ack()
+}
+
+// logOutcome reports how an attempt ended, once, at a level that matches it.
+//
+// A failure logs the message the status carries rather than a summary of it:
+// that string is the whole diagnosis for anyone reading the engine's log, and
+// the alternative — "step failed" with the reason only in the run event — is
+// what made a missing /bin/sh take a database query to find.
+func (a *Agent) logOutcome(d *dholev1.JobDispatch, status *dholev1.JobStatus, outcome string, stepErr error, took time.Duration) {
+	attrs := []any{
+		"engine", a.cfg.EngineID, "run", d.GetRunId(), "step", d.GetStepId(),
+		"attempt", d.GetAttempt(), "outcome", outcome, "took", took,
+		"exit_code", status.GetExitCode(),
+	}
+	if msg := status.GetError(); msg != "" {
+		attrs = append(attrs, "error", msg)
+	} else if stepErr != nil {
+		attrs = append(attrs, "error", stepErr)
+	}
+	if stepErr != nil {
+		slog.Error("step finished", attrs...)
+		return
+	}
+	slog.Info("step finished", attrs...)
 }
 
 // run does the work and returns the terminal status for it. Every path through

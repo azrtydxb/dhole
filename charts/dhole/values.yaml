@@ -53,6 +53,19 @@ engines:
     tier: trusted
     replicas: 1
     slots: 2
+    # kubernetes | process. The default is not the binary's default, and the
+    # difference is the point: the engine image is distroless, so it has no
+    # shell and no interpreter, and the process backend can therefore execute
+    # nothing at all inside this chart. A step here runs in a sandbox pod.
+    # Choose process only for an engine whose image you have made able to run
+    # your steps directly.
+    executor: kubernetes
+    sandbox:
+      # Where sandbox pods are created. Empty means the release namespace.
+      namespace: ""
+      # The identity sandbox pods run as. Empty leaves the namespace default,
+      # which is what you want unless the steps themselves need credentials.
+      serviceAccount: ""
     image:
       repository: azrtydxb/dhole-engine
       tag: ""

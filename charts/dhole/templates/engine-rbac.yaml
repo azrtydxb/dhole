@@ -1,0 +1,54 @@
+{{/*
+What an engine needs to run a step in a sandbox pod.
+
+Namespaced on purpose. A sandbox is created in one namespace, and a ClusterRole
+here would let any engine in the release create a pod anywhere in the cluster —
+a far larger grant than the feature needs, and one that survives the release
+that asked for it. Rendered only when some engine actually uses the kubernetes
+backend, so a process-only install grants nothing.
+
+pods/exec is the load-bearing verb: a sandbox pod exists to be entered rather
+than to run one program, so the executor creates it once and execs each command
+into it (internal/executor/kubernetes).
+*/}}
+{{- $wantsSandboxes := false }}
+{{- range .Values.engines }}
+{{- if eq (.executor | default "kubernetes") "kubernetes" }}
+{{- $wantsSandboxes = true }}
+{{- end }}
+{{- end }}
+{{- if $wantsSandboxes }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dhole.fullname" . }}-sandbox
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # Read only. A step's own output goes to the bus; this is for the executor to
+  # tell "the image could not be pulled" from "the command failed".
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "dhole.fullname" . }}-sandbox
+  labels:
+    {{- include "dhole.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "dhole.fullname" . }}-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dhole.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

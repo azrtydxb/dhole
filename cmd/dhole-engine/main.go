@@ -22,7 +22,6 @@ import (
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/engine"
-	"github.com/azrtydxb/dhole/internal/executor/process"
 	"github.com/azrtydxb/dhole/internal/version"
 )
 
@@ -58,6 +57,15 @@ func run() error {
 		return err
 	}
 
+	// Chosen before the bus is dialled. A misconfigured backend is a start-up
+	// error, and finding it after the engine has announced itself would mean
+	// a fleet member that exists, advertises slots, and fails every step it
+	// is given.
+	exec, err := chooseExecutor()
+	if err != nil {
+		return err
+	}
+
 	// The stores an engine writes through. They default under one state
 	// directory so a development engine starts with three variables set.
 	stateDir := envOr("DHOLE_STATE_DIR", filepath.Join(os.TempDir(), "dhole-engine"))
@@ -84,7 +92,7 @@ func run() error {
 		EngineID: engineID,
 		Tier:     tier,
 		Bus:      conn,
-		Executor: process.New(),
+		Executor: exec,
 		Blobs:    blobstore.NewFilesystem(blobDir),
 		CAS:      cas.NewFilesystem(casDir),
 		Slots:    slots,
@@ -93,8 +101,8 @@ func run() error {
 		return err
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "dhole-engine %s (%s): engine %q in tier %q, %d slots\n",
-		version.Version(), version.Commit(), engineID, tier, slots)
+	_, _ = fmt.Fprintf(os.Stdout, "dhole-engine %s (%s): engine %q in tier %q, %d slots, %s executor\n",
+		version.Version(), version.Commit(), engineID, tier, slots, exec.Kind())
 
 	if err := agent.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err

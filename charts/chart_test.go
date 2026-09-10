@@ -77,3 +77,67 @@ func TestEveryImageReferenceCarriesItsRegistry(t *testing.T) {
 	}
 	require.Positive(t, found, "no Dhole image references were rendered at all")
 }
+
+// The chart ships a distroless engine image: no shell, no interpreter, nothing
+// a command step can be. A deployment defaulting to the process backend runs
+// every step straight into "fork/exec /bin/sh: no such file or directory", and
+// that is exactly what a live cluster did before this default changed.
+func TestEnginesRunTheirStepsInSandboxPodsByDefault(t *testing.T) {
+	out := render(t)
+
+	if !strings.Contains(out, `- name: DHOLE_EXECUTOR
+              value: "kubernetes"`) {
+		t.Errorf("engines do not default to the kubernetes backend; the image they run has no shell:\n%s", out)
+	}
+	if !strings.Contains(out, "- name: DHOLE_SANDBOX_NAMESPACE") {
+		t.Error("the kubernetes backend is selected but never told which namespace to create sandboxes in")
+	}
+}
+
+// A backend that may create pods and exec into them without the RBAC to do it
+// fails at the first step rather than at install, which is the expensive place
+// to find out.
+func TestChoosingSandboxPodsGrantsTheRBACTheyNeed(t *testing.T) {
+	out := render(t)
+
+	for _, verb := range []string{"pods/exec", `resources: ["pods"]`} {
+		if !strings.Contains(out, verb) {
+			t.Errorf("the sandbox Role does not grant %s:\n%s", verb, out)
+		}
+	}
+	if !strings.Contains(out, "kind: RoleBinding") {
+		t.Error("the sandbox Role is never bound to the engine's service account")
+	}
+	if strings.Contains(out, "kind: ClusterRole") {
+		t.Error("a sandbox grant escaped its namespace; it must be a Role, not a ClusterRole")
+	}
+}
+
+// The other side of the default: an install that deliberately runs steps on the
+// engine host must not be handed cluster credentials it never asked for.
+func TestAProcessOnlyInstallGrantsNoSandboxRBAC(t *testing.T) {
+	out := render(t, "--set", "engines[0].name=host", "--set", "engines[0].tier=trusted",
+		"--set", "engines[0].executor=process")
+
+	if strings.Contains(out, "-sandbox") {
+		t.Errorf("a process-only install still renders the sandbox Role:\n%s", out)
+	}
+	if !strings.Contains(out, `value: "process"`) {
+		t.Errorf("the chosen process backend did not reach the engine:\n%s", out)
+	}
+}
+
+// Adding a second trust tier is the most ordinary edit this chart invites, and
+// the natural way to write one — name, tier, slots, and no image block, because
+// the default image is the right one — used to fail the render with a nil
+// pointer rather than a message naming the missing key.
+func TestAnEngineTierNeedNotRestateTheDefaultImage(t *testing.T) {
+	out := render(t,
+		"--set", "engines[0].name=extra",
+		"--set", "engines[0].tier=untrusted",
+		"--set", "engines[0].slots=4")
+
+	if !strings.Contains(out, "azrtydxb/dhole-engine:") {
+		t.Errorf("an engine without an image block did not fall back to the default image:\n%s", out)
+	}
+}
