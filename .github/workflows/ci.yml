@@ -107,6 +107,103 @@ jobs:
             exit 1
           fi
 
+  # The VM executor (Task 53). It needs a hypervisor with hardware
+  # acceleration, which is a harder ask than a container runtime: GitHub's
+  # x64 Linux runners expose /dev/kvm through nested virtualisation, and their
+  # arm64 runners do not, so this job is amd64-only where the containerd job
+  # is a matrix over both.
+  #
+  # It runs on every push for the same reason the containerd job does. Without
+  # it internal/executor/vm is code that compiles and has never booted a guest,
+  # and the point of the shared contract is that a backend is held to it by
+  # something other than reading.
+  vm:
+    name: vm executor (firecracker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      # /dev/kvm exists on these runners but is owned by root with no group
+      # access, so the tests would skip themselves on a machine that can
+      # actually run them.
+      - name: enable KVM for the runner user
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: install a static busybox
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static cpio
+      - name: fetch firecracker and a guest kernel
+        env:
+          FC_VERSION: v1.13.1
+        run: |
+          set -euo pipefail
+          mkdir -p /opt/vm
+          curl -sSL -o /tmp/fc.tgz \
+            "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz"
+          tar -xzf /tmp/fc.tgz -C /tmp
+          install -m 0755 "/tmp/release-${FC_VERSION}-x86_64/firecracker-${FC_VERSION}-x86_64" /opt/vm/firecracker
+          # A kernel built for virtio-mmio with no PCI bus, which is what both
+          # Firecracker and QEMU's microvm machine present.
+          curl -sSL -o /opt/vm/vmlinux \
+            https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.11/x86_64/vmlinux-6.1.102
+      # The rootfs is an initramfs whose init IS the guest agent. busybox must
+      # be the STATIC build: a dynamically linked one in a rootfs with no libc
+      # fails as `exec: "sh": executable file not found in $PATH`, which reads
+      # as a missing program rather than a missing loader.
+      - name: build the guest rootfs
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /opt/vm/root/init ./internal/executor/vm/agent
+          mkdir -p /opt/vm/root/bin /opt/vm/root/proc /opt/vm/root/sys /opt/vm/root/dev \
+                   /opt/vm/root/tmp /opt/vm/root/dhole/work
+          cp /usr/bin/busybox /opt/vm/root/bin/busybox
+          for applet in sh sleep id printf cat ls seq env mkdir rm sync cp mv touch dd head tail grep wc true false; do
+            ln -sf /bin/busybox "/opt/vm/root/bin/$applet"
+          done
+          ( cd /opt/vm/root && find . | cpio -o -H newc --quiet | gzip -1 > /opt/vm/rootfs.cpio.gz )
+      - name: executor contract
+        # DHOLE_TEST_QEMU_BIN is deliberately NOT set, and the QEMU half of the
+        # suite therefore skips here. The QEMU backend needs a guest kernel
+        # with vsock built IN, and neither kernel this job could reach has
+        # that: the Firecracker CI kernel does not boot on QEMU's machine
+        # models at all (it resets before printing a line, even with
+        # earlycon), and a distro kernel that does boot ships vsock as a
+        # loadable module the initramfs does not carry. Setting the variable
+        # anyway would turn a known gap into a red job that says nothing new.
+        # See docs/executors/vm.md.
+        env:
+          DHOLE_TEST_FIRECRACKER_BIN: /opt/vm/firecracker
+          DHOLE_TEST_VM_KERNEL: /opt/vm/vmlinux
+          DHOLE_TEST_VM_ROOTFS: /opt/vm/rootfs.cpio.gz
+        run: |
+          go test ./internal/executor/vm/... -count=1 -v -timeout 25m 2>&1 | tee vm-test.log
+      # These tests skip themselves when there is no hypervisor, and a skip is
+      # invisible in a green job. This job exists to run them.
+      - name: refuse a run that only skipped
+        run: |
+          set -euo pipefail
+          if grep -q -- '--- SKIP: TestVMExecutorContract' vm-test.log; then
+            echo "::error::the VM executor contract skipped; this job exists to run it, not to report a pass nobody earned"
+            exit 1
+          fi
+      - name: guest consoles
+        if: failure()
+        run: |
+          # A guest that never reached its agent left its reason on the serial
+          # console, and nothing else in the log says why.
+          find /tmp -name console.log -newermt '-30 minutes' -print -exec tail -40 {} \; 2>/dev/null || true
+
   web:
     name: web
     runs-on: ubuntu-latest

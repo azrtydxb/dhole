@@ -47,6 +47,11 @@ enum Capability {
   CAPABILITY_PRIVILEGED = 3;
   // May mount a path from the engine host.
   CAPABILITY_HOST_MOUNT = 4;
+  // May run a hypervisor of its own inside the sandbox. Only a backend on a
+  // host that can nest virtualisation advertises it: the promise is plausible
+  // for anything already running on a hypervisor, and a step that believes it
+  // and finds no /dev/kvm fails in a way that reads as its own bug.
+  CAPABILITY_NESTED_VIRT = 5;
 }
 
 // LeaseScope is how long the sandbox a step runs in lives, and it is declared
