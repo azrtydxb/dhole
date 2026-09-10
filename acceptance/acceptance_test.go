@@ -425,17 +425,6 @@ func (w *dispatchWatcher) stepsDispatchedFor(runID string) []string {
 	return ids
 }
 
-// automationWait is how long the automation pipeline's durable wait lasts.
-//
-// The plan asks for five seconds. It is longer here for one reason: the point
-// of the wait is that it OUTLIVES a control plane, and stopping one plane and
-// starting another over the same database takes longer than five seconds on
-// this machine. A wait that had already elapsed before the second plane
-// existed would still pass — the timer would fire late, which is correct
-// behaviour — but it would no longer be evidence that a plane inherited a
-// wait that was still outstanding.
-const automationWait = 30 * time.Second
-
 // TestAcceptanceAutomationTriggersAndWait is the automation profile: the same
 // definition started by a cron schedule and by an HTTP call, each holding a
 // durable wait across a deliberate control-plane restart, with one step run by
@@ -500,16 +489,13 @@ func TestAcceptanceAutomationTriggersAndWait(t *testing.T) {
 					failure = err
 					return
 				}
-				// The wait is armed the moment the run exists, before the
-				// first step can finish and make the gated step ready.
-				// Nothing in the plane does this: no step type maps to
-				// internal/wait, so this test supplies what `dhole serve`
-				// does not.
-				if err := timers.Schedule(ctx, tenant, runID, "hold",
-					time.Now().Add(automationWait)); err != nil {
-					failure = err
-					return
-				}
+				// Nothing arms the wait here any more. `hold` is a
+				// `builtin:wait` step, so the advance that finds it ready
+				// arms it in the same transaction — which is the whole
+				// point: this test used to arm the timer the moment the run
+				// existed, behind a five-second predecessor, because arming
+				// and the readiness decision were two transactions and the
+				// gate could be missed between them.
 				firings.record(kind, runID, inputs)
 			})
 			return failure
@@ -1006,13 +992,15 @@ func TestAcceptanceAgentLoopAndApproval(t *testing.T) {
 	// And the schema is a refusal, not a decoration: an answer of the wrong
 	// shape is rejected however well-formed its JSON is.
 	//
-	// It runs under a run id of its OWN. The llm step halts the run it is
-	// given when it gives up, so asking it to refuse an answer inside the
-	// acceptance run would fail that run — which is correct behaviour, and
-	// was observed the first time this was written.
+	// It runs inside THIS run now. The step used to close the run it was
+	// given when it gave up, so this assertion had to be made under a run id
+	// of its own and proved nothing about a run that has to continue.
+	// Failing a step is the step type's business and ending the run is the
+	// graph's, so the refusal is recorded here and the run below completes
+	// anyway. The step id is one the graph does not define, because a verdict
+	// written against `classify` would contradict the success it already has.
 	model.answer(`{"severity":"catastrophic","summary":"nope"}`, 10, 10)
-	_, err = step.Run(ctx, runID+"-off-schema", "classify",
-		classify.GetConfig()["prompt"])
+	_, err = step.Run(ctx, runID, "classify-off-schema", classify.GetConfig()["prompt"])
 	require.ErrorIs(t, err, llm.ErrObjectInvalid)
 
 	// --- the bounded loop: it stops at three, whatever the body says ---
@@ -1059,6 +1047,12 @@ func TestAcceptanceAgentLoopAndApproval(t *testing.T) {
 	require.NoError(t, gate.Decide(ctx, runID, "approve", approver, true))
 
 	events := awaitRunCompleted(ctx, t, srv, runID)
+
+	// The off-schema refusal above is IN this run's log, and this run
+	// completed. That is the property the step type used to make untestable:
+	// a model answer that cannot be validated fails its step without ending
+	// the run around it.
+	eventOf(t, events, "classify-off-schema", runstore.StepFailed)
 
 	// The gate HELD: a step nobody dispatched is a step that waited. Without
 	// this, a gate that failed to hold would only be caught indirectly, by

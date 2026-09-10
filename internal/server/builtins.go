@@ -20,6 +20,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/steps/approval"
+	"github.com/azrtydxb/dhole/internal/steps/gate"
 	"github.com/azrtydxb/dhole/internal/steps/llm"
 	"github.com/azrtydxb/dhole/internal/steps/loop"
 	"github.com/azrtydxb/dhole/internal/wait"
@@ -41,6 +42,14 @@ const BuiltinScheme = "builtin:"
 // therefore a public contract.
 const (
 	// BuiltinTimer makes a run wait. `config.duration` is a Go duration.
+	//
+	// It is an ALIAS for the gate step type, not a second implementation.
+	// Arming a wait outside the transaction that decided the step was ready is
+	// precisely the bug migration 0023 and internal/steps/gate exist to close:
+	// the sequence is allocated inside the transaction and the visibility is
+	// not, so the wait could be recorded after the dispatch it was supposed to
+	// prevent and be skipped entirely. Two step types that both wait, one of
+	// them armed the old way, would reintroduce it under a different name.
 	BuiltinTimer = BuiltinScheme + "timer"
 	// BuiltinApproval makes a run wait for a person. `config.prompt` is what
 	// that person is asked.
@@ -126,6 +135,14 @@ func (b *builtins) Take(
 	if !strings.HasPrefix(step.GetPluginRef(), BuiltinScheme) {
 		return false, nil
 	}
+	// A gate is a builtin that this registry deliberately does NOT claim. It
+	// is armed inside the transaction that decided the step was ready
+	// (internal/steps/gate, migration 0023), and claiming it here would run it
+	// on a worker instead — arming out of band, which is the bug that fix
+	// exists to close.
+	if gate.IsGate(step.GetPluginRef()) {
+		return false, nil
+	}
 	key := tenantID + "/" + runID + "/" + step.GetId()
 	b.mu.Lock()
 	if b.running[key] {
@@ -189,8 +206,6 @@ func (b *builtins) run(ctx context.Context, job builtinJob) {
 
 func (b *builtins) execute(ctx context.Context, job builtinJob) error {
 	switch ref := job.step.GetPluginRef(); ref {
-	case BuiltinTimer:
-		return b.arm(ctx, job)
 	case BuiltinApproval:
 		return b.request(ctx, job)
 	case BuiltinLLM:

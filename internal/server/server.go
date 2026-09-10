@@ -57,6 +57,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/steps/gate"
 	"github.com/azrtydxb/dhole/internal/wait"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
@@ -370,6 +371,19 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	in.onClose(budgets.Close)
 
+	// The gate step type. A step that WAITS is armed in the transaction that
+	// found it ready instead of being dispatched — without this the plane
+	// sends `builtin:wait` to an engine that has no idea what it is, and the
+	// wait is skipped entirely. NOTE: nothing here runs the durable-timer
+	// poll yet, so a gate armed by a plain `dhole serve` waits until whoever
+	// polls the timers exists; that is the open item recorded against this
+	// task, and the acceptance harness supplies the poll meanwhile.
+	waits, err := gate.New(wait.NewTimers(in.store), gate.Options{})
+	if err != nil {
+		in.close()
+		return err
+	}
+
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       in.store,
 		Outbox:      out,
@@ -398,6 +412,7 @@ func (s *Server) Start(ctx context.Context) error {
 		// durable timer, a human gate, a model call and a bounded loop to
 		// engines, none of which can run any of the four.
 		Builtins: built,
+		Gate:     waits,
 	})
 	if err != nil {
 		in.close()

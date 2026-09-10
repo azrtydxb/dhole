@@ -273,6 +273,12 @@ type Config struct {
 	// every step to an engine — including a `builtin:` one, which no engine
 	// can run, so the step fails with a reference nothing resolves.
 	Builtins BuiltinSteps
+	// Gate arms a step that waits instead of running, in the transaction
+	// that decided it was ready. Nil means this deployment has wired no gate
+	// step type, and a pipeline carrying one dispatches it to an engine that
+	// has no idea what it is — which is what happened before the seam existed
+	// and is the bug it closes. See gate.go.
+	Gate Gate
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Log is where a tier whose engines disagree about their environment is
@@ -296,6 +302,7 @@ type Scheduler struct {
 	pol   policy.Engine
 	prov  Provenances
 	built BuiltinSteps
+	gate  Gate
 
 	queue   *Queue
 	budgets Budget
@@ -408,6 +415,7 @@ func New(cfg Config) (*Scheduler, error) {
 		pol:      cfg.Policy,
 		prov:     cfg.Provenance,
 		built:    cfg.Builtins,
+		gate:     cfg.Gate,
 		tier:     cfg.Tier,
 		os:       cfg.OS,
 		arch:     cfg.Arch,
@@ -1492,6 +1500,19 @@ func (s *Scheduler) dispatch(
 	step *dholev1.Step,
 	state *runState,
 ) error {
+	// A step that WAITS is diverted before anything else happens to it: no
+	// lease, no engine match, no outbox row, nothing on the bus. Arming here
+	// is what makes the wait atomic with the decision that the step was
+	// ready — the two used to be separate transactions, and a gate whose
+	// event was not yet visible was a gate that got dispatched (see gate.go).
+	armed, err := s.armGate(ctx, tenantID, runID, step)
+	if err != nil {
+		return err
+	}
+	if armed {
+		return nil
+	}
+
 	req := s.requirements(step)
 	instances, err := s.fleet.Instances(ctx, tenantID)
 	if err != nil {

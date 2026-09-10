@@ -109,7 +109,7 @@ func TestLLMStepSchemaFingerprintAndBudgetCeiling(t *testing.T) {
 			require.Nil(t, obj, "a schema violation must not flow downstream")
 		})
 
-		t.Run("the token ceiling halts the run", func(t *testing.T) {
+		t.Run("the token ceiling fails the step", func(t *testing.T) {
 			ctx := testContext(t)
 			cfg := config()
 			cfg.MaxTokens = 100
@@ -124,13 +124,14 @@ func TestLLMStepSchemaFingerprintAndBudgetCeiling(t *testing.T) {
 			require.ErrorIs(t, err, llm.ErrTokenCeiling)
 			require.Nil(t, obj, "a truncated answer is not an answer")
 
-			// Halting means the RUN stops, not merely that Run returned an
-			// error: the log has to say so, or the scheduler dispatches on.
+			// Failing means the LOG says so, not merely that Run returned an
+			// error: a scheduler reading a log with no failure in it goes on
+			// dispatching as though the step had never run.
 			events := h.events(ctx, t)
 			require.Contains(t, events, runstore.StepFailed,
 				"the step is recorded as failed")
-			require.Contains(t, events, scheduler.RunFailed,
-				"and the run is halted, not left ready to advance")
+			require.NotContains(t, events, scheduler.RunFailed,
+				"whether the run survives a failed step is the graph's decision, not this step's")
 
 			// What it cost is still recorded: a call that burned budget
 			// happened whether or not its answer was usable.
@@ -140,7 +141,7 @@ func TestLLMStepSchemaFingerprintAndBudgetCeiling(t *testing.T) {
 			require.Equal(t, 40, calls[0].CompletionTokens)
 		})
 
-		t.Run("a total over the ceiling halts even when the model says stop", func(t *testing.T) {
+		t.Run("a total over the ceiling fails even when the model says stop", func(t *testing.T) {
 			ctx := testContext(t)
 			cfg := config()
 			cfg.MaxTokens = 50
@@ -150,7 +151,7 @@ func TestLLMStepSchemaFingerprintAndBudgetCeiling(t *testing.T) {
 			_, err := h.step.Run(ctx, runID, stepID, "summarise the report")
 			require.ErrorIs(t, err, llm.ErrTokenCeiling,
 				"the ceiling is a budget, and the provider's own finish reason is not the only way past it")
-			require.Contains(t, h.events(ctx, t), scheduler.RunFailed)
+			require.Contains(t, h.events(ctx, t), runstore.StepFailed)
 		})
 	})
 }
@@ -186,8 +187,62 @@ func TestMalformedObjectIsRetriedThenFailsWithProviderError(t *testing.T) {
 			require.NotEmpty(t, c.ModelFingerprint)
 		}
 
-		require.Contains(t, h.events(ctx, t), scheduler.RunFailed,
-			"a step out of attempts halts its run")
+		require.Contains(t, h.events(ctx, t), runstore.StepFailed,
+			"a step out of attempts fails, in the log and not only in its return value")
+	})
+}
+
+// TestAnOffSchemaAnswerFailsTheStepAndLeavesTheRunToTheGraph is the default a
+// step type is entitled to choose, and halting the run was the wrong one.
+//
+// A model that will not answer on schema is a STEP that failed. Whether the
+// run continues is the graph's business and nobody else's — the effect class
+// decides whether the step may be tried again, the edges decide what was
+// downstream of it, and a branch that has nothing to do with the model call
+// carries on. A step type that closed the run took that decision away from
+// every pipeline that used it, and made an off-schema answer impossible to
+// assert inside a run that has to keep going.
+//
+// What does NOT change is that the step fails. Nothing off-schema reaches a
+// downstream step, Run returns no object, and the log says the step failed
+// where anyone looking at the run can see it.
+func TestAnOffSchemaAnswerFailsTheStepAndLeavesTheRunToTheGraph(t *testing.T) {
+	eachStore(t, func(t *testing.T, open storeOpener) {
+		ctx := testContext(t)
+		// Valid JSON, wrong shape, three times over: the model has had every
+		// attempt it is allowed and has never answered on schema.
+		offSchema := reply(`{"summary":42}`, resolvedA, 10, 5, provider.FinishStop)
+		h := newHarness(t, open, config(), offSchema, offSchema, offSchema)
+
+		obj, err := h.step.Run(ctx, runID, stepID, "summarise the report")
+		require.ErrorIs(t, err, llm.ErrObjectInvalid)
+		require.Nil(t, obj, "an off-schema answer must never flow downstream")
+
+		events := h.events(ctx, t)
+		require.Contains(t, events, runstore.StepFailed,
+			"a step that cannot produce a valid answer FAILS; it does not quietly pass")
+		require.NotContains(t, events, scheduler.RunFailed,
+			"the step type closed the run it was given; that is the graph's decision, not its own")
+	})
+}
+
+// TestAStepAskedToHaltDoesEndTheRunItIsGiven keeps the behaviour available for
+// the caller that genuinely wants it — a run whose whole purpose is the model
+// call has nothing left to do when the model will not answer — while making it
+// something a deployment asks for rather than something a step type imposes.
+func TestAStepAskedToHaltDoesEndTheRunItIsGiven(t *testing.T) {
+	eachStore(t, func(t *testing.T, open storeOpener) {
+		ctx := testContext(t)
+		offSchema := reply(`{"summary":42}`, resolvedA, 10, 5, provider.FinishStop)
+		h := newHaltingHarness(t, open, config(), offSchema, offSchema, offSchema)
+
+		_, err := h.step.Run(ctx, runID, stepID, "summarise the report")
+		require.ErrorIs(t, err, llm.ErrObjectInvalid)
+
+		events := h.events(ctx, t)
+		require.Contains(t, events, runstore.StepFailed)
+		require.Contains(t, events, scheduler.RunFailed,
+			"a step asked to halt its run must still be able to")
 	})
 }
 
@@ -557,8 +612,32 @@ func newHarness(t *testing.T, open storeOpener, cfg llm.Config, replies ...*prov
 	return h
 }
 
+// newHaltingHarness is newHarness for the caller that asked the step to close
+// the run when it gives up.
+func newHaltingHarness(
+	t *testing.T, open storeOpener, cfg llm.Config, replies ...*provider.Response,
+) *harness {
+	t.Helper()
+	turns := make([]stubTurn, 0, len(replies))
+	for _, r := range replies {
+		turns = append(turns, stubTurn{resp: r})
+	}
+	_, h := newHarnessOptions(t, open, cfg,
+		&stubModel{alias: alias, nativeJSON: true, turns: turns}, nil,
+		func(o *llm.Options) { o.HaltsRun = true })
+	return h
+}
+
 func newHarnessWith(
 	t *testing.T, open storeOpener, cfg llm.Config, model *stubModel, logger *slog.Logger,
+) (*llm.Step, *harness) {
+	t.Helper()
+	return newHarnessOptions(t, open, cfg, model, logger)
+}
+
+func newHarnessOptions(
+	t *testing.T, open storeOpener, cfg llm.Config, model *stubModel, logger *slog.Logger,
+	tune ...func(*llm.Options),
 ) (*llm.Step, *harness) {
 	t.Helper()
 	store, db, dialect := open(t)
@@ -566,7 +645,7 @@ func newHarnessWith(
 	require.NoError(t, err)
 
 	tenant := uniqueTenant(t)
-	step, err := llm.New(cfg, llm.Options{
+	opts := llm.Options{
 		Model:    model,
 		Store:    store,
 		Calls:    rec,
@@ -574,7 +653,11 @@ func newHarnessWith(
 		Attempts: 3,
 		Logger:   logger,
 		Now:      testClock(),
-	})
+	}
+	for _, fn := range tune {
+		fn(&opts)
+	}
+	step, err := llm.New(cfg, opts)
 	require.NoError(t, err)
 	return step, &harness{step: step, model: model, rec: rec, store: store, tenant: tenant}
 }
