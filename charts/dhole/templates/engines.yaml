@@ -79,6 +79,18 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- /*
+              A backend's own configuration. The kubernetes backend needs a
+              namespace and the vm backend needs a kernel, a rootfs and a
+              hypervisor path (DHOLE_VM_*, see docs/executors/vm.md) — and a
+              chart that named every backend's variables would have to be
+              edited for each new one. This passes a tier's own settings
+              through instead, so a backend added later needs no chart change.
+            */}}
+            {{- range $name, $value := .env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
           resources:
             {{- toYaml .resources | nindent 12 }}
           volumeMounts:

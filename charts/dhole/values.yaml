@@ -73,6 +73,11 @@ engines:
     # Choose process only for an engine whose image you have made able to run
     # your steps directly.
     executor: kubernetes
+    # A backend's own settings, passed through as environment variables. The
+    # vm backend reads DHOLE_VM_KERNEL, DHOLE_VM_ROOTFS and DHOLE_VM_HYPERVISOR
+    # from here; see docs/executors/vm.md. Empty for the kubernetes backend,
+    # which needs only the sandbox block below.
+    env: {}
     sandbox:
       # Where sandbox pods are created. Empty means the release namespace.
       namespace: ""

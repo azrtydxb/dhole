@@ -322,3 +322,27 @@ func TestAModelSecretWithNoSecretToReadIsRefusedAtInstall(t *testing.T) {
 		t.Fatal("the chart rendered a model secret with nothing behind it")
 	}
 }
+
+// A backend brings its own configuration — the vm backend needs a kernel, a
+// rootfs and a hypervisor path — and a chart that named each backend's
+// variables would need editing for every backend added later. A tier's own
+// settings pass through instead.
+func TestAnEngineTierCanCarryItsBackendsOwnSettings(t *testing.T) {
+	out := render(t,
+		"--set", "engines[0].name=vm",
+		"--set", "engines[0].tier=trusted",
+		"--set", "engines[0].executor=vm",
+		"--set", "engines[0].env.DHOLE_VM_KERNEL=/vm/vmlinux",
+		"--set", "engines[0].env.DHOLE_VM_ROOTFS=/vm/rootfs.cpio.gz")
+
+	for _, want := range []string{"DHOLE_VM_KERNEL", "/vm/vmlinux", "DHOLE_VM_ROOTFS", "/vm/rootfs.cpio.gz"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a tier's own backend setting %q did not reach its engine:\n%s", want, out)
+		}
+	}
+	// And selecting vm must not drag in the kubernetes backend's sandbox
+	// variables, which mean nothing to it.
+	if strings.Contains(out, "DHOLE_SANDBOX_NAMESPACE") {
+		t.Error("a vm-backed tier was given the kubernetes backend's sandbox namespace")
+	}
+}

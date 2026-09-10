@@ -542,7 +542,33 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       would wipe the password of a person who is also issued a token — and
       migration 0022 backfills the subjects of tokens already in flight, so an
       existing deployment does not have to reissue them.
-- [x] **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
+- [ ] **A step naming an engine KIND is still not routed to one — the filter
+      decides, and the bus does not obey.** Reopened 2026-09-10 by running it on
+      kw: a step with `engine_type: vm`, on a cluster with a vm-backed engine
+      and a kubernetes-backed engine in the SAME tier, ran on the kubernetes
+      one. Proven rather than inferred — the step wrote
+      `/proc/sys/kernel/osrelease` to an output and it read
+      `6.12.58-current-rockchip64`, the node's kernel, where a microVM would
+      have said `6.1.102`.
+      The half that works: `scheduler.Match` filters on engine type and
+      `Explain` refuses a step no engine can take. The half that does not: a
+      dispatch is published to `job.dispatch.<tier>.<capsHash>`, engine type is
+      NOT part of that subject, and `internal/engine` does not check the step's
+      engine type on receipt — so every engine in the tier with matching
+      capabilities pulls from the same work queue and whichever grabs it first
+      runs it. Match therefore decides whether a step CAN be placed and has no
+      say in where it GOES.
+      The natural fix is to make engine type part of the dispatch subject, as
+      tier and capabilities already are, and have an engine subscribe to its
+      own kind. That changes the subject layout, which `docs/wire-contract.md`
+      publishes, so it needs the N-1 window thinking that the protocol version
+      already has. Refusing on receipt instead is cheaper and worse: the
+      dispatch has already been taken off the queue, and redelivery to another
+      engine is a race rather than a route.
+      Unit tests could not have caught this — they exercise `Match` in
+      isolation, where it is correct. It took a real pipeline on a cluster with
+      two engine kinds in one tier.
+      SUPERSEDED TEXT: **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
       filter on engine type, so a capability is the only lever — the pipeline
       asks for NETWORK to reach a pod. A step's placement on the process engine
       is not expressible at all. CLOSED: `Step.engine_type` is the lever, and
