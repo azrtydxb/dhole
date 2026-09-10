@@ -40,14 +40,14 @@ its tenant and could not reach another one by spelling it differently: its
 credentials place it in exactly one account, and its permissions within that
 account are further limited to its own tier.
 
-| Subject                        | Direction        | Message              |
-| ------------------------------ | ---------------- | -------------------- |
-| `job.dispatch.<tier>.<caps>`   | plane → engine   | `JobDispatch`        |
-| `job.status.<run>.<step>`      | engine → plane   | `JobStatus`          |
-| `job.logs.<run>.<step>`        | engine → viewers | `LogChunk`           |
-| `engine.control.<engine-id>`   | plane → engine   | `EngineControl`      |
-| `engine.heartbeat.<engine-id>` | engine → plane   | `EngineHeartbeat`    |
-| `engine.registration`          | engine → plane   | `EngineRegistration` |
+| Subject                        | Direction        | Message                          |
+| ------------------------------ | ---------------- | -------------------------------- |
+| `job.dispatch.<tier>.<caps>`   | plane → engine   | `JobDispatch`                    |
+| `job.status.<run>.<step>`      | engine → plane   | `JobStatus`                      |
+| `job.logs.<run>.<step>`        | engine → viewers | `LogChunk`                       |
+| `engine.control.<engine-id>`   | plane → engine   | `EngineControl`                  |
+| `engine.heartbeat.<engine-id>` | engine → plane   | `EngineHeartbeat`                |
+| `engine.registration`          | engine → plane   | `EngineRegistration`             |
 | `secret.redeem`                | engine → plane   | a handle, raw (reply: the value) |
 
 `<tier>` is the trust tier the work is dispatched to — `trusted`, `untrusted`,
