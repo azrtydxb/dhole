@@ -625,7 +625,7 @@ func (h *harness) newDispatch(name string) *dholev1.JobDispatch {
 			LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
 		},
 		OutputPrefix:    prefix,
-		ProtocolVersion: func() uint32 { v := h.negotiatedVersion(); fmt.Fprintf(os.Stderr, "DEBUG dispatch version=%d regs=%d\n", v, len(h.regs)); return v }(),
+		ProtocolVersion: h.negotiatedVersion(),
 		Tenant:          &dholev1.Tenant{Id: "conformance"},
 	}
 }
