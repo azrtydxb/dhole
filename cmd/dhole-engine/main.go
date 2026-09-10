@@ -75,7 +75,7 @@ func run() error {
 	// beside it. An engine whose logs went to a bucket and whose artifacts
 	// went to a local disk would half-work in exactly the way that is hardest
 	// to see: every step succeeds and half of what it produced is unreachable.
-	blobs, shared, err := blobstore.FromEnv(blobDir)
+	blobs, shared, storeAt, err := blobstore.FromEnvDescribed(blobDir)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func run() error {
 	if !shared {
 		slog.Warn("this engine writes to a store no other process can read; "+
 			"set DHOLE_OBJECT_STORE=s3 for anything distributed",
-			"dir", blobDir)
+			"store", storeAt)
 	}
 
 	// An engine and its bus start together, so the first dial routinely fails.

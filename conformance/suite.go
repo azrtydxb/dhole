@@ -461,13 +461,35 @@ func (h *harness) startEngine(ctx context.Context) error {
 	// nosemgrep: dangerous-exec-command
 	cmd := exec.CommandContext(engineCtx, h.cfg.Engine[0], h.cfg.Engine[1:]...)
 	cmd.Dir = h.cfg.Dir
+	// Both spellings of the three that had two.
+	//
+	// The suite grew its own names — DHOLE_NATS_URL, DHOLE_ENGINE_TIER,
+	// DHOLE_ENGINE_SLOTS — while the engine this repository ships reads
+	// DHOLE_BUS_URL, DHOLE_TIER and DHOLE_SLOTS. The consequence was not a
+	// tidiness problem: `dhole-engine` could not be run through the compliance
+	// suite AT ALL. It exited immediately with "DHOLE_BUS_URL is required",
+	// the suite reported that its registration never arrived, and the product's
+	// own engine went untested by the one thing built to test engines.
+	//
+	// The canonical names are the engine's, because DHOLE_BUS_URL does not
+	// bake the transport into configuration the way DHOLE_NATS_URL does — the
+	// bus is transport (ADR 0005) and the variable should outlive the choice.
+	// The suite's older names are still set so that an engine already written
+	// against them keeps passing; they are documented as deprecated rather
+	// than removed, which is the same courtesy the wire protocol extends.
 	cmd.Env = append(os.Environ(),
-		"DHOLE_NATS_URL="+h.nats.URL(),
+		"DHOLE_BUS_URL="+h.nats.URL(),
 		"DHOLE_ENGINE_ID="+h.engineID,
-		"DHOLE_ENGINE_TIER="+h.tier,
+		"DHOLE_TIER="+h.tier,
+		"DHOLE_SLOTS=2",
 		"DHOLE_BLOB_DIR="+h.blobDir,
 		"DHOLE_DISPATCH_STREAM="+engine.DispatchStream,
 		"DHOLE_SECRET_SUBJECT="+secretSubjectName,
+
+		// Deprecated spellings, kept so engines written against the suite's
+		// original names are not broken by this correction.
+		"DHOLE_NATS_URL="+h.nats.URL(),
+		"DHOLE_ENGINE_TIER="+h.tier,
 		"DHOLE_ENGINE_SLOTS=2",
 	)
 	cmd.Env = append(cmd.Env, h.cfg.Env...)

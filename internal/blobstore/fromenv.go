@@ -30,6 +30,17 @@ var Kinds = []string{KindFilesystem, KindS3}
 // simple case impossible. The shared flag is how a caller that needs more can
 // say so.
 func FromEnv(fallbackDir string) (store Store, shared bool, err error) {
+	store, shared, _, err = FromEnvDescribed(fallbackDir)
+	return store, shared, err
+}
+
+// FromEnvDescribed is FromEnv, also returning where the store actually is.
+//
+// The description exists because the warning about an unshared store used to
+// print the caller's FALLBACK directory rather than the directory the store
+// opened — so an engine told to use DHOLE_BLOB_DIR warned about a path it was
+// not using, which is a worse diagnostic than none.
+func FromEnvDescribed(fallbackDir string) (store Store, shared bool, where string, err error) {
 	kind := strings.TrimSpace(os.Getenv("DHOLE_OBJECT_STORE"))
 	if kind == "" {
 		kind = KindFilesystem
@@ -41,14 +52,14 @@ func FromEnv(fallbackDir string) (store Store, shared bool, err error) {
 			dir = v
 		}
 		if dir == "" {
-			return nil, false, fmt.Errorf(
+			return nil, false, "", fmt.Errorf(
 				"blobstore: the %s store needs a directory: set DHOLE_BLOB_DIR", KindFilesystem)
 		}
-		return NewFilesystem(dir), false, nil
+		return NewFilesystem(dir), false, dir, nil
 	case KindS3:
 		bucket := strings.TrimSpace(os.Getenv("DHOLE_S3_BUCKET"))
 		if bucket == "" {
-			return nil, false, fmt.Errorf(
+			return nil, false, "", fmt.Errorf(
 				"blobstore: the %s store needs a bucket: set DHOLE_S3_BUCKET", KindS3)
 		}
 		s3, err := NewS3(S3Config{
@@ -60,11 +71,11 @@ func FromEnv(fallbackDir string) (store Store, shared bool, err error) {
 			SessionToken:    os.Getenv("DHOLE_S3_SESSION_TOKEN"),
 		})
 		if err != nil {
-			return nil, false, err
+			return nil, false, "", err
 		}
-		return s3, true, nil
+		return s3, true, "s3://" + bucket, nil
 	default:
-		return nil, false, fmt.Errorf("DHOLE_OBJECT_STORE must be one of %s, got %q",
+		return nil, false, "", fmt.Errorf("DHOLE_OBJECT_STORE must be one of %s, got %q",
 			strings.Join(Kinds, ", "), kind)
 	}
 }
