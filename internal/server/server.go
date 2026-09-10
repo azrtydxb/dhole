@@ -57,6 +57,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/wait"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
 
@@ -188,6 +189,20 @@ type Config struct {
 	// the state of this binary for four tasks precisely because serving the
 	// API was something somebody had to remember to switch on.
 	NoAPI bool
+	// Triggers are the event sources this plane runs: cron schedules on their
+	// own poll, and webhook endpoints on the API's listener under
+	// TriggerPrefix. Empty means the plane runs none, which is what it did
+	// for every task up to this one — internal/trigger/* were four
+	// implementations nothing in the binary imported.
+	Triggers []TriggerSpec
+	// Models resolves the language model a `builtin:llm` step names. Nil
+	// means this plane calls no model: such a step fails with that reason
+	// rather than silently doing nothing.
+	//
+	// It is supplied rather than built here because a model client holds an
+	// API key and nothing in this system hands the control plane one — see
+	// ModelFactory.
+	Models ModelFactory
 	// APIAllowedOrigins are the browser origins allowed to make cross-origin
 	// calls. Empty — the default — allows none, so a page on any site cannot
 	// reach a plane on the developer's own loopback address.
@@ -209,6 +224,14 @@ type Server struct {
 	defs    defstore.Store
 	out     *outbox.Outbox
 	fleet   *registry.KV
+	// builtins runs the step types the plane hosts itself, and timers is the
+	// durable timer table its poll fires out of. Both are held so that Stop
+	// and Approve can reach them.
+	builtins *builtins
+	timers   *wait.Timers
+	// triggerMux holds the webhook trigger handlers rootHandler serves. Nil
+	// when this deployment configured none.
+	triggerMux *http.ServeMux
 	// partitions is this process's share of the run-id ring. Nil means the
 	// plane owns every run — see ownsRun.
 	partitions *planePartitions
@@ -318,6 +341,16 @@ func (s *Server) Start(ctx context.Context) error {
 	out := outbox.New(in.store, in.plane, s.cfg.DeploymentID, outbox.WithErrorHandler(func(err error) {
 		s.log.Error("outbox drain failed", "error", err)
 	}))
+	// The step types the plane hosts itself, BEFORE the scheduler, because the
+	// scheduler has to be given them: a `builtin:` reference offered to an
+	// engine is a reference no engine can resolve, and for the whole of Tasks
+	// 20-51 that is exactly what happened — internal/steps/* and
+	// internal/wait were libraries with tests and no caller in the binary.
+	built, err := newBuiltins(in, s.cfg.Models, nil, s.log)
+	if err != nil {
+		in.close()
+		return err
+	}
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       in.store,
 		Outbox:      out,
@@ -339,11 +372,19 @@ func (s *Server) Start(ctx context.Context) error {
 		Cache:     in.cache,
 		Revisions: defs,
 		BlobRefs:  in.refs,
+		// The plane's own step types. Without this the scheduler offers a
+		// durable timer, a human gate, a model call and a bounded loop to
+		// engines, none of which can run any of the four.
+		Builtins: built,
 	})
 	if err != nil {
 		in.close()
 		return err
 	}
+	// Closing the loop the other way: an approval that is decided has to
+	// advance the run it just unblocked, and the scheduler is what advances
+	// runs. It is assigned rather than passed because each needs the other.
+	built.resume = sched
 
 	// The ring BEFORE anything advances a run: exactly one plane may advance a
 	// given run, so a plane that has not claimed yet must not advance at all.
@@ -354,6 +395,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
+	s.builtins, s.timers = built, wait.NewTimers(in.store)
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.cancel = cancel
@@ -396,6 +438,15 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	s.spawn(func() { s.advanceLoop(runCtx, s.infra.store, s.sched) })
 	s.spawn(func() { s.sweepLoop(runCtx, s.sched) })
 	s.spawn(func() { s.renewLoop(runCtx) })
+	s.spawn(func() { s.timerLoop(runCtx, s.timers, s.sched) })
+
+	// The workers that run the plane's own step types. A POOL rather than a
+	// goroutine per step: Stop waits on the WaitGroup these were added to,
+	// and an Add from a background goroutine would be racing that Wait.
+	built := s.builtins
+	for range builtinWorkers {
+		s.spawn(func() { built.work(runCtx) })
+	}
 
 	// Last, and only in embedded mode: the engine starts once the plane can
 	// already hear it. A registration is a fire-and-forget message on a core
@@ -405,6 +456,13 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 		if err := s.startEngine(runCtx); err != nil {
 			return err
 		}
+	}
+
+	// The triggers BEFORE the contract, because a webhook trigger is served
+	// on the contract's own listener and rootHandler mounts what is there
+	// when it is built.
+	if err := s.startTriggers(startCtx, runCtx); err != nil {
+		return err
 	}
 
 	// And the contract itself, last: everything it answers about — the
@@ -726,6 +784,23 @@ func (s *Server) sweepLoop(ctx context.Context, sched *scheduler.Scheduler) {
 	}
 }
 
+// timerLoop is the plane's clock: it fires the durable timers that have come
+// due and advances the runs they woke.
+//
+// It runs here rather than in whatever armed the wait, because a wait is a ROW
+// and not a sleeping goroutine (ADR 0003) — the process that scheduled one is
+// routinely not the process that fires it, and a plane that ran no poll left
+// every outstanding wait outstanding forever. For four tasks the only thing
+// that ever ran this was the acceptance harness.
+func (s *Server) timerLoop(ctx context.Context, timers *wait.Timers, sched *scheduler.Scheduler) {
+	runner := wait.NewRunner(timers, sched, wait.WithErrorHandler(func(err error) {
+		s.log.Error("firing durable timers", "error", err)
+	}))
+	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		s.log.Error("timer poll stopped", "error", err)
+	}
+}
+
 // Stop ends every goroutine this server started and closes everything it
 // opened, in reverse order. It returns only once they are done.
 //
@@ -765,6 +840,7 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	s.infra.close()
 	s.infra = nil
+	s.builtins, s.timers, s.triggerMux = nil, nil, nil
 	return nil
 }
 
@@ -856,6 +932,25 @@ func (s *Server) Events(ctx context.Context, tenantID, runID string) ([]runstore
 		return nil, errors.New("server: not started")
 	}
 	return store.Replay(ctx, tenantID, runID)
+}
+
+// OpenRuns is every run this tenant has that has not finished, out of the
+// store's own index rather than any memory of this process.
+//
+// It is the same answer the advance loop works from, and it is exposed because
+// a caller that did not start a run has no other way to find it: a trigger
+// starts runs nobody handed an id to. There is no unscoped form.
+func (s *Server) OpenRuns(ctx context.Context, tenantID string) ([]string, error) {
+	s.mu.Lock()
+	store := s.storeLocked()
+	s.mu.Unlock()
+	if store == nil {
+		return nil, errors.New("server: not started")
+	}
+	if tenantID == "" {
+		return nil, runstore.ErrTenantRequired
+	}
+	return store.OpenRuns(ctx, tenantID)
 }
 
 // CAS is the content-addressed store this deployment reads and writes. It is

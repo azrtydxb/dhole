@@ -320,6 +320,14 @@ func (s *Server) rootHandler(api http.Handler) http.Handler {
 		},
 	})
 
+	// The webhook triggers, on the listener the contract already has. They
+	// are registered ahead of the app's catch-all so a deep link cannot
+	// shadow one, and they are outside isAPIPath's two prefixes so neither
+	// can shadow the other.
+	if s.triggerMux != nil {
+		mux.Handle(TriggerPrefix, s.triggerMux)
+	}
+
 	if app, ok := webui.Handler(); ok {
 		mux.Handle("/", app)
 	} else {
