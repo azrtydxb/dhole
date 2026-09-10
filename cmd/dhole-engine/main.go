@@ -69,8 +69,26 @@ func run() error {
 	// The stores an engine writes through. They default under one state
 	// directory so a development engine starts with three variables set.
 	stateDir := envOr("DHOLE_STATE_DIR", filepath.Join(os.TempDir(), "dhole-engine"))
-	blobDir := envOr("DHOLE_BLOB_DIR", filepath.Join(stateDir, "blobs"))
-	casDir := envOr("DHOLE_CAS_DIR", filepath.Join(stateDir, "cas"))
+	blobDir := filepath.Join(stateDir, "blobs")
+
+	// One store, and the content-addressed store is built on it rather than
+	// beside it. An engine whose logs went to a bucket and whose artifacts
+	// went to a local disk would half-work in exactly the way that is hardest
+	// to see: every step succeeds and half of what it produced is unreachable.
+	blobs, shared, err := blobstore.FromEnv(blobDir)
+	if err != nil {
+		return err
+	}
+	// A remote engine on a local store is the shape of the bug this warns
+	// about: the bytes land on this pod's disk and the control plane, which
+	// is somewhere else, looks for them on its own. It is a warning rather
+	// than a refusal because a single-host deployment is legitimate and does
+	// not deserve to be blocked by a check about a cluster.
+	if !shared {
+		slog.Warn("this engine writes to a store no other process can read; "+
+			"set DHOLE_OBJECT_STORE=s3 for anything distributed",
+			"dir", blobDir)
+	}
 
 	// An engine and its bus start together, so the first dial routinely fails.
 	// Exiting there hands the fleet to Kubernetes' restart backoff, which grows
@@ -93,8 +111,8 @@ func run() error {
 		Tier:     tier,
 		Bus:      conn,
 		Executor: exec,
-		Blobs:    blobstore.NewFilesystem(blobDir),
-		CAS:      cas.NewFilesystem(casDir),
+		Blobs:    blobs,
+		CAS:      cas.NewOverBlobs(blobs),
 		Slots:    slots,
 	})
 	if err != nil {

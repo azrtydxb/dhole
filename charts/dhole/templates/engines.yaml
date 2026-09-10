@@ -67,6 +67,7 @@ spec:
               value: {{ .slots | default 1 | quote }}
             - name: DHOLE_STATE_DIR
               value: /var/lib/dhole-engine
+            {{- include "dhole.objectStoreEnv" $ | nindent 12 }}
             - name: DHOLE_EXECUTOR
               value: {{ .executor | default "kubernetes" | quote }}
             {{- if eq (.executor | default "kubernetes") "kubernetes" }}

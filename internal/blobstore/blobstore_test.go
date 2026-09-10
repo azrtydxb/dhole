@@ -32,6 +32,34 @@ func blobStoreContract(t *testing.T, s blobstore.Store) {
 	t.Helper()
 	ctx := context.Background()
 
+	t.Run("delete removes the blob and says whether it did", func(t *testing.T) {
+		key := "runs/r9/steps/s1/log"
+		require.NoError(t, s.Write(ctx, "tenant-a", key, bytes.NewReader([]byte("collect me"))))
+
+		require.NoError(t, s.Delete(ctx, "tenant-a", key))
+
+		_, err := s.Read(ctx, "tenant-a", key)
+		require.ErrorIs(t, err, blobstore.ErrNotFound)
+
+		// The collector needs to tell work it did from work already done, and
+		// S3's DeleteObject reports success for a key that was never there —
+		// so this is the assertion that keeps the two backends honest with
+		// each other rather than one of them merely being convenient.
+		require.ErrorIs(t, s.Delete(ctx, "tenant-a", key), blobstore.ErrNotFound)
+	})
+
+	t.Run("one tenant cannot delete another's blob", func(t *testing.T) {
+		key := "runs/r10/steps/s1/log"
+		require.NoError(t, s.Write(ctx, "tenant-a", key, bytes.NewReader([]byte("mine"))))
+
+		require.Error(t, s.Delete(ctx, "tenant-b", key),
+			"a key guessed exactly still must not cross tenants")
+
+		rc, err := s.Read(ctx, "tenant-a", key)
+		require.NoError(t, err, "the blob was deleted by another tenant")
+		require.NoError(t, rc.Close())
+	})
+
 	t.Run("write then read round-trips the bytes", func(t *testing.T) {
 		payload := []byte("step 3 log line\nsecond line\n\x00binary\xff")
 		key := "runs/r1/steps/s3/log"

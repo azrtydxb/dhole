@@ -59,3 +59,43 @@ run different code, and every cache key folded over it a lie.
 {{- define "dhole.storeSecretName" -}}
 {{- default (printf "%s-store" (include "dhole.fullname" .)) .Values.postgres.existingSecret -}}
 {{- end -}}
+
+{{/*
+The object store every process in this deployment shares.
+
+Emitted into the control plane AND every engine, from one definition, because
+the failure it prevents is precisely the two disagreeing: an engine writing a
+step's log and outputs to its own pod's disk while the control plane looks for
+them on its own. Every step succeeds and nothing it produced can be read.
+*/}}
+{{- define "dhole.objectStoreEnv" -}}
+{{- $store := .Values.objectStore | default dict }}
+{{- $kind := $store.kind | default "filesystem" }}
+- name: DHOLE_OBJECT_STORE
+  value: {{ $kind | quote }}
+{{- if eq $kind "s3" }}
+{{- $s3 := $store.s3 | default dict }}
+- name: DHOLE_S3_BUCKET
+  value: {{ required "objectStore.s3.bucket is required when objectStore.kind is s3" $s3.bucket | quote }}
+{{- with $s3.endpoint }}
+- name: DHOLE_S3_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+{{- with $s3.region }}
+- name: DHOLE_S3_REGION
+  value: {{ . | quote }}
+{{- end }}
+{{- with $s3.existingSecret }}
+- name: DHOLE_S3_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ . | quote }}
+      key: accessKeyId
+- name: DHOLE_S3_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ . | quote }}
+      key: secretAccessKey
+{{- end }}
+{{- end }}
+{{- end -}}

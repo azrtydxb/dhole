@@ -73,6 +73,25 @@ engines:
       requests: { cpu: 200m, memory: 512Mi }
       limits: { memory: 2Gi }
 
+objectStore:
+  # Where step logs and artifacts live.
+  #
+  # filesystem | s3. The filesystem store is PER POD and therefore not shared:
+  # an engine writes a step's log and outputs to its own disk, and the control
+  # plane — which is a different pod — cannot read them. Every step succeeds
+  # and nothing it produced is reachable, which is a hard failure to see. Use
+  # s3 for any deployment with an engine outside the control plane's pod.
+  kind: filesystem
+  s3:
+    bucket: ""
+    # Empty for AWS itself; set for MinIO or any other S3-compatible server.
+    endpoint: ""
+    region: ""
+    # A Secret with keys accessKeyId and secretAccessKey. Leave empty to use
+    # the ambient AWS credential chain (IRSA, instance role), which is how a
+    # cloud deployment avoids carrying static keys.
+    existingSecret: ""
+
 postgres:
   # external: a DSN this chart does not manage. Set it for anything real.
   external: ""

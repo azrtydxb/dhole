@@ -108,3 +108,22 @@ func (f *Filesystem) URL(_ context.Context, tenantID, key string, _ time.Duratio
 	}
 	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String(), nil
 }
+
+// Delete removes the blob under the key.
+//
+// A key that was already gone reports ErrNotFound rather than nil: the caller
+// is a collector, and "I removed it" and "somebody else had already removed
+// it" are different answers to the question it is asking.
+func (f *Filesystem) Delete(_ context.Context, tenantID, key string) error {
+	full, err := f.path(tenantID, key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(full); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("blobstore: delete %q for tenant %q: %w", key, tenantID, ErrNotFound)
+		}
+		return fmt.Errorf("blobstore: delete %q for tenant %q: %w", key, tenantID, err)
+	}
+	return nil
+}

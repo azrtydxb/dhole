@@ -112,12 +112,35 @@ implement.
 `dhole-engine` is the Go engine as a standalone binary. Every knob is an
 environment variable and every connection is outbound:
 
-| Variable          | Required | Meaning                                         |
-| ----------------- | -------- | ----------------------------------------------- |
-| `DHOLE_BUS_URL`   | yes      | the NATS server to dial                         |
-| `DHOLE_ENGINE_ID` | yes      | this engine's identity, and its control subject |
-| `DHOLE_TIER`      | yes      | the trust tier whose work it takes              |
-| `DHOLE_SLOTS`     | no       | concurrent steps; default 1                     |
-| `DHOLE_STATE_DIR` | no       | where blobs and the CAS live                    |
-| `DHOLE_BLOB_DIR`  | no       | overrides the blob directory alone              |
-| `DHOLE_CAS_DIR`   | no       | overrides the CAS directory alone               |
+| Variable                     | Required | Meaning                                                      |
+| ---------------------------- | -------- | ------------------------------------------------------------ |
+| `DHOLE_BUS_URL`              | yes      | the NATS server to dial                                       |
+| `DHOLE_ENGINE_ID`            | yes      | this engine's identity, and its control subject               |
+| `DHOLE_TIER`                 | yes      | the trust tier whose work it takes                            |
+| `DHOLE_SLOTS`                | no       | concurrent steps; default 1                                   |
+| `DHOLE_EXECUTOR`             | no       | `process` (default) or `kubernetes`                           |
+| `DHOLE_STATE_DIR`            | no       | where a filesystem object store lives                         |
+| `DHOLE_OBJECT_STORE`         | no       | `filesystem` (default) or `s3`                                |
+| `DHOLE_BLOB_DIR`             | no       | the directory, when the store is `filesystem`                 |
+| `DHOLE_S3_BUCKET`            | for s3   | the bucket logs and artifacts go in                           |
+| `DHOLE_S3_ENDPOINT`          | no       | empty for AWS; set for MinIO or another S3-compatible server  |
+| `DHOLE_S3_REGION`            | no       | the bucket's region                                           |
+| `DHOLE_S3_ACCESS_KEY_ID`     | no       | empty falls back to the ambient AWS credential chain          |
+| `DHOLE_S3_SECRET_ACCESS_KEY` | no       | with the key id above                                         |
+
+The content-addressed store is built on whatever `DHOLE_OBJECT_STORE` names,
+so there is one place to configure and no way to end up with logs in a bucket
+and artifacts on a disk.
+
+**A distributed deployment needs `s3`.** The `filesystem` store is local to the
+process: an engine writes a step's log and its outputs to its own disk, and the
+control plane — a different process, usually on a different machine — looks for
+them on its own and does not find them. Nothing errors. Every step succeeds and
+everything it produced is unreachable. The engine warns at start-up when it is
+in this position, because the symptom itself points nowhere near the cause.
+
+The executor is also chosen here. `process` runs steps directly on the engine's
+host and needs nothing; `kubernetes` runs each step in a sandbox pod and needs
+a service account permitted to create pods and exec into them. An unrecognised
+name is refused at start-up rather than falling back to `process`, because
+falling back would run a step on the host that asked for a sandbox.

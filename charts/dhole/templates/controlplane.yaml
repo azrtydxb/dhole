@@ -66,6 +66,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "dhole.storeSecretName" . }}
                   key: dsn
+            {{- include "dhole.objectStoreEnv" . | nindent 12 }}
           ports:
             - name: api
               containerPort: {{ .Values.controlPlane.apiPort }}

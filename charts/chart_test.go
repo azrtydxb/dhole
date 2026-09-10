@@ -27,6 +27,17 @@ func render(t *testing.T, args ...string) string {
 	return string(out)
 }
 
+// renderErr is render for the cases where the refusal IS the behaviour under
+// test, returning the error instead of failing on it.
+func renderErr(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not on PATH: the chart cannot be rendered here")
+	}
+	out, err := exec.Command("helm", append([]string{"template", "dhole", "./dhole"}, args...)...).CombinedOutput()
+	return string(out), err
+}
+
 // TestJetStreamSizeIsInNATSUnitsNotKubernetesOnes pins the translation.
 //
 // NATS parses only the FINAL character of a size as its unit, so the
@@ -139,5 +150,49 @@ func TestAnEngineTierNeedNotRestateTheDefaultImage(t *testing.T) {
 
 	if !strings.Contains(out, "azrtydxb/dhole-engine:") {
 		t.Errorf("an engine without an image block did not fall back to the default image:\n%s", out)
+	}
+}
+
+// The control plane and its engines must be pointed at the SAME object store,
+// from one definition. Two independently-written blocks is two chances to
+// point half a deployment somewhere else, and the result is invisible: every
+// step succeeds and every log and artifact it produced is unreachable.
+func TestThePlaneAndItsEnginesShareOneObjectStore(t *testing.T) {
+	out := render(t,
+		"--set", "objectStore.kind=s3",
+		"--set", "objectStore.s3.bucket=dhole-artifacts",
+		"--set", "objectStore.s3.endpoint=http://minio:9000")
+
+	if got := strings.Count(out, `- name: DHOLE_S3_BUCKET`); got < 2 {
+		t.Fatalf("the bucket reaches %d containers; the plane and its engines both need it:\n%s", got, out)
+	}
+	if got := strings.Count(out, `value: "dhole-artifacts"`); got < 2 {
+		t.Errorf("the plane and its engines were given different buckets:\n%s", out)
+	}
+	if got := strings.Count(out, `value: "http://minio:9000"`); got < 2 {
+		t.Errorf("the plane and its engines were given different endpoints:\n%s", out)
+	}
+}
+
+// S3 credentials belong in a Secret, never in the rendered pod spec.
+func TestS3CredentialsComeFromASecretRatherThanTheManifest(t *testing.T) {
+	out := render(t,
+		"--set", "objectStore.kind=s3",
+		"--set", "objectStore.s3.bucket=dhole-artifacts",
+		"--set", "objectStore.s3.existingSecret=dhole-s3")
+
+	if !strings.Contains(out, "secretKeyRef") || !strings.Contains(out, "accessKeyId") {
+		t.Errorf("the S3 credentials are not read from a Secret:\n%s", out)
+	}
+	if strings.Contains(out, "- name: DHOLE_S3_SECRET_ACCESS_KEY\n              value:") {
+		t.Error("a secret access key was rendered as a literal value in the pod spec")
+	}
+}
+
+// Choosing s3 without a bucket is a deployment that starts, runs, and loses
+// everything it produces. It must fail at install instead.
+func TestChoosingS3WithoutABucketIsRefusedAtInstall(t *testing.T) {
+	if _, err := renderErr(t, "--set", "objectStore.kind=s3"); err == nil {
+		t.Fatal("the chart rendered an s3 object store with no bucket")
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/obs"
 	"github.com/azrtydxb/dhole/internal/server"
 	"github.com/azrtydxb/dhole/internal/version"
@@ -55,11 +56,28 @@ func serveCmd(o *options) *cobra.Command {
 				}
 			}()
 
+			// The object store every process in this deployment shares.
+			// Chosen here rather than inside the server so that `dhole serve`
+			// and `dhole-engine` read the SAME variables and cannot end up
+			// pointed at different stores — which looks like success and
+			// loses every log and artifact.
+			blobs, sharedBlobs, err := blobstore.FromEnv(filepath.Join(blobRoot, "blobs"))
+			if err != nil {
+				return err
+			}
+			if server.Mode(mode) == server.ModeDistributed && !sharedBlobs {
+				_, _ = fmt.Fprintf(o.env.Stderr,
+					"dhole: WARNING: a distributed plane on a local object store. "+
+						"Engines run elsewhere and write their logs and artifacts to their own disks, "+
+						"where this plane cannot read them. Set DHOLE_OBJECT_STORE=s3.\n")
+			}
+
 			srv, err := server.New(server.Config{
 				Mode:     server.Mode(mode),
 				StoreDSN: storeDSN,
 				BusURL:   busURL,
 				BlobRoot: blobRoot,
+				Blobs:    blobs,
 
 				DeploymentID: deploymentID,
 

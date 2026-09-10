@@ -133,3 +133,35 @@ func (s *S3) URL(ctx context.Context, tenantID, key string, ttl time.Duration) (
 	}
 	return req.URL, nil
 }
+
+// Delete removes the object under the key.
+//
+// S3's DeleteObject is idempotent and reports success for a key that was never
+// there, which loses the distinction the collector needs. So existence is
+// established first with a HEAD. The window between the two is harmless: two
+// collectors racing on one blob is exactly the case where one of them should
+// report ErrNotFound.
+func (s *S3) Delete(ctx context.Context, tenantID, key string) error {
+	object, err := objectPath(tenantID, key)
+	if err != nil {
+		return err
+	}
+	if _, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(object),
+	}); err != nil {
+		var missing *s3types.NoSuchKey
+		var notFound *s3types.NotFound
+		if errors.As(err, &missing) || errors.As(err, &notFound) {
+			return fmt.Errorf("blobstore: delete %q for tenant %q: %w", key, tenantID, ErrNotFound)
+		}
+		return fmt.Errorf("blobstore: delete %q for tenant %q: %w", key, tenantID, err)
+	}
+	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(object),
+	}); err != nil {
+		return fmt.Errorf("blobstore: delete %q for tenant %q: %w", key, tenantID, err)
+	}
+	return nil
+}

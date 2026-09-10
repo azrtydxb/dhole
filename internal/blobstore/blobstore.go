@@ -33,6 +33,14 @@ type Store interface {
 	// URL returns a link the GUI can follow directly for at most ttl, so a
 	// large log streams from the store instead of through the control plane.
 	URL(ctx context.Context, tenantID, key string, ttl time.Duration) (string, error)
+	// Delete removes the blob under the key. It returns an error matching
+	// ErrNotFound when the key held nothing, so a collector can tell work it
+	// did from work already done.
+	//
+	// It is on the interface because the content-addressed store can be built
+	// over this one (cas.NewOverBlobs), and a CAS that cannot delete is a CAS
+	// whose reference counting decides what to collect and then cannot.
+	Delete(ctx context.Context, tenantID, key string) error
 }
 
 // ErrInvalidKey reports a key or tenant the store refuses to interpret.

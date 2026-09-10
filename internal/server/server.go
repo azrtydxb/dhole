@@ -45,6 +45,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/dag"
@@ -129,6 +130,14 @@ type Config struct {
 	// BusURL is the NATS server to dial. Ignored in ModeEmbedded, which
 	// starts its own and reports the URL through BusURL().
 	BusURL string
+	// Blobs is the object store every process in this deployment shares.
+	//
+	// Nil means the filesystem under BlobRoot, which is right for a single
+	// binary and wrong for anything else: a plane and its engines are separate
+	// processes, and a local disk each is not a store they share. The content
+	// addressed store is built over whatever this is, so setting it moves both.
+	Blobs blobstore.Store
+
 	// BlobRoot is the directory the content-addressed store, the blob store
 	// and the embedded bus keep their data under.
 	BlobRoot string

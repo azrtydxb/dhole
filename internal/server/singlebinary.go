@@ -158,6 +158,21 @@ func (i *infra) openBlobs(cfg Config) error {
 			return fmt.Errorf("server: creating %s: %w", dir, err)
 		}
 	}
+
+	// A store supplied by the caller wins. It is how a distributed deployment
+	// points every process at ONE bucket — the plane and its engines are
+	// different processes on different machines, and a plane reading its own
+	// disk for an artifact an engine wrote to its own is the failure this
+	// exists to prevent.
+	if cfg.Blobs != nil {
+		i.blobs = cfg.Blobs
+		// The CAS is built on the same store rather than taken separately.
+		// Two stores configured independently is two chances to point half of
+		// a deployment at the wrong one.
+		i.cas = cas.NewOverBlobs(cfg.Blobs)
+		return nil
+	}
+
 	i.cas = cas.NewFilesystem(casDir(cfg.BlobRoot))
 	i.blobs = blobstore.NewFilesystem(blobDir(cfg.BlobRoot))
 	return nil
