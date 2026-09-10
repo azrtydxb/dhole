@@ -386,3 +386,12 @@ for the vm backend. The images are built the way `docs/executors/vm.md` describe
 - Leave it — the executor contract against real Firecracker is the evidence that
   matters, and a pipeline adds deployment plumbing rather than proof.
 - Do it in CI instead, on a KVM-capable runner, rather than on kw.
+
+### ANSWERED (2026-09-10)
+
+- **Agent step: configure it, `read_run` only.** A real provider key on the kw
+  plane, and the agent granted nothing but `read_run` — so it completes a real
+  action end to end and nothing it does has an effect.
+- **microVM pipeline: prove it on kw.** Stage a guest kernel and rootfs on a
+  node and deploy a vm-backed engine tier, on the same cluster everything else
+  was verified on.
