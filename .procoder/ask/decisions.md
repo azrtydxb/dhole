@@ -8,6 +8,7 @@ execution, composable/dynamic config, non-ambient secrets, rootless isolation, O
 observability, step-level debug attach, typed plugins, fair-share scheduling, provenance.
 
 Options:
+
 - Full spec via `/procoder:spec` — whole system: problem statement, execution model, non-goals, phasing.
 - Narrow spec — the cache/DAG engine only, as a standalone local tool; server deferred until the caching win is proven.
 - Prior-art research pass first — Dagger, BuildKit, Buildkite dynamic pipelines, Tekton, Nix; what is already solved before writing any spec.
@@ -20,28 +21,33 @@ durable runs, typed ports + derived DAG, pluggable executors/triggers, effect cl
 React + React Flow GUI on the same API agents use, schema as public contract.
 
 ### Audience and blast radius
+
 - Personal + homelab only (single tenant, minimal auth)
 - Internal tool for Kryton work (small team, self-hosted, real auth)
 - Open-source product others self-host (versioned schema, conformance suite, docs, N-1 compat)
 - Eventual commercial/SaaS (hard multi-tenancy from day one)
 
 ### Source of truth for a pipeline definition
+
 - YAML in git; stable IDs; GUI does CST-preserving surgical edits
 - Graph in the control-plane DB; YAML is import/export (n8n model)
 - Real config language (CUE/Starlark/Pkl) compiled to the DAG; YAML a serialised subset
 
 ### First vertical slice / first profile
+
 - CI for own repos
 - Homelab + infra automation (triggers, schedules, durability)
 - LLM/agent orchestration
 - GUI + editor first, over a stub executor
 
 ### Content-addressed cache: v1 or later
+
 - v1 core primitive
 - Design the model now, implement after durability + engines + GUI
 - Drop it; ordinary artifact passing is enough
 
 ### ANSWERED (2026-09-09)
+
 - Audience: personal/homelab first + open-source self-host + eventual SaaS -> tenancy in the
   data model from day one; single-binary mode retained.
 - Source of truth: YAML is the format; the STORE is pluggable (git backend or central server DB).
@@ -52,27 +58,32 @@ React + React Flow GUI on the same API agents use, schema as public contract.
 ## Pipeline engine — round 2 questions (2026-09-09)
 
 ### v1 acceptance pipeline
+
 - The spanning pipeline proposed (schedule+API trigger, cached image build, LLM step with schema,
   human approval, k8s deploy, across three engine types)
 - Something else the user names
 - Three narrower per-profile acceptance pipelines
 
 ### Definition store primacy
+
 - Git primary, DB backend secondary
 - DB primary, git as sync/export
 - True peers, neither privileged
 
 ### Secrets backend
+
 - Built-in encrypted store only
 - External only (Vault / OIDC federation / cloud KMS)
 - Both, behind one interface
 
 ### Does the control plane binary host an engine?
+
 - Yes, embedded engine for single-binary mode
 - No, control plane strictly orchestrates; engine always a separate process
 - Embedded but same protocol over the bus (loopback)
 
 ### ANSWERED round 2 (2026-09-09)
+
 - Acceptance: three separate per-profile pipelines. Proposed build order CI -> homelab -> LLM.
 - Store: DB is primary, git is a synced mirror kept up to date. => CST-preserving editing DROPPED.
 - Secrets: both built-in and external behind one resolver; engines get short-lived refs, never values.
@@ -81,27 +92,32 @@ React + React Flow GUI on the same API agents use, schema as public contract.
 ## Pipeline engine — round 3 questions (2026-09-09)
 
 ### Git sync direction
+
 - One-way mirror DB -> git (git read-only, edits there discarded)
 - DB -> git as branch/PR for changes flagged as needing review
 - Bidirectional with conflict resolution
 
 ### Review / approval of definition changes
+
 - None: GUI save is canonical immediately
 - In-app approval state on revisions (draft -> reviewed -> active)
 - Environment promotion (revision pinned per environment, promote dev -> prod)
 
 ### Build order of the three acceptance pipelines
+
 - CI -> homelab/infra -> LLM (recommended)
 - Homelab/infra first
 - LLM first
 - Parallel
 
 ### CAS retention / eviction
+
 - TTL + LRU eviction with per-tenant quota
 - Refcount from run history, pin anything a retained run references
 - Never evict; quota only, operator prunes manually
 
 ### ANSWERED round 3 (2026-09-09)
+
 - Git sync: one-way mirror DB -> git; direct git edits discarded.
 - Approval: in-app revision state draft -> reviewed -> active, with approver recorded.
 - Build order: all three acceptance pipelines in PARALLEL => schema/contract is critical path.
@@ -116,21 +132,25 @@ capabilities + effect class + schemas so policy can refuse before execution. Ins
 registering -> ready -> draining -> gone.
 
 ### Plugin artifact format
+
 - OCI artifacts in a container registry (reuse Harbor)
 - Own blob store in the CAS
 - Both behind one resolver
 
 ### Public plugin index
+
 - None; bring your own registry
 - Hosted community index for the OSS distribution
 - Federated: multiple upstreams, locally mirrored
 
 ### Signature enforcement
+
 - Always required
 - Required per trust tier
 - Optional / warn only
 
 ### ANSWERED round 4 (2026-09-09)
+
 - Artifacts: both OCI and CAS blob store behind one scheme'd resolver (oci:// , cas://).
   Signatures stored as detached catalog records keyed by artifact digest, cosign as one source.
 - Index: federated upstreams, locally mirrored; plugin identity namespaced per upstream.
@@ -139,6 +159,7 @@ registering -> ready -> draining -> gone.
   signing identities, plugin capabilities, effect classes) with one evaluation point + audit trail.
 
 ## Still open (2026-09-09)
+
 - How policy is expressed (built-in DSL / OPA-Rego / Go-coded)
 - API identity and auth (OIDC / built-in users / both)
 - YAML surface for effect classes and taint without policy boilerplate on every step
@@ -147,26 +168,31 @@ registering -> ready -> draining -> gone.
 - Project name
 
 ## Next move
+
 - Consolidate everything into a spec via /procoder:spec
 - Keep discussing the open items first
 - Write an architecture decision record set instead
 
 ## Project name (2026-09-09)
+
 Criteria: short binary name, unclaimed in CI/infra, metaphor matching the architecture,
 usable as a schema namespace.
+
 - Shrike — larder/caching bird; matches CAS cache as core primitive
 - Starling — murmuration; matches control plane / data plane emergent coordination
 - Pika — haypile caching; short, warm
 - Dhole — coordinated pack; unclaimed but generic metaphor
-Rejected for conflicts: Octopus (Octopus Deploy), Heron (Apache Heron), Kestrel (ASP.NET),
-Ant, Badger, Otter, Rook, Capybara.
+  Rejected for conflicts: Octopus (Octopus Deploy), Heron (Apache Heron), Kestrel (ASP.NET),
+  Ant, Badger, Otter, Rook, Capybara.
 
 ### Name conflict check (2026-09-09) — "Pika"
+
 Crowded: python `pika` AMQP/RabbitMQ client (same infra neighbourhood, worst overlap),
 superhighfives/pika macOS colour picker, Pika Backup, PikaOS, Marmot Pika Discovery Layer,
 Pika dynamic language, Pika-Software GH org. None are CI/workflow engines.
 
 ### NAME DECIDED (2026-09-09): Dhole
+
 Pika reversed after conflict check (7 projects incl. python AMQP client in same neighbourhood).
 Magpie ruled out (Apache Magpie + Open Raven Magpie, both dev tooling).
 Dhole: only conflicts are a small remote-desktop tool and a PHP crypto lib. Binary `dhole`,
@@ -175,29 +201,53 @@ namespace `dhole.v1`. gh authed as piwi3910, org azrtydxb reachable, azrtydxb/dh
 ## ADRs written 2026-09-09 — 17 records in .procoder/adr/, all `proposed`, adr check clean.
 
 ## Repo creation questions (2026-09-09)
+
 ### Visibility of azrtydxb/dhole
+
 - Private now, public at first release
 - Public immediately
+
 ### ADR status
+
 - Accept all 17
 - Review before accepting
 
 ## Post-repo open questions (2026-09-09)
+
 Repo azrtydxb/dhole created public, 17 ADRs accepted and pushed. No LICENSE yet.
 
 ### License
+
 - Apache-2.0 (permissive + patent grant, max adoption, no SaaS protection)
 - AGPL-3.0 (network copyleft, preserves SaaS optionality; engines unaffected via bus boundary)
 - BSL 1.1 (source-available, blocks competing hosted offerings, not OSI open source)
 - MIT (simplest permissive, no patent grant)
 
 ### ADR 0012 — how policy is expressed
+
 - CEL (as k8s ValidatingAdmissionPolicy)
 - Embedded Rego / OPA
 - Built-in declarative DSL
 - Compiled Go
 
 ### ADR 0016 — does v1 scope stand
+
 - Stands as written (three acceptance pipelines, parallel)
 - Narrow to two profiles
 - Sequence instead of parallel
+
+### ANSWERED — post-repo questions (recorded 2026-09-10)
+
+Recorded from the artifacts that carry each decision, not from memory. These were
+answered at the time and written into ADRs and the tree; only this log went
+unupdated, which is why `procoder ask` kept listing them as open.
+
+- **License: Apache-2.0.** `LICENSE` is the Apache License 2.0, and ADR 0018 records
+  the decision as accepted.
+- **ADR 0012 / policy expression: CEL.** ADR 0019 ("policy is expressed in CEL") is
+  accepted, and `internal/policy/cel.go` implements it with `github.com/google/cel-go`.
+- **ADR 0016 / v1 scope: stands as written.** ADR 0016 is accepted and all three
+  targets exist — `make acceptance-ci`, `acceptance-automation`, `acceptance-agent`.
+- **Repo visibility: public.** `github.com/azrtydxb/dhole` is public.
+- **ADR status: all accepted.** Every record in `.procoder/adr/` reads
+  `Status: accepted` and `procoder adr check` is clean.

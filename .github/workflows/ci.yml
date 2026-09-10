@@ -39,6 +39,14 @@ jobs:
         run: make test
       - name: test (race)
         run: make test-race
+      # Linux is the primary target and was the one platform NOT running the
+      # compliance suite — macOS ran it and Windows deliberately does not. The
+      # gap was not theoretical: a defect that made the suite reject engines
+      # the contract permits shipped, and this job is where it would have been
+      # caught. The reference engine needs python3 and a POSIX shell, both of
+      # which every Linux runner has.
+      - name: conformance
+        run: make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
 
   web:
     name: web

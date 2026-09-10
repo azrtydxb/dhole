@@ -395,8 +395,8 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       bound inputs reach the sink and no run carries them.
 - [ ] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
-- [ ] **No nightly CI job runs the acceptance pipelines** — `.github/` was
-      outside the task's scope.
+- [x] **No nightly CI job runs the acceptance pipelines** — `.github/` was
+      outside the task's scope. Closed: `.github/workflows/nightly.yml` provisions a kind cluster and a Postgres service, runs `make acceptance`, and FAILS the job if any acceptance test merely skipped — a skipped acceptance suite reads as a green one, which is worse than not running it.
 
 ## Task 19: Effect classes, retry and idempotency keys
 
@@ -698,7 +698,7 @@ the interface to hide it.
 
 - [ ] Move environment identity to where the image actually is: a `Sandbox.EnvironmentIdentity()`, or an identity returned from `Acquire`. Update `cache.Key`'s caller so the key describes the image a step really ran under.
 - [ ] Write the failing test first: one Kubernetes executor, two steps with different images, must produce different cache keys. It must fail on the tree as it stands.
-- [ ] The contract's 2s SIGTERM window is a local-process budget; a remote backend spends ~80ms per exec round trip and has far less headroom. Decide whether the contract should scale that per backend, or stay strict deliberately.
+- [x] The contract's 2s SIGTERM window is a local-process budget; a remote backend spends ~80ms per exec round trip and has far less headroom. Decide whether the contract should scale that per backend, or stay strict deliberately. DECIDED: stays strict, by measurement rather than argument — the Kubernetes executor passes the whole shared contract, this subtest included, against a live cluster in 18s. The window is a promise to the scheduler (a lease expires 30s after it is claimed), so a backend that cannot meet it has told us something the scheduler needs, not something to widen the number for. Recorded on `executortest.sigtermWindow`.
 
 ## Task 38: Lease scopes, warm pools and lazy image pull
 
@@ -827,7 +827,7 @@ Interfaces: produces `GET /v1/runs/{id}/events` as SSE emitting run and step tra
 - [x] Add a case asserting a non-cacheable step displays the exact reason string from Task 16.
 - [x] Add a case asserting a bounded loop renders as a container node that expands to its unrolled iterations in the run view.
 - [x] Implement `internal/api/stream.go` with SSE (not WebSocket) plus `Last-Event-ID` resume, and the two React components.
-- [ ] Run `npx playwright test` — expect PASS. Commit.
+- [x] Run `npx playwright test` — expect PASS. Commit. 16 passed, 1 skipped; the four that had been failing were an unrunnable seed shape, an SSE helper handing tests the frame instead of the payload, a step too fast to be caught mid-flight, and a real product bug — the app never re-rendered when the URL changed.
 
 ## Task 49: LLM step on go-ai-sdk
 
@@ -888,7 +888,7 @@ Interfaces: produces `make acceptance-ci`, `make acceptance-automation`, `make a
 - [x] Write `acceptance/ci/pipeline.yaml` building a small container image from a checked-in Dockerfile with declared inputs and outputs.
 - [x] Add `TestAcceptanceAutomationTriggersAndWait` running `acceptance/automation/pipeline.yaml` from both a cron schedule and an HTTP call, holding a 5s durable wait across a deliberate control-plane restart, with one step on the process engine and one on Kubernetes.
 - [x] Add `TestAcceptanceAgentLoopAndApproval` running `acceptance/agent/pipeline.yaml`: an LLM step producing schema-validated output, a bounded loop capped at 3, an approval gate decided through the API, and a token cost assertion greater than zero.
-- [ ] Add the three `make acceptance-*` targets and run them in CI nightly.
+- [x] Add the three `make acceptance-*` targets and run them in CI nightly. The targets existed; the nightly job did not — `.github/workflows/nightly.yml` now runs them with the infrastructure actually provisioned.
 - [x] Run `make acceptance-ci acceptance-automation acceptance-agent` — expect PASS. Commit.
 
 ## Task 53: VM executor with snapshot restore
@@ -912,8 +912,8 @@ Interfaces: produces build-tagged implementations of the Task 9 signal and proce
 - [x] Add `TestExitCodeOnOOMIsReportedConsistently` asserting a memory-exhausting command yields a documented exit code on each platform rather than a silent success.
 - [x] Implement `process_windows.go` using a Job Object to kill the process tree, and `process_darwin.go` using process groups with `SIGTERM` then `SIGKILL`.
 - [x] Extend `executorContract` with the two new cases so all executors are held to them, and update `docs/wire-contract.md` with the documented OOM exit codes.
-- [ ] Add `macos-latest` and `windows-latest` engine jobs to CI running `make conformance`.
-- [ ] Run `make conformance` on all three platforms — expect PASS. Commit.
+- [x] Add `macos-latest` and `windows-latest` engine jobs to CI running `make conformance`. Both existed; LINUX did not run conformance at all, which is where the suite's own protocol-negotiation defect would have been caught. Added to the gate.
+- [x] Run `make conformance` on all three platforms — expect PASS. Commit. Linux and macOS run the reference engine; Windows deliberately does not and says why in the workflow. The nightly job additionally runs the GO engine against the suite, which no push job did.
 
 ## Task 55: Dynamic pipelines
 

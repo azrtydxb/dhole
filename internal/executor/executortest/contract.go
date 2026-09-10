@@ -83,7 +83,7 @@ func Contract(t *testing.T, e executor.Executor) {
 			default:
 				return false
 			}
-		}, 2*time.Second, 20*time.Millisecond, "SIGTERM did not stop the command tree within 2s")
+		}, sigtermWindow, 20*time.Millisecond, "SIGTERM did not stop the command tree within "+sigtermWindow.String())
 	})
 
 	t.Run("cancelling a step terminates everything it spawned", func(t *testing.T) {
@@ -206,6 +206,28 @@ func Contract(t *testing.T, e executor.Executor) {
 		require.NotEmpty(t, id, "a nil error must mean a real, hashable identity")
 	})
 }
+
+// sigtermWindow is how long a backend has to stop a command tree after a
+// SIGTERM, and it is the SAME for every backend on purpose.
+//
+// It was an open question whether a remote backend deserved a larger budget:
+// a Kubernetes executor spends roughly 80ms on each exec round trip, where a
+// local process spends none, so the window looked like a local-process figure
+// applied to something with far less headroom.
+//
+// It stays strict, and the reason is measurement rather than principle. The
+// Kubernetes executor meets it against a real cluster — the whole contract,
+// this subtest included, passes in 18s over a live API server. So the budget
+// is achievable remotely and there is nothing to relax.
+//
+// The principle matters for the next backend, though. This window is a promise
+// made to the SCHEDULER, not a convenience for the backend: a lease expires
+// thirty seconds after it is claimed, and a cancel that takes longer than this
+// leaves a step running while the scheduler has already re-dispatched it. A
+// backend that genuinely cannot meet the window has told us something the
+// scheduler needs to know, and the honest response is to say so rather than to
+// widen the number until it passes.
+const sigtermWindow = 2 * time.Second
 
 func acquire(t *testing.T, e executor.Executor) executor.Sandbox {
 	t.Helper()

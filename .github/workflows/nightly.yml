@@ -1,0 +1,110 @@
+name: nightly
+
+# The acceptance pipelines are the definition of done for the three profiles
+# (CI, automation, agent). They need a live Kubernetes cluster and a live
+# Postgres, so they cannot run on every push without making every push wait for
+# infrastructure — and they skip silently without it, which is worse than not
+# running them at all: a skipped acceptance suite reads as a green one.
+#
+# So they run here, nightly, with the infrastructure actually provisioned, and
+# this workflow is deliberately allowed to be slow.
+on:
+  schedule:
+    # 03:17 UTC. Not on the hour: every scheduled workflow on GitHub fires on
+    # the hour, and the queue there is long enough to matter.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    name: acceptance pipelines
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: dhole
+          POSTGRES_PASSWORD: dhole
+          POSTGRES_DB: dhole
+        ports:
+          - 5432:5432
+        # Without a health check the job races the database's first start, and
+        # the failure looks like a flaky test rather than a missing wait.
+        options: >-
+          --health-cmd "pg_isready -U dhole"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # A real cluster, because the CI profile's whole point is that a step
+      # runs in a sandbox pod. A kind cluster is a real API server and a real
+      # kubelet; what it is not is a multi-node cluster, and nothing in these
+      # pipelines depends on that.
+      - name: create a cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: dhole-acceptance
+
+      - name: export the kubeconfig
+        run: kind get kubeconfig --name dhole-acceptance > "$RUNNER_TEMP/kubeconfig"
+
+      # Each target names the variables it needs, so they are set together here
+      # rather than per-step: a target that quietly stopped needing one would
+      # otherwise keep passing for the wrong reason.
+      - name: acceptance
+        env:
+          DHOLE_TEST_KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          DHOLE_TEST_POSTGRES_DSN: postgres://dhole:dhole@127.0.0.1:5432/dhole?sslmode=disable
+        run: make acceptance
+
+      # The suites skip themselves when their infrastructure is missing, and a
+      # skip is invisible in a green job. This is the whole reason the workflow
+      # exists, so it fails loudly rather than reporting a pass nobody earned.
+      - name: refuse a run that only skipped
+        if: always()
+        env:
+          DHOLE_TEST_KUBECONFIG: ${{ runner.temp }}/kubeconfig
+          DHOLE_TEST_POSTGRES_DSN: postgres://dhole:dhole@127.0.0.1:5432/dhole?sslmode=disable
+        run: |
+          set -euo pipefail
+          out=$(go test ./acceptance -count=1 -v -timeout 30m 2>&1 | tee /dev/stderr)
+          if printf '%s' "$out" | grep -q -- '--- SKIP'; then
+            echo "::error::an acceptance pipeline skipped; the nightly job exists to run them, not to report a pass nobody earned"
+            exit 1
+          fi
+
+  conformance:
+    name: conformance (reference engines)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The reference engine runs in the push gate too. This second run is the
+      # Go engine against the same suite, which the gate does not do: it is the
+      # engine the product ships, and an obligation it fails is a bug in the
+      # product rather than in an example.
+      - name: build the engine
+        run: go build -o "$RUNNER_TEMP/dhole-engine" ./cmd/dhole-engine
+      - name: conformance (go engine)
+        run: make conformance ENGINE="$RUNNER_TEMP/dhole-engine"
+      - name: conformance (python reference engine)
+        run: make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
