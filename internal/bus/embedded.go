@@ -183,6 +183,11 @@ func tierPermissions(tier string) *server.Permissions {
 				"job.logs.>",
 				"engine.heartbeat.>",
 				SubjectEngineRegistration(),
+				// Requesting only. An engine that could also SUBSCRIBE here
+				// would be able to answer a sibling's redemption with a value
+				// of its own choosing — credential substitution inside the
+				// tier this account exists to contain.
+				SubjectSecretRedeem(),
 				"$JS.API.CONSUMER.>",
 				"$JS.API.STREAM.INFO.>",
 				"$JS.API.STREAM.NAMES",

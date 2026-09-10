@@ -623,7 +623,34 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
 - [x] **No way to provision a credential.** `identity.Local.IssueToken` is unreachable from the CLI, so
       there is no path from a fresh binary to a usable token. A person needs a repeatable way to mint one for a
       tenant, not only whatever a plane prints at startup. Found building Task 48.
-- [ ] **No engine can run a step that carries a secret, and nothing redeems one.** `CAPABILITY_SECRETS` is sourced from `Executor.Capabilities()`, and no backend advertises it — the process executor honestly advertises nothing, and the Kubernetes one advertises NETWORK plus whatever its pod template grants. So `engine.checkSecrets` refuses every dispatch carrying a secret, always. The sourcing is the first bug: redeeming a short-lived reference is the AGENT's job, not a sandbox-isolation guarantee like PRIVILEGED or HOST_MOUNT, so asking the executor is asking the wrong component. The second is that there is no redemption code at all — `checkSecrets` only refuses, and a `SecretRef` never becomes a value. The spec requires this ("engines never receive secret values, only short-lived references they redeem"), the wire carries `SecretRef`, and the conformance suite has a `secret-redemption` case that the reference Python engine passes and the Go engine cannot reach. Found running the Go engine through conformance for the first time, 2026-09-10.
+- [x] **No engine can run a step that carries a secret, and nothing redeems one.** `CAPABILITY_SECRETS` is sourced from `Executor.Capabilities()`, and no backend advertises it — the process executor honestly advertises nothing, and the Kubernetes one advertises NETWORK plus whatever its pod template grants. So `engine.checkSecrets` refuses every dispatch carrying a secret, always. The sourcing is the first bug: redeeming a short-lived reference is the AGENT's job, not a sandbox-isolation guarantee like PRIVILEGED or HOST_MOUNT, so asking the executor is asking the wrong component. The second is that there is no redemption code at all — `checkSecrets` only refuses, and a `SecretRef` never becomes a value. The spec requires this ("engines never receive secret values, only short-lived references they redeem"), the wire carries `SecretRef`, and the conformance suite has a `secret-redemption` case that the reference Python engine passes and the Go engine cannot reach. Found running the Go engine through conformance for the first time, 2026-09-10.
+      CLOSED 2026-09-10. `CAPABILITY_SECRETS` now comes from `engine.Config.Secrets` — a
+      `secrets.Redeemer` the agent holds — and `checkSecrets` asks the same thing; no executor was
+      taught to advertise it. `internal/secrets` carries the broker, the bus redeemer and the
+      responder; the plane serves it on `bus.SubjectSecretRedeem()` and the embedded engine redeems
+      through it. The exchange is now specified in docs/wire-contract.md ("Secrets"), which no
+      longer lists redemption as a gap. The conformance case exercises the whole path and its four
+      leak checks, and PASSES once the two gaps below are neutralised; on the tree as it stands it
+      still fails on the port layout.
+- [ ] **The port layout on disk is two conventions and neither is written down.** The engine puts an
+      input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
+      (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So
+      `binary-artifact-round-trip` and `secret-redemption` fail with a step that could not write
+      `outputs/proof`, and the wire contract lists the layout as unspecified. Somebody has to decide
+      it, write it into docs/wire-contract.md, and make the engine and the executor agree — the
+      sandbox has to CREATE the outputs directory, which no backend does today. Found closing the
+      secret-redemption item, 2026-09-10.
+- [ ] **The object store protocol is still unspecified, and tenancy makes it worse.** Every Dhole
+      store scopes structurally, so an engine's `log_key` resolves under `<tenant>/<key>` and its CAS
+      objects under `<algo>/<xx>/<hex>`; the suite assumed a flat directory and the reference Python
+      engine writes one. The suite now tries the tenant-scoped and Dhole CAS shapes before the flat
+      ones, which unblocked four cases, but that is a harness accommodating two engines rather than a
+      contract. Found closing the secret-redemption item, 2026-09-10.
+- [ ] **Nothing carries a step timeout, so `step-timeout` cannot pass.** Neither `JobDispatch` nor
+      `Step` has a timeout field; the conformance suite passes `DHOLE_STEP_TIMEOUT_SECONDS` in
+      `JobDispatch.env` and says so as a gap. The Go engine enforces nothing and holds the slot for
+      the step's full runtime. This wants a schema field, additively, rather than the engine adopting
+      the harness's environment convention. Found closing the secret-redemption item, 2026-09-10.
 - [ ] **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside tests — not the API, not the CLI, not the git mirror. So a plugin's declaration can be read through `GetPlugin` and there is no supported way to put one there; the e2e seeder has a `/plugin` route for exactly this reason. Found building Task 27b.
 - [x] **The quota enforcer and the CAS guard are built and unwired.** Task 58's `Enforcer.AdmitRun`/`AdmitStep` and `GuardCAS` are tested but have no call sites: `internal/scheduler` and `internal/cas` belonged to other agents that round. Wire `AdmitStep` into the dispatch loop and `GuardCAS` around the blob store. Note `tenancy` deliberately does not import `scheduler` — the dependency runs the other way — so it mirrors two persistence contracts, guarded by `TestMirroredSchedulerContractsHaveNotDrifted`.
 - [x] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and

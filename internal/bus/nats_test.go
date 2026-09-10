@@ -193,3 +193,40 @@ func TestSubscribingWithADeadlinelessContextWorks(t *testing.T) {
 		t.Fatal("the subscription reported success but delivered nothing")
 	}
 }
+
+// TestATierEngineMayRedeemASecretButNotAnswerOne is the permission the
+// redemption subject needs and the one it must not have. An engine requests on
+// secret.redeem; the control plane answers. An engine allowed to SUBSCRIBE
+// there could answer a sibling's redemption with a value of its own choosing,
+// which is a credential-substitution attack inside the tier the bus exists to
+// contain.
+func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"untrusted"})
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	plane, err := bus.Connect(ctx, srv.PlaneURL())
+	require.NoError(t, err)
+	t.Cleanup(plane.Close)
+
+	stop, err := plane.RespondRaw(ctx, bus.SubjectSecretRedeem(), func(req []byte) []byte {
+		return []byte("value-for-" + string(req))
+	})
+	require.NoError(t, err)
+	t.Cleanup(stop)
+
+	engine, err := bus.Connect(ctx, srv.TierURL("untrusted"))
+	require.NoError(t, err)
+	t.Cleanup(engine.Close)
+
+	reply, err := engine.RequestRaw(ctx, bus.SubjectSecretRedeem(), []byte("handle-1"))
+	require.NoError(t, err)
+	require.Equal(t, "value-for-handle-1", string(reply))
+
+	_, err = engine.SubscribeEphemeral(ctx, bus.SubjectSecretRedeem(), func([]byte) {})
+	require.Error(t, err, "an engine that could answer redemptions could substitute a value")
+	require.ErrorIs(t, err, bus.ErrPermissionDenied)
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/engine"
+	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/version"
 )
 
@@ -106,6 +107,19 @@ func run() error {
 	}
 	defer conn.Close()
 
+	// Where this engine redeems the SecretRefs a dispatch carries, and the one
+	// thing that decides whether it advertises CAPABILITY_SECRETS at all. It
+	// defaults to the subject the wire contract names, on the connection the
+	// engine already opened: the control plane serves it, so a Dhole
+	// deployment can always answer. DHOLE_SECRET_SUBJECT overrides it for a
+	// deployment — or a conformance harness — that serves redemption
+	// elsewhere.
+	//
+	// The redeemer is NOT built from the executor. Redeeming a reference is
+	// something this agent does over the bus before any sandbox exists, unlike
+	// NETWORK or HOST_MOUNT which describe the sandbox itself.
+	redeemer := secrets.NewBusRedeemer(conn, envOr("DHOLE_SECRET_SUBJECT", bus.SubjectSecretRedeem()))
+
 	agent, err := engine.New(engine.Config{
 		EngineID: engineID,
 		Tier:     tier,
@@ -114,6 +128,7 @@ func run() error {
 		Blobs:    blobs,
 		CAS:      cas.NewOverBlobs(blobs),
 		Slots:    slots,
+		Secrets:  redeemer,
 	})
 	if err != nil {
 		return err

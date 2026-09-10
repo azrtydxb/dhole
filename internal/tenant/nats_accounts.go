@@ -31,6 +31,7 @@ var (
 		"engine.control.>",
 		"engine.heartbeat.>",
 		"engine.registration",
+		"secret.redeem",
 		"_INBOX.>",
 		"$JS.API.>",
 	}

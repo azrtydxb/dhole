@@ -57,6 +57,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/steps/gate"
 	"github.com/azrtydxb/dhole/internal/wait"
 	"github.com/azrtydxb/dhole/internal/wire"
@@ -233,6 +234,10 @@ type Server struct {
 	// triggerMux holds the webhook trigger handlers rootHandler serves. Nil
 	// when this deployment configured none.
 	triggerMux *http.ServeMux
+	// broker issues and redeems the short-lived handles a dispatch carries.
+	// In memory, and deliberately: a table of live handles in the run database
+	// would be the secret at rest that SecretRef exists to avoid.
+	broker *secrets.Broker
 	// partitions is this process's share of the run-id ring. Nil means the
 	// plane owns every run — see ownsRun.
 	partitions *planePartitions
@@ -431,6 +436,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
+	s.broker = secrets.NewBroker()
 	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
 	s.builtins, s.timers = built, wait.NewTimers(in.store)
 
@@ -485,6 +491,16 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 		s.spawn(func() { built.work(runCtx) })
 	}
 
+	// Before any engine: an engine advertises CAPABILITY_SECRETS on the
+	// strength of having a redemption endpoint, and a plane that admitted such
+	// an engine before it could answer would fail the first step that raced it
+	// (docs/wire-contract.md, "Secrets").
+	stopSecrets, err := secrets.Serve(startCtx, s.infra.plane, s.broker, bus.SubjectSecretRedeem())
+	if err != nil {
+		return err
+	}
+	s.stopSub = append(s.stopSub, stopSecrets)
+
 	// Last, and only in embedded mode: the engine starts once the plane can
 	// already hear it. A registration is a fire-and-forget message on a core
 	// subject, so an engine that announces itself before anyone is listening
@@ -529,6 +545,11 @@ func (s *Server) startEngine(ctx context.Context) error {
 		Blobs:    s.infra.blobs,
 		CAS:      s.infra.cas,
 		Slots:    runtime.NumCPU(),
+		// Its own connection, on the subject the contract names. This is what
+		// makes the hosted engine advertise CAPABILITY_SECRETS — the agent can
+		// redeem — while its process backend goes on advertising nothing,
+		// which is the honest answer for both of them.
+		Secrets: secrets.NewBusRedeemer(s.infra.engineBus, bus.SubjectSecretRedeem()),
 	})
 	if err != nil {
 		return err
@@ -988,6 +1009,16 @@ func (s *Server) OpenRuns(ctx context.Context, tenantID string) ([]string, error
 		return nil, runstore.ErrTenantRequired
 	}
 	return store.OpenRuns(ctx, tenantID)
+}
+
+// Secrets is the broker that issues the handles a dispatch carries and answers
+// the redemptions of them. It is exposed because issuing is the caller's job:
+// this package serves the endpoint and holds the handles, and whatever resolves
+// a step's declared secrets mints them through here.
+func (s *Server) Secrets() *secrets.Broker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.broker
 }
 
 // CAS is the content-addressed store this deployment reads and writes. It is

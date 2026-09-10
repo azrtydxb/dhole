@@ -48,6 +48,7 @@ account are further limited to its own tier.
 | `engine.control.<engine-id>`   | plane → engine   | `EngineControl`      |
 | `engine.heartbeat.<engine-id>` | engine → plane   | `EngineHeartbeat`    |
 | `engine.registration`          | engine → plane   | `EngineRegistration` |
+| `secret.redeem`                | engine → plane   | a handle, raw (reply: the value) |
 
 `<tier>` is the trust tier the work is dispatched to — `trusted`, `untrusted`,
 and whatever else the deployment defines. An engine's bus credentials permit
@@ -271,7 +272,74 @@ An engine redeems a handle for the value at the moment it needs it. Handles are
 short-lived and single-use. An engine must not log a redeemed value, write it to
 the object store, or include it in an error message.
 
-An engine that does not advertise `CAPABILITY_SECRETS` will never be sent one.
+### Who advertises `CAPABILITY_SECRETS`
+
+An engine that does not advertise `CAPABILITY_SECRETS` will never be sent one,
+because the capability is part of the `<caps>` hash the dispatch subject is
+named for.
+
+The capability means "may redeem secret references", and it belongs to the
+ENGINE, not to its sandbox backend. `NETWORK`, `PRIVILEGED` and `HOST_MOUNT` are
+isolation guarantees only the backend can make or decline; redemption happens in
+the agent, over the bus it dialled, before any sandbox exists. An engine
+advertises `CAPABILITY_SECRETS` exactly when it has a redemption endpoint, and
+refuses a dispatch carrying a secret when it does not.
+
+Sourcing it from the backend instead is a mistake that hides: no honest sandbox
+backend advertises it — a bare process cannot promise anything, and a container
+grants what its template grants — so every engine refused every step carrying a
+secret, always, and nothing in the product redeemed anything. Teaching one
+backend to advertise it is the same mistake with the answer inverted.
+
+### The redemption exchange
+
+Request/reply on `secret.redeem`, and both bodies are RAW BYTES rather than
+protobuf messages:
+
+- The **request** body is the `SecretRef.handle`, UTF-8, and nothing else.
+- The **reply** body is the value's bytes, and nothing else — unless it begins
+  with the four ASCII bytes `ERR `, in which case it is a refusal and the rest
+  is a reason.
+
+There is no message type because the value is opaque bytes and every field of a
+wrapper would be one more copy of it: in a decoder's arena, in a reflection
+path, in anything that logs an undecodable message by dumping what it got. The
+reply carries the value alone.
+
+The `ERR ` prefix costs one thing, and it is stated here rather than discovered:
+a VALUE whose bytes begin with `ERR ` cannot be told from a refusal. An issuer
+must therefore refuse to ISSUE such a value — at issue time, where a person can
+see it, rather than at redemption, where an engine would fail a step it could
+have run. Dhole's own broker refuses it.
+
+Rules that bind both ends:
+
+- **The control plane serves it.** A reference nothing can redeem is not a
+  feature. The plane answers on this subject for as long as it is running.
+- **Single use.** The second redemption of a handle is refused, whatever the
+  outcome of the first. A dispatch redelivered after a lost ack must not be able
+  to read a value the earlier attempt already took.
+- **The issuer enforces `expires_at`.** Only the issuer knows when it issued. An
+  engine may pre-check the field but must not rely on it.
+- **A refusal names neither the handle nor the value.** It travels back over the
+  bus and an engine puts it in a `JobStatus` error, which is durable and
+  archived.
+- **An engine bounds the request.** One that waited forever on a plane that is
+  not answering holds a slot and a lease until the lease expires, and the step
+  is re-dispatched to an engine that waits forever in the same way. Dhole's
+  engines wait ten seconds.
+- **A redeemed value reaches the step's process and nothing else.** Never a
+  `LogChunk`, never the authoritative log, never an `OutputRef`, never a
+  `JobStatus` error — and never a sandbox specification a backend might persist,
+  which is why Dhole's engine binds secrets to the exec environment and not to
+  the environment it acquires the sandbox with: the Kubernetes backend turns
+  that into a pod template the API server keeps.
+- **An engine that cannot redeem fails the step**, with an error naming the
+  BINDING — the environment variable the step expected — and never the handle.
+
+The subject is a deployment's to move: an engine that is told a different one
+uses that instead. Dhole's engine reads `DHOLE_SECRET_SUBJECT` and falls back to
+`secret.redeem`.
 
 ## Logs
 
@@ -382,10 +450,13 @@ suite's own choices are named so a second implementer makes the same ones.
 - **The object store protocol.** `JobDispatch.output_prefix` and
   `JobStatus.log_key` name objects in a store this document never describes:
   no protocol, no addressing, no credentials. The conformance suite uses a
-  directory named by `DHOLE_BLOB_DIR`.
-- **Secret redemption.** An engine "redeems a handle for the value" with no
-  subject, no message shape, and no statement of who serves it or how a refusal
-  looks. The conformance suite uses request/reply on `DHOLE_SECRET_SUBJECT`.
+  directory named by `DHOLE_BLOB_DIR`. It also has to guess at the SHAPE of a
+  key: Dhole's own stores scope every object by tenant structurally, so their
+  keys resolve under `<tenant>/<key>`, and the suite now tries that before the
+  flat path the reference Python engine writes. Neither is the contract, and a
+  third engine will guess a third way until this is written down. The
+  content-addressed layout is unspecified in the same way — Dhole writes
+  `<algo>/<first two hex>/<hex>`, the suite also accepts `cas/<algo>/<hex>`.
 - **Step timeouts.** Neither `JobDispatch` nor `Step` carries one, so the
   obligation to enforce a timeout cannot be met from the schema. The conformance
   suite passes `DHOLE_STEP_TIMEOUT_SECONDS` in `JobDispatch.env`.

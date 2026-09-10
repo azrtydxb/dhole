@@ -71,6 +71,31 @@ func CapsHash(caps []dholev1.Capability) string {
 	return hex.EncodeToString(sum.Sum(nil))[:16]
 }
 
+// advertisedCapabilities is what this engine tells the fleet it can do: what
+// its sandbox backend guarantees, plus CAPABILITY_SECRETS when the agent holds
+// a redeemer.
+//
+// The two halves come from different components on purpose. NETWORK,
+// PRIVILEGED and HOST_MOUNT describe the sandbox a step runs in, and only the
+// backend knows whether it can make those promises. "May redeem secret
+// references" describes the AGENT: it happens over the bus, in this process,
+// before any sandbox is acquired. Sourcing it from the executor left no
+// shipped backend advertising it, which made every step carrying a secret
+// unrunnable by every engine in the product.
+//
+// Everything Run and the registration derive from capabilities goes through
+// here, so the set the engine advertises and the set it subscribes to cannot
+// drift apart: an engine advertising SECRETS with no consumer for the matching
+// dispatch subject would be handed work that silently never arrives.
+func advertisedCapabilities(cfg Config) []dholev1.Capability {
+	caps := make([]dholev1.Capability, 0, len(cfg.Executor.Capabilities())+1)
+	caps = append(caps, cfg.Executor.Capabilities()...)
+	if cfg.Secrets != nil {
+		caps = append(caps, dholev1.Capability_CAPABILITY_SECRETS)
+	}
+	return normaliseCaps(caps)
+}
+
 // normaliseCaps sorts and de-duplicates a capability set and drops the
 // unspecified member, so two spellings of the same set hash alike.
 func normaliseCaps(caps []dholev1.Capability) []dholev1.Capability {
@@ -175,7 +200,7 @@ func newRegistryClient(cfg Config) (*registryClient, error) {
 		engineID:    cfg.EngineID,
 		tier:        cfg.Tier,
 		slots:       uint32(cfg.Slots), // #nosec G115 -- New rejects a non-positive Slots.
-		caps:        normaliseCaps(cfg.Executor.Capabilities()),
+		caps:        advertisedCapabilities(cfg),
 		engineTypes: []string{cfg.Executor.Kind()},
 		envIdentity: identity,
 		nudge:       make(chan struct{}, 1),

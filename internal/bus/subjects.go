@@ -11,6 +11,7 @@ package bus
 //	engine.control.<engine-id>     plane  -> engine   EngineControl
 //	engine.heartbeat.<engine-id>   engine -> plane    EngineHeartbeat
 //	engine.registration            engine -> plane    EngineRegistration
+//	secret.redeem                  engine -> plane    handle -> value (raw)
 
 // SubjectDispatch carries one JobDispatch to the tier and capability set it was
 // scheduled for. It is a work queue: exactly one engine receives each dispatch.
@@ -52,4 +53,17 @@ func SubjectEngineHeartbeat(engineID string) string {
 // per-engine: the plane listens on one subject for all of them.
 func SubjectEngineRegistration() string {
 	return "engine.registration"
+}
+
+// SubjectSecretRedeem is where an engine exchanges a SecretRef handle for the
+// value behind it: a raw request carrying the handle, a raw reply carrying the
+// value, or one beginning "ERR " to refuse. The control plane serves it.
+//
+// It is not under job.* because it is not addressed to a run: one step's
+// dispatch may carry handles issued for several bindings, and the responder
+// answers by handle alone. It is not under engine.* either — nothing about it
+// is per-engine, and putting it there would have engines subscribing to their
+// siblings' redemptions under the existing engine.> permission.
+func SubjectSecretRedeem() string {
+	return "secret.redeem"
 }

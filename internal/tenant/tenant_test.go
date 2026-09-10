@@ -396,6 +396,7 @@ func subjectBuilders() map[string]string {
 		"SubjectEngineControl":      bus.SubjectEngineControl("engine-1"),
 		"SubjectEngineHeartbeat":    bus.SubjectEngineHeartbeat("engine-1"),
 		"SubjectEngineRegistration": bus.SubjectEngineRegistration(),
+		"SubjectSecretRedeem":       bus.SubjectSecretRedeem(),
 	}
 }
 
@@ -513,7 +514,7 @@ func TestSubjectBuildersIncludeTenant(t *testing.T) {
 }
 
 func hasKnownPrefix(subject string) bool {
-	for _, prefix := range []string{"job.", "engine.", "_INBOX.", "$JS."} {
+	for _, prefix := range []string{"job.", "engine.", "secret.", "_INBOX.", "$JS."} {
 		if strings.HasPrefix(subject, prefix) {
 			return true
 		}

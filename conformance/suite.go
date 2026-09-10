@@ -274,6 +274,11 @@ type harness struct {
 // secretSubjectName is where the suite serves secret redemption. The contract
 // says a handle is redeemed and does not say how, so this is the harness's
 // own convention, handed to the engine as DHOLE_SECRET_SUBJECT.
+// dispatchTenant scopes every dispatch this suite publishes. Every stored
+// record in Dhole carries a tenant, so the store an engine writes through may
+// scope by it — see readBlob.
+const dispatchTenant = "conformance"
+
 const secretSubjectName = "conformance.secret.redeem" // #nosec G101 -- a subject name, not a credential.
 
 func startHarness(ctx context.Context, cfg Config, root string) (*harness, error) {
@@ -648,7 +653,7 @@ func (h *harness) newDispatch(name string) *dholev1.JobDispatch {
 		},
 		OutputPrefix:    prefix,
 		ProtocolVersion: h.negotiatedVersion(),
-		Tenant:          &dholev1.Tenant{Id: "conformance"},
+		Tenant:          &dholev1.Tenant{Id: dispatchTenant},
 	}
 }
 
@@ -902,7 +907,22 @@ func (h *harness) redemptions(handle string) int {
 // readBlob reads an object by the key a JobStatus named. The store is a
 // directory (the harness's convention, since the contract defines no object
 // store protocol); a key that escapes it is a failure, not a read.
+// readBlob's tenant fallback. The suite's convention is that a key is a path
+// relative to DHOLE_BLOB_DIR, which is what the reference Python engine
+// implements. Dhole's own engines cannot: every stored record is tenant-scoped
+// by the spec, structurally rather than by a filter, so their keys land under
+// <tenant>/<key> and every case that read a log or an output reported the
+// object missing. The convention was not wrong so much as incomplete — it
+// could not describe a tenant-scoped store at all — so the unscoped path is
+// still tried and a store that scopes by the dispatch's tenant is now also
+// found.
 func (h *harness) readBlob(key string) ([]byte, error) {
+	// #nosec G304 -- the key comes from the engine under test, which this
+	// package launches on purpose; the read is confined to the suite's own
+	// temporary blob directory.
+	if b, err := os.ReadFile(filepath.Join(h.blobDir, dispatchTenant, key)); err == nil {
+		return b, nil
+	}
 	path, err := h.resolve(key)
 	if err != nil {
 		return nil, err
