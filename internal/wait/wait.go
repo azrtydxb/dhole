@@ -132,39 +132,83 @@ func (t *Timers) Schedule(ctx context.Context, tenantID, runID, stepID string, a
 	}
 
 	return t.store.WithTx(ctx, func(tx runstore.Tx) error {
-		outstanding, err := exists(ctx, tx,
-			`SELECT COUNT(*) FROM run_timers
-			 WHERE tenant_id = ? AND run_id = ? AND step_id = ?`,
-			tenantID, runID, stepID)
-		if err != nil {
-			return err
-		}
-		if outstanding {
-			return nil
-		}
-
-		if err := tx.Append(ctx, tenantID, runstore.Event{
-			RunID:  runID,
-			StepID: stepID,
-			// Sequence 0: the store allocates it inside this transaction.
-			// Computing it here would read a high-water mark another
-			// caller is about to write, and the loser of that race is
-			// discarded silently by the idempotent insert.
-			Type:    scheduler.StepAwaitingTimer,
-			Payload: payload,
-			At:      time.Now().UTC(),
-		}); err != nil {
-			return fmt.Errorf("wait: schedule %s/%s: %w", runID, stepID, err)
-		}
-
-		const insert = `INSERT INTO run_timers (tenant_id, run_id, step_id, due_at, fired_at)
-			VALUES (?, ?, ?, ?, NULL) ON CONFLICT DO NOTHING`
-		if err := tx.Exec(ctx, tx.Dialect().Rebind(insert),
-			tenantID, runID, stepID, due.Format(runstore.TimeFormat)); err != nil {
-			return fmt.Errorf("wait: schedule %s/%s: %w", runID, stepID, err)
-		}
-		return nil
+		return arm(ctx, tx, tenantID, runID, stepID, due, payload)
 	})
+}
+
+// ArmInTx is Schedule inside a transaction the CALLER owns, and it is the
+// whole of the atomicity fix.
+//
+// A gate used to be armed in a transaction of its own while the scheduler
+// decided readiness in another. Sequences are allocated inside a transaction
+// and visibility is not, so the gate could hold a lower sequence than the
+// STEP_DISPATCHED of the step it gated: the log read "gated, then dispatched",
+// and the wait had been skipped entirely. Handing the transaction in lets the
+// decision that a step is ready and the arming of its gate be one act, with no
+// interval for the other to be missed in.
+//
+// It is idempotent per (tenant, run, step) for the same reason Schedule is,
+// and migration 0023 is what makes that true across transactions the caller's
+// database cannot serialise.
+func (t *Timers) ArmInTx(
+	ctx context.Context, tx runstore.Tx, tenantID, runID, stepID string, at time.Time,
+) error {
+	if tenantID == "" {
+		return fmt.Errorf("wait: arm: %w", runstore.ErrTenantRequired)
+	}
+	if runID == "" || stepID == "" {
+		return ErrRunRequired
+	}
+	if at.IsZero() {
+		return errors.New("wait: arm: a due time is required")
+	}
+	due := at.UTC()
+	payload, err := json.Marshal(Scheduled{DueAt: due})
+	if err != nil {
+		return fmt.Errorf("wait: arm: %w", err)
+	}
+	return arm(ctx, tx, tenantID, runID, stepID, due, payload)
+}
+
+// arm writes the gate event and the timer row that must exist together: a gate
+// without a timer waits for ever, and a timer without a gate fires at a step
+// that has already been dispatched.
+func arm(
+	ctx context.Context, tx runstore.Tx,
+	tenantID, runID, stepID string, due time.Time, payload []byte,
+) error {
+	outstanding, err := exists(ctx, tx,
+		`SELECT COUNT(*) FROM run_timers
+		 WHERE tenant_id = ? AND run_id = ? AND step_id = ?`,
+		tenantID, runID, stepID)
+	if err != nil {
+		return err
+	}
+	if outstanding {
+		return nil
+	}
+
+	if err := tx.Append(ctx, tenantID, runstore.Event{
+		RunID:  runID,
+		StepID: stepID,
+		// Sequence 0: the store allocates it inside this transaction.
+		// Computing it here would read a high-water mark another
+		// caller is about to write, and the loser of that race is
+		// discarded silently by the idempotent insert.
+		Type:    scheduler.StepAwaitingTimer,
+		Payload: payload,
+		At:      time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("wait: schedule %s/%s: %w", runID, stepID, err)
+	}
+
+	const insert = `INSERT INTO run_timers (tenant_id, run_id, step_id, due_at, fired_at)
+		VALUES (?, ?, ?, ?, NULL) ON CONFLICT DO NOTHING`
+	if err := tx.Exec(ctx, tx.Dialect().Rebind(insert),
+		tenantID, runID, stepID, due.Format(runstore.TimeFormat)); err != nil {
+		return fmt.Errorf("wait: schedule %s/%s: %w", runID, stepID, err)
+	}
+	return nil
 }
 
 // Pending says whether a step still has an outstanding wait, and when it is

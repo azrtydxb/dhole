@@ -23,6 +23,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/steps/gate"
 	"github.com/azrtydxb/dhole/internal/wait"
 )
 
@@ -498,6 +499,18 @@ type plane struct {
 
 func newPlane(ctx context.Context, t *testing.T, store runstore.Store, url, tenant string) *plane {
 	t.Helper()
+	return newPlaneFor(ctx, t, store, url, tenant, waitingPipeline())
+}
+
+// newPlaneFor is newPlane over a pipeline of the caller's choosing. It exists
+// for the gate cases, whose whole subject is a step whose PLUGIN REF says it
+// waits — the one fact about a gate that is in the definition rather than in
+// the log.
+func newPlaneFor(
+	ctx context.Context, t *testing.T, store runstore.Store,
+	url, tenant string, pipeline *dholev1.Pipeline,
+) *plane {
+	t.Helper()
 
 	conn, err := nats.Connect(url)
 	require.NoError(t, err)
@@ -508,19 +521,25 @@ func newPlane(ctx context.Context, t *testing.T, store runstore.Store, url, tena
 
 	recorder := &recordingBus{}
 	ob := outbox.New(store, recorder, "test-plane")
+	timers := wait.NewTimers(store)
+	// The gate step type, wired exactly as a deployment wires it. Without it
+	// a pipeline carrying a wait step dispatches that step to an engine that
+	// has no idea what it is — which is the bug these cases are about.
+	waits, err := gate.New(timers, gate.Options{})
+	require.NoError(t, err)
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       store,
 		Outbox:      ob,
 		Leases:      leases,
 		Fleet:       staticFleet{instances: []registry.Instance{readyEngine("e1")}},
-		Definitions: staticDefs{pipeline: waitingPipeline()},
+		Definitions: staticDefs{pipeline: pipeline},
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
+		Gate:        waits,
 	})
 	require.NoError(t, err)
 
-	timers := wait.NewTimers(store)
 	p := &plane{
 		tenant: tenant, store: store, bus: recorder, outbox: ob, sched: sched,
 		timers: timers, runner: wait.NewRunner(timers, sched),

@@ -7,11 +7,12 @@
 #           deployment the process engine the single binary hosts — and
 #           reports the kernel it saw, so the test can tell WHERE it ran
 #           instead of trusting where it was meant to run.
-#   hold    is never executed at all. It is gated by a durable timer, which
-#           is a ROW: the run's position lives in the log, so the wait costs
-#           nothing while a control plane is stopped and restarted underneath
-#           it (ADR 0003). Its `token` output is deliberately empty — the
-#           edge exists to order the graph, and a gate produces no artifact.
+#   hold    is never executed at all. It is a `builtin:wait` step: reaching
+#           it arms a durable timer, which is a ROW, so the run's position
+#           lives in the log and the wait costs nothing while a control plane
+#           is stopped and restarted underneath it (ADR 0003). Its `token`
+#           output is deliberately empty — the edge exists to order the graph,
+#           and a gate produces no artifact.
 #   cluster declares CAPABILITY_NETWORK, which the host-process backend does
 #           not advertise and the Kubernetes one does. That capability is the
 #           ONLY thing in this system that can route a step to an engine
@@ -26,20 +27,16 @@ id: acceptance-automation
 tenant:
   id: default
 steps:
-  # The sleep is load-bearing, and it is a FINDING wearing a workaround.
-  # Arming a durable wait is not atomic with the scheduler's readiness
-  # decision: internal/wait writes STEP_AWAITING_TIMER in its own
-  # transaction, and an Advance that read the run's state before that
-  # transaction committed dispatches the gated step anyway — even though the
-  # gate event ends up EARLIER in the log, because the sequence is allocated
-  # inside the transaction and visibility is not. Observed, first run.
-  # A step type that armed the timer inside the dispatch transaction would
-  # close it; until one exists, the gate has to be armed while the step is
-  # provably not yet reachable, and five seconds of predecessor is what
-  # makes that provable.
+  # This step used to sleep for five seconds, and the sleep was a FINDING
+  # wearing a workaround: arming the wait below was not atomic with the
+  # scheduler's readiness decision, so an Advance that read the run's state
+  # before the arming transaction committed dispatched the gated step anyway.
+  # The gate is now a step type, armed by the same act that finds it ready and
+  # recognised from the pinned definition rather than from the log, so there is
+  # no interval left to lose and no reason to hold the gate out of reach.
   - id: host
     name: probe the host engine
-    plugin_ref: 'command:{"args":["/bin/sh","-c","sleep 5; uname -s > probe"]}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","uname -s > probe"]}'
     effect_class: EFFECT_CLASS_PURE
     inputs:
       - name: event
@@ -54,8 +51,14 @@ steps:
             media_type: text/plain
   - id: hold
     name: wait for the timer
-    plugin_ref: 'command:{"args":["/bin/sh","-c","printf held > token"]}'
+    plugin_ref: builtin:wait
     effect_class: EFFECT_CLASS_PURE
+    config:
+      # Longer than a control-plane restart takes, because the point of this
+      # wait is that it OUTLIVES one: a wait that had already elapsed before
+      # the second plane existed would still fire, correctly, and would no
+      # longer be evidence that a plane inherited an outstanding wait.
+      duration: 30s
     inputs:
       - name: probe
         type:

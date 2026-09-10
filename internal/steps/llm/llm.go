@@ -23,11 +23,19 @@
 // connection to the model that caused it, and the failure it replaced was
 // visible.
 //
-// The token ceiling HALTS the run. A model that hits its budget stops
+// The token ceiling FAILS the step. A model that hits its budget stops
 // mid-sentence and reports it, and the JSON it produced up to that point often
 // parses. A truncated answer that looks complete is the worst outcome here, so
-// a ceiling breach fails the step and closes the run rather than trimming and
-// carrying on.
+// a ceiling breach discards the answer and records the failure rather than
+// trimming and carrying on.
+//
+// What it does NOT do any more is end the run. This step type used to close
+// every run it failed in, which decided for the whole graph: whether a run
+// survives a failed step is what the effect class and the edges are for
+// (ADR 0002), and a step that halted unconditionally also made an off-schema
+// answer impossible to assert inside a run that has to continue. A caller
+// whose run genuinely has nothing left to do sets Options.HaltsRun and gets
+// the old behaviour exactly.
 package llm
 
 import (
@@ -62,8 +70,8 @@ var (
 	// pipeline's declared output schema.
 	ErrObjectInvalid = errors.New("llm: the object does not satisfy the declared schema")
 
-	// ErrTokenCeiling: the call went over its token budget. The run is halted;
-	// the answer, complete-looking or not, is discarded.
+	// ErrTokenCeiling: the call went over its token budget. The step fails
+	// and the answer, complete-looking or not, is discarded.
 	ErrTokenCeiling = errors.New("llm: the call exceeded its token ceiling")
 
 	// ErrProviderCall: the provider refused the call outright.
@@ -105,6 +113,19 @@ type Options struct {
 	// Attempts is how many times the model is asked before the step gives
 	// up on getting a parseable, schema-valid object. Default 3.
 	Attempts int
+	// HaltsRun makes a step that gives up close the RUN as well as failing
+	// itself. It is off by default and it is deliberately an opt-in.
+	//
+	// This step type used to halt unconditionally, which took a decision away
+	// from every pipeline that used it: whether a run survives a failed step
+	// is the GRAPH's business — the effect class says whether the step may be
+	// tried again, the edges say what was downstream of it, and a branch that
+	// never touched the model has no reason to stop. It also made an
+	// off-schema answer impossible to assert inside a run that must continue.
+	//
+	// A caller whose run has nothing left to do without the model's answer
+	// turns it on and gets the old behaviour exactly.
+	HaltsRun bool
 	Logger   *slog.Logger
 	Now      func() time.Time
 }
@@ -118,6 +139,7 @@ type Step struct {
 	calls    *Recorder
 	tenantID string
 	attempts int
+	halts    bool
 	log      *slog.Logger
 	now      func() time.Time
 }
@@ -157,6 +179,7 @@ func New(cfg Config, opts Options) (*Step, error) {
 		calls:    opts.Calls,
 		tenantID: opts.TenantID,
 		attempts: opts.Attempts,
+		halts:    opts.HaltsRun,
 		log:      opts.Logger,
 		now:      opts.Now,
 	}
@@ -238,7 +261,8 @@ func (s *Step) Run(ctx context.Context, runID, stepID, prompt string) (json.RawM
 	case strings.TrimSpace(prompt) == "":
 		return nil, errors.New("llm: a prompt is required")
 	case s.store == nil:
-		return nil, errors.New("llm: a run store is required; a step that cannot halt its run must not start it")
+		return nil, errors.New(
+			"llm: a run store is required; a step that cannot record its own failure must not start")
 	case s.calls == nil:
 		return nil, errors.New("llm: a call recorder is required; an unrecorded model call is an unauditable one")
 	}
@@ -256,9 +280,10 @@ func (s *Step) Run(ctx context.Context, runID, stepID, prompt string) (json.RawM
 	}
 
 	// Out of attempts, or stopped on something no repeat would fix. Either
-	// way the step is over and the run stops with it.
+	// way this STEP is over; whether the run is, is not this step type's
+	// decision to make (see Options.HaltsRun).
 	reason := redact(lastErr.Error())
-	if err := s.halt(ctx, runID, stepID, reason); err != nil {
+	if err := s.giveUp(ctx, runID, stepID, reason); err != nil {
 		return nil, errors.Join(lastErr, err)
 	}
 	return nil, lastErr
@@ -399,36 +424,52 @@ func (s *Step) validate(raw json.RawMessage) error {
 	return nil
 }
 
-// halt closes the run. Returning an error from Run is not enough on its own:
-// the run is a persisted state machine (ADR 0003), and a scheduler reading a
-// log with no failure in it will dispatch whatever comes next.
-func (s *Step) halt(ctx context.Context, runID, stepID, reason string) error {
-	failure, err := scheduler.MarshalRunFailure(scheduler.RunFailure{Steps: []string{stepID}})
-	if err != nil {
-		return fmt.Errorf("llm: halting %s: %w", runID, err)
-	}
+// giveUp records that the step failed, and closes the run only if this step
+// was asked to.
+//
+// Recording is NOT optional and never has been. Returning an error from Run is
+// not enough on its own: the run is a persisted state machine (ADR 0003), and
+// a scheduler reading a log with no failure in it will go on dispatching as
+// though the step had never run. STEP_FAILED is what stops an off-schema
+// answer being indistinguishable from a step nobody got to yet.
+//
+// Closing the run IS optional, and used to not be. A step type that ended
+// every run it failed in decided for the whole graph: the effect class says
+// whether this step may be tried again, the edges say what was downstream of
+// it, and a branch that never touched the model has no reason to stop. Left to
+// the scheduler, a failed step is classified by ADR 0002 exactly like any
+// other — which is the answer a pipeline author expects and can change.
+func (s *Step) giveUp(ctx context.Context, runID, stepID, reason string) error {
 	stepFailure, err := json.Marshal(struct {
 		StepID string `json:"step_id"`
 		Reason string `json:"reason"`
 	}{StepID: stepID, Reason: reason})
 	if err != nil {
-		return fmt.Errorf("llm: halting %s: %w", runID, err)
+		return fmt.Errorf("llm: failing %s/%s: %w", runID, stepID, err)
 	}
 
 	at := s.now().UTC()
+	events := []runstore.Event{
+		{RunID: runID, StepID: stepID, Type: runstore.StepFailed, Payload: stepFailure, At: at},
+	}
+	if s.halts {
+		failure, err := scheduler.MarshalRunFailure(scheduler.RunFailure{Steps: []string{stepID}})
+		if err != nil {
+			return fmt.Errorf("llm: halting %s: %w", runID, err)
+		}
+		events = append(events,
+			runstore.Event{RunID: runID, Type: scheduler.RunFailed, Payload: failure, At: at})
+	}
 
-	// One transaction: a step recorded as failed in a run that was never
-	// closed is a run that sits ready to advance past it.
+	// One transaction: a step recorded as failed in a run that was meant to
+	// be closed with it is a run that sits ready to advance past it.
 	return s.store.WithTx(ctx, func(tx runstore.Tx) error {
-		for _, e := range []runstore.Event{
-			{RunID: runID, StepID: stepID, Type: runstore.StepFailed, Payload: stepFailure, At: at},
-			{RunID: runID, Type: scheduler.RunFailed, Payload: failure, At: at},
-		} {
+		for _, e := range events {
 			// Sequence stays 0: the store allocates it inside this
 			// transaction. A precomputed one can collide with another
 			// caller's, and the loser is discarded without an error.
 			if err := tx.Append(ctx, s.tenantID, e); err != nil {
-				return fmt.Errorf("llm: halting %s: %w", runID, err)
+				return fmt.Errorf("llm: failing %s/%s: %w", runID, stepID, err)
 			}
 		}
 		return nil

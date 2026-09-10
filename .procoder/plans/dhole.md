@@ -57,7 +57,10 @@ decide what may be cached and what may be retried.
   path made its subject authenticate but not exist — `IssueToken` wrote
   `tokens`, every "is this a principal of this tenant" check reads
   `principals` — so the holder was refused by `approval.Decide`; the backfill
-  keeps a deployment's tokens in flight working). A task
+  keeps a deployment's tokens in flight working),
+  0023 gate_armed_once (bugfix: the same race again on the event that arms a
+  durable wait — a step's STEP_AWAITING_TIMER is unique per step, so two
+  advances that both find one gate ready cannot both record it). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -374,13 +377,24 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       acceptance harness IS the missing dispatcher — it drives all of them
       against the same store and tenant. Until the server does this, the three
       profiles are a claim the tests make and the product does not.
-- [ ] **Arming a durable gate is not atomic with the readiness decision.**
-      `STEP_AWAITING_TIMER` is written in its own transaction, so it can appear
+- [x] **Arming a durable gate is not atomic with the readiness decision.**
+      `STEP_AWAITING_TIMER` was written in its own transaction, so it could appear
       earlier in the log than the `STEP_DISPATCHED` of the step it should have
       gated — the sequence is allocated inside the transaction, the visibility
-      is not. The gate was ignored and the wait skipped entirely. Both gated
-      pipelines work around it by arming behind a five-second predecessor. A
-      step type that arms the timer inside the dispatch transaction closes it.
+      is not. The gate was ignored and the wait skipped entirely. Closed by
+      `internal/steps/gate`, the `builtin:wait` step type: the scheduler
+      recognises a gate from the PINNED DEFINITION rather than from the log —
+      so there is no commit that can arrive too late to be seen — and arms it
+      through `wait.Timers.ArmInTx` in the transaction that would have
+      dispatched it, via the `scheduler.Gate` seam (`internal/scheduler/gate.go`,
+      four small hunks in `scheduler.go`). Migration 0023 makes a step's
+      `STEP_AWAITING_TIMER` unique so two advances that both find one gate ready
+      cannot both record it. `acceptance/automation/pipeline.yaml`'s five-second
+      predecessor is GONE and its `hold` step is now a `builtin:wait`; the
+      acceptance test no longer arms the wait out of band. The agent pipeline's
+      five-second `brief` remains and is no longer this bug: it holds `classify`
+      and `refine` back because nothing maps `builtin:llm`/`builtin:loop` to a
+      step type, which is the wiring item above.
 - [x] **There is no approval RPC**, so "an approval gate decided through the
       API" cannot be met as written. The run is created, approved and started
       through the real contract, and the gate is then decided by the principal
@@ -411,8 +425,24 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       Dockerfile's text is embedded in the step, kept equal to the checked-in
       file by a test), and **has no syntax for a loop's body**. A trigger's
       bound inputs reach the sink and no run carries them.
-- [ ] **The LLM step halts the run it is given** when it gives up, so an
+- [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
+      Closed: giving up now records `STEP_FAILED` and nothing else, so whether
+      the run continues is decided by the effect class and the edges as it is
+      for any other failed step (ADR 0002). `llm.Options.HaltsRun` keeps the old
+      behaviour for the caller whose run genuinely has nothing left to do. The
+      guarantee that an off-schema answer FAILS is untouched: the failure is in
+      the log, `Run` returns no object, and nothing partial flows downstream.
+      The agent acceptance test now makes the off-schema assertion inside the
+      run it is testing, and that run completes.
+- [ ] **`dhole serve` arms durable gates and never fires them.** Wiring the
+      `builtin:wait` step type into `internal/server` (two additive hunks around
+      `scheduler.New`) is what makes the atomicity fix reach the binary, but the
+      durable-timer poll is still not wired there — the item above — so a gate
+      armed by a plain `dhole serve` waits until something polls `wait.Timers`.
+      The acceptance harness supplies the poll, so acceptance is unaffected.
+      This is strictly better than what it replaced (the gate was skipped
+      entirely), and it is not finished. Found closing the gate-arming race.
 - [x] **No nightly CI job runs the acceptance pipelines** — `.github/` was
       outside the task's scope. Closed: `.github/workflows/nightly.yml` provisions a kind cluster and a Postgres service, runs `make acceptance`, and FAILS the job if any acceptance test merely skipped — a skipped acceptance suite reads as a green one, which is worse than not running it.
 

@@ -14,8 +14,12 @@
 # What each step is here to prove:
 #
 #   brief     a plain step, on an engine, whose five seconds are the window in
-#             which the gates behind it are armed. See the arming race in
-#             acceptance/automation/pipeline.yaml.
+#             which this test arms the gates that hold `classify` and `refine`
+#             back. Those two are NOT gates in the definition — they are an
+#             LLM step and a loop — and the harness parks them behind timers
+#             only because nothing in the plane maps a `builtin:` reference to
+#             a step type. When it does, the sleep goes with it. The durable
+#             gate's own arming race is closed: see acceptance/automation.
 #   classify  the model call. Its OUTPUT PORT carries the schema the answer
 #             must satisfy — there is no second place a schema could live, and
 #             an answer that fails it is refused rather than passed on.
