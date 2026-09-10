@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/kubernetes"
 	"github.com/azrtydxb/dhole/internal/executor/process"
+	"github.com/azrtydxb/dhole/internal/executor/vm"
 )
 
 // chooseExecutor builds the backend named by DHOLE_EXECUTOR.
@@ -48,6 +50,16 @@ func chooseBackend() (executor.Executor, error) {
 			Namespace:      os.Getenv("DHOLE_SANDBOX_NAMESPACE"),
 			ServiceAccount: os.Getenv("DHOLE_SANDBOX_SERVICE_ACCOUNT"),
 		})
+	case vm.Kind:
+		return vm.New(vm.Config{
+			Backend:     vm.Backend(os.Getenv("DHOLE_VM_BACKEND")),
+			BinaryPath:  os.Getenv("DHOLE_VM_HYPERVISOR"),
+			KernelImage: os.Getenv("DHOLE_VM_KERNEL"),
+			RootfsImage: os.Getenv("DHOLE_VM_ROOTFS"),
+			SnapshotDir: os.Getenv("DHOLE_VM_SNAPSHOT_DIR"),
+			VCPUs:       envInt("DHOLE_VM_VCPUS"),
+			MemMiB:      envInt("DHOLE_VM_MEM_MIB"),
+		})
 	default:
 		return nil, fmt.Errorf("DHOLE_EXECUTOR must be one of %s, got %q",
 			strings.Join(executorKinds, ", "), kind)
@@ -58,4 +70,18 @@ func chooseBackend() (executor.Executor, error) {
 // them. It is a variable beside the switch rather than derived from it because
 // there is no registry to derive it from, and a name here that the switch does
 // not handle is caught by TestEveryAdvertisedExecutorKindCanBeChosen.
-var executorKinds = []string{process.Kind, kubernetes.Kind}
+var executorKinds = []string{process.Kind, kubernetes.Kind, vm.Kind}
+
+// envInt reads a numeric setting, treating anything unparseable as unset.
+//
+// Unset is the right reading of nonsense here because these are sizes with
+// sane defaults: an engine that refused to start over DHOLE_VM_VCPUS=two would
+// take a fleet down for a typo, where one that boots a one-vcpu guest is
+// merely slower and says so in its registration.
+func envInt(key string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil {
+		return 0
+	}
+	return n
+}

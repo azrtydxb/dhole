@@ -382,14 +382,20 @@ func fullPipeline() *dholev1.Pipeline {
 				Outputs: []*dholev1.Port{{Name: "log", Type: blob("text/plain")}},
 			},
 			{
-				Id:           "pooled",
-				Name:         "Pooled",
-				PluginRef:    "oci://dhole/pooled:1",
-				EffectClass:  dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED,
-				LeaseScope:   dholev1.LeaseScope_LEASE_SCOPE_POOL,
-				Capabilities: []dholev1.Capability{dholev1.Capability_CAPABILITY_HOST_MOUNT},
-				Inputs:       []*dholev1.Port{{Name: "log", Type: blob("text/plain")}},
-				Outputs:      []*dholev1.Port{{Name: "report", Type: blob("text/plain")}},
+				Id:          "pooled",
+				Name:        "Pooled",
+				PluginRef:   "oci://dhole/pooled:1",
+				EffectClass: dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED,
+				LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_POOL,
+				// Two, because the round trip has to survive a repeated
+				// field with more than one entry in it, and every enum value
+				// has to appear somewhere in this fixture.
+				Capabilities: []dholev1.Capability{
+					dholev1.Capability_CAPABILITY_HOST_MOUNT,
+					dholev1.Capability_CAPABILITY_NESTED_VIRT,
+				},
+				Inputs:  []*dholev1.Port{{Name: "log", Type: blob("text/plain")}},
+				Outputs: []*dholev1.Port{{Name: "report", Type: blob("text/plain")}},
 			},
 			{
 				Id:           "service",

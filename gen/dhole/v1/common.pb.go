@@ -96,6 +96,11 @@ const (
 	Capability_CAPABILITY_PRIVILEGED Capability = 3
 	// May mount a path from the engine host.
 	Capability_CAPABILITY_HOST_MOUNT Capability = 4
+	// May run a hypervisor of its own inside the sandbox. Only a backend on a
+	// host that can nest virtualisation advertises it: the promise is plausible
+	// for anything already running on a hypervisor, and a step that believes it
+	// and finds no /dev/kvm fails in a way that reads as its own bug.
+	Capability_CAPABILITY_NESTED_VIRT Capability = 5
 )
 
 // Enum value maps for Capability.
@@ -106,6 +111,7 @@ var (
 		2: "CAPABILITY_SECRETS",
 		3: "CAPABILITY_PRIVILEGED",
 		4: "CAPABILITY_HOST_MOUNT",
+		5: "CAPABILITY_NESTED_VIRT",
 	}
 	Capability_value = map[string]int32{
 		"CAPABILITY_UNSPECIFIED": 0,
@@ -113,6 +119,7 @@ var (
 		"CAPABILITY_SECRETS":     2,
 		"CAPABILITY_PRIVILEGED":  3,
 		"CAPABILITY_HOST_MOUNT":  4,
+		"CAPABILITY_NESTED_VIRT": 5,
 	}
 )
 
@@ -330,14 +337,15 @@ const file_dhole_v1_common_proto_rawDesc = "" +
 	"\x18EFFECT_CLASS_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11EFFECT_CLASS_PURE\x10\x01\x12\x1b\n" +
 	"\x17EFFECT_CLASS_IDEMPOTENT\x10\x02\x12\x1d\n" +
-	"\x19EFFECT_CLASS_AT_MOST_ONCE\x10\x03*\x8e\x01\n" +
+	"\x19EFFECT_CLASS_AT_MOST_ONCE\x10\x03*\xaa\x01\n" +
 	"\n" +
 	"Capability\x12\x1a\n" +
 	"\x16CAPABILITY_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CAPABILITY_NETWORK\x10\x01\x12\x16\n" +
 	"\x12CAPABILITY_SECRETS\x10\x02\x12\x19\n" +
 	"\x15CAPABILITY_PRIVILEGED\x10\x03\x12\x19\n" +
-	"\x15CAPABILITY_HOST_MOUNT\x10\x04*\x9d\x01\n" +
+	"\x15CAPABILITY_HOST_MOUNT\x10\x04\x12\x1a\n" +
+	"\x16CAPABILITY_NESTED_VIRT\x10\x05*\x9d\x01\n" +
 	"\n" +
 	"LeaseScope\x12\x1b\n" +
 	"\x17LEASE_SCOPE_UNSPECIFIED\x10\x00\x12\x14\n" +
