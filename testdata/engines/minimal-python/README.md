@@ -52,13 +52,13 @@ need its own.
 
 | Variable                | Meaning                                               |
 | ----------------------- | ----------------------------------------------------- |
-| `DHOLE_NATS_URL`        | Bus to dial. Engines are outbound-only.               |
+| `DHOLE_BUS_URL`         | Bus to dial. Engines are outbound-only.               |
 | `DHOLE_ENGINE_ID`       | Identity to register under; names its control subject |
-| `DHOLE_ENGINE_TIER`     | Trust tier — decides which dispatch subjects it takes |
+| `DHOLE_TIER`            | Trust tier — decides which dispatch subjects it takes |
 | `DHOLE_BLOB_DIR`        | Object store root; a key is a path under it           |
 | `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches               |
 | `DHOLE_SECRET_SUBJECT`  | Request/reply subject that redeems a secret handle    |
-| `DHOLE_ENGINE_SLOTS`    | Jobs to run at once                                   |
+| `DHOLE_SLOTS`           | Jobs to run at once                                   |
 
 A step runs in a fresh working directory holding `inputs/<port>`, and whatever
 it writes to `outputs/<port>` is collected. That layout is a convention too.
@@ -88,3 +88,17 @@ stranger cannot get right from the document alone:
 - **The JetStream details.** The stream name, that it is a work queue, that a
   consumer is durable and filtered per capability set, and that an ack is a
   publish to the message's reply subject.
+
+### Two spellings, one meaning
+
+`DHOLE_BUS_URL`, `DHOLE_TIER` and `DHOLE_SLOTS` were once spelled
+`DHOLE_NATS_URL`, `DHOLE_ENGINE_TIER` and `DHOLE_ENGINE_SLOTS` by the
+conformance suite, while `dhole-engine` — the engine this repository ships —
+read the first set. Nothing reconciled them, so the shipped engine could not be
+run through the suite at all: it exited with `DHOLE_BUS_URL is required` and the
+suite reported that its registration never arrived.
+
+The first set is canonical. `DHOLE_BUS_URL` does not bake the transport into
+configuration the way `DHOLE_NATS_URL` does, and the bus is transport (ADR
+0005). The suite sets both, and this engine reads both with the canonical name
+winning, so an engine written against either keeps passing.

@@ -13,8 +13,8 @@ guessed.  Everything that had to be guessed is marked GAP, and reported.
 
 Run it as the conformance suite does:
 
-    DHOLE_NATS_URL=nats://127.0.0.1:4222 \
-    DHOLE_ENGINE_ID=my-engine DHOLE_ENGINE_TIER=trusted \
+    DHOLE_BUS_URL=nats://127.0.0.1:4222 \
+    DHOLE_ENGINE_ID=my-engine DHOLE_TIER=trusted \
     DHOLE_BLOB_DIR=/var/lib/dhole/blobs python3 engine.py
 
 `--ignore-cancel` makes it drop EngineControl{Cancel}.  It is not a feature: it
@@ -405,18 +405,39 @@ class Job:
         self.lock = threading.Lock()
 
 
+def _env(canonical: str, deprecated: str, fallback: str) -> str:
+    """Read a variable that has two accepted spellings.
+
+    The canonical one wins. The deprecated one is still honoured because the
+    conformance suite sets both, and an engine written against either must keep
+    working — the same courtesy the wire protocol extends across versions.
+    """
+    value = os.environ.get(canonical, "")
+    if value != "":
+        return value
+    return os.environ.get(deprecated, "") or fallback
+
+
 class Engine:
     def __init__(self, ignore_cancel=False):
         # GAP: the contract never says how an engine is configured -- how it
         # learns its bus URL, its identity, its tier, or where the object store
         # is.  These names are the conformance suite's convention.
-        self.url = os.environ.get("DHOLE_NATS_URL", "nats://127.0.0.1:4222")
+        # Canonical name first, deprecated name second. Three variables had
+        # two spellings: the conformance suite grew DHOLE_NATS_URL,
+        # DHOLE_ENGINE_TIER and DHOLE_ENGINE_SLOTS while `dhole-engine` — the
+        # engine the product ships — reads DHOLE_BUS_URL, DHOLE_TIER and
+        # DHOLE_SLOTS. The consequence was that the shipped engine could not be
+        # run through the suite at all. The engine's spelling is canonical;
+        # DHOLE_BUS_URL does not bake the transport into configuration the way
+        # DHOLE_NATS_URL does, and the bus is transport.
+        self.url = _env("DHOLE_BUS_URL", "DHOLE_NATS_URL", "nats://127.0.0.1:4222")
         self.engine_id = os.environ.get("DHOLE_ENGINE_ID", "minimal-python")
-        self.tier = os.environ.get("DHOLE_ENGINE_TIER", "trusted")
+        self.tier = _env("DHOLE_TIER", "DHOLE_ENGINE_TIER", "trusted")
         self.blob_dir = os.environ.get("DHOLE_BLOB_DIR", "/tmp/dhole-blobs")
         self.stream = os.environ.get("DHOLE_DISPATCH_STREAM", "DISPATCH")
         self.secret_subject = os.environ.get("DHOLE_SECRET_SUBJECT", "")
-        self.slots = int(os.environ.get("DHOLE_ENGINE_SLOTS", "2"))
+        self.slots = int(_env("DHOLE_SLOTS", "DHOLE_ENGINE_SLOTS", "2"))
         self.capabilities = [CAPABILITY_NETWORK, CAPABILITY_SECRETS]
         self.ignore_cancel = ignore_cancel
 
