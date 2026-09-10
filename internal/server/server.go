@@ -466,6 +466,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// advance the run it just unblocked, and the scheduler is what advances
 	// runs. It is assigned rather than passed because each needs the other.
 	built.resume = sched
+	// And the graph a loop splices its next iteration into. Without it a
+	// `builtin:loop` step can decide to iterate and have nowhere to put the
+	// iteration (ADR 0022).
+	built.graphs = sched
 
 	// The ring BEFORE anything advances a run: exactly one plane may advance a
 	// given run, so a plane that has not claimed yet must not advance at all.

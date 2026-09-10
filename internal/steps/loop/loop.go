@@ -78,9 +78,10 @@ const (
 	EventFailed runstore.EventType = "LOOP_FAILED"
 )
 
-// ceilingReason is the exact phrase every ceiling event carries. It is
-// asserted on by tests and read by the run view, so it lives in one place.
-const ceilingReason = "iteration ceiling reached"
+// CeilingReason is the exact phrase every ceiling event carries. It is
+// asserted on by tests, read by the run view, and written by whoever stops a
+// loop — the plane's own controller since ADR 0022 — so it lives in one place.
+const CeilingReason = "iteration ceiling reached"
 
 // The refusals. Each is a distinct thing that went wrong and a distinct thing
 // to do about it.
@@ -93,7 +94,7 @@ var (
 
 	// ErrIterationCeiling: the loop ran its full allowance without its exit
 	// condition holding, or the nest it belongs to ran out of shared budget.
-	ErrIterationCeiling = errors.New("loop: " + ceilingReason)
+	ErrIterationCeiling = errors.New("loop: " + CeilingReason)
 
 	// ErrExitCondition: the exit condition does not compile, does not answer
 	// yes or no, or could not be evaluated against this iteration's state.
@@ -173,7 +174,7 @@ type Loop struct {
 	store    runstore.Store
 	tenantID string
 	body     Body
-	exit     cel.Program
+	exit     *Condition
 	budget   int
 	now      func() time.Time
 }
@@ -206,7 +207,7 @@ func New(node Node, opts Options) (*Loop, error) {
 	if _, err := dag.Build(node.Subgraph); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrSubgraphInvalid, err.Error())
 	}
-	program, err := compileExit(node.ExitCondition)
+	condition, err := NewCondition(node.ExitCondition)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +221,7 @@ func New(node Node, opts Options) (*Loop, error) {
 		store:    opts.Store,
 		tenantID: opts.TenantID,
 		body:     opts.Body,
-		exit:     program,
+		exit:     condition,
 		budget:   budget,
 		now:      opts.Now,
 	}
@@ -230,9 +231,22 @@ func New(node Node, opts Options) (*Loop, error) {
 	return l, nil
 }
 
-// compileExit turns the author's condition into a program that can stop the
-// loop, refusing anything that does not parse or does not answer yes or no.
-func compileExit(expr string) (cel.Program, error) {
+// Condition is a loop's exit expression, compiled once and asked after each
+// pass. It is a type rather than a bare cel.Program because a spliced loop
+// (ADR 0022) compiles the same expression on every controller of the run, and
+// two places that each planned their own program would eventually disagree
+// about what a condition means.
+type Condition struct {
+	expr    string
+	program cel.Program
+}
+
+// NewCondition compiles an exit condition, refusing anything that does not
+// parse or does not answer yes or no.
+//
+// A loop whose condition only fails to compile at runtime is a loop that
+// reaches its ceiling in production for every author who typed it.
+func NewCondition(expr string) (*Condition, error) {
 	if expr == "" {
 		return nil, fmt.Errorf(
 			"%w: a loop with no exit condition can only ever end at its ceiling", ErrExitCondition)
@@ -263,7 +277,33 @@ func compileExit(expr string) (cel.Program, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %q cannot be planned: %w", ErrExitCondition, expr, err)
 	}
-	return program, nil
+	return &Condition{expr: expr, program: program}, nil
+}
+
+// Expression is the author's own text, which is what a spliced controller
+// carries forward to the next iteration.
+func (c *Condition) Expression() string { return c.expr }
+
+// Holds evaluates the condition, failing closed. An expression that errors or
+// answers with something that is not a bool has not said "keep going".
+func (c *Condition) Holds(
+	ctx context.Context, iteration, ceiling int, state map[string]any,
+) (bool, error) {
+	out, _, err := c.program.ContextEval(ctx, map[string]any{
+		varIteration: iteration,
+		varMax:       ceiling,
+		varState:     celState(state),
+	})
+	if err != nil {
+		return false, fmt.Errorf("%w: %q at iteration %d: %v", ErrExitCondition,
+			c.expr, iteration, err)
+	}
+	done, ok := out.Value().(bool)
+	if !ok {
+		return false, fmt.Errorf("%w: %q returned %T at iteration %d, not a bool",
+			ErrExitCondition, c.expr, out.Value(), iteration)
+	}
+	return done, nil
 }
 
 // Result is what one run of the loop did.
@@ -320,7 +360,7 @@ func (l *Loop) Run(
 			return res, l.ceiling(ctx, runID, stepID, res.Iterations, fmt.Sprintf(
 				"%s: the nest's total iteration budget of %d is spent, so loop %q stopped after %d "+
 					"of its %d iterations",
-				ceilingReason, budget.seed, stepID, res.Iterations, l.node.MaxIterations))
+				CeilingReason, budget.seed, stepID, res.Iterations, l.node.MaxIterations))
 		}
 
 		it := Iteration{Number: n, StepID: unrolled(stepID, n), State: res.State}
@@ -360,27 +400,12 @@ func (l *Loop) Run(
 
 	return res, l.ceiling(ctx, runID, stepID, res.Iterations, fmt.Sprintf(
 		"%s: loop %q ran its maximum of %d iterations without its exit condition holding",
-		ceilingReason, stepID, l.node.MaxIterations))
+		CeilingReason, stepID, l.node.MaxIterations))
 }
 
-// done evaluates the exit condition, failing closed. An expression that errors
-// or answers with something that is not a bool has not said "keep going".
+// done evaluates the exit condition for one pass.
 func (l *Loop) done(ctx context.Context, n int, state map[string]any) (bool, error) {
-	out, _, err := l.exit.ContextEval(ctx, map[string]any{
-		varIteration: n,
-		varMax:       l.node.MaxIterations,
-		varState:     celState(state),
-	})
-	if err != nil {
-		return false, fmt.Errorf("%w: %q at iteration %d: %v", ErrExitCondition,
-			l.node.ExitCondition, n, err)
-	}
-	done, ok := out.Value().(bool)
-	if !ok {
-		return false, fmt.Errorf("%w: %q returned %T at iteration %d, not a bool",
-			ErrExitCondition, l.node.ExitCondition, out.Value(), n)
-	}
-	return done, nil
+	return l.exit.Holds(ctx, n, l.node.MaxIterations, state)
 }
 
 // celState is the activation's `state`. A nil map is an EMPTY map, not a

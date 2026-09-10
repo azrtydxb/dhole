@@ -400,10 +400,18 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
       a model client holds an API key and nothing in this system leases the
       PLANE a secret. A step on a plane with no factory fails with that reason.
-      (c) A `builtin:loop` body is one builtin reference in `config.body`, not
-      a nested pipeline: the definition format has no syntax for a subgraph and
-      no run can contain another, so a body that dispatches to engines needs
-      nested runs.
+      (c) CLOSED by ADR 0022: a `builtin:loop` body is a FRAGMENT — a
+      `dhole.v1.Pipeline` in `config.body` — and an iteration splices it into
+      the same run through the generator machinery, so a body may dispatch to
+      engines because a spliced step is an ordinary step. Each pass carries the
+      iteration's own step-id prefix (`refine.3.build`), records
+      `GENERATOR_FRAGMENT_REALISED` as any generator does, and ends in the
+      controller that decides the next pass. `max_iterations` now bounds the
+      SIZE OF THE GRAPH. `internal/steps/loop/splice.go`,
+      `internal/server/builtins.go`, and one hunk each in `scheduler.go`
+      (`Scheduler.Graph`) and `admission.go` (a queued step is looked up in the
+      run's REALISED graph, not the pinned revision — a body step queued for an
+      engine was otherwise dropped silently).
 - [x] **(d) An operator could not create a trigger through the contract.**
       Triggers were declared on `server.Config` and read from a YAML file by
       `--triggers`, so creating one needed a shell on the control plane's host
@@ -500,10 +508,11 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
 - [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
       template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
       through the dispatch (`JobDispatch.step` already carries the whole step),
-      and it is what the cache key is hashed against. Still open in this item:
-      it **cannot reference a file from the repository** and **has no syntax for
-      a loop's body**. A trigger's bound inputs reach the sink and no run
-      carries them.
+      and it is what the cache key is hashed against. The loop body's syntax is
+      CLOSED by ADR 0022: `config.body` holds a `dhole.v1.Pipeline` as JSON and
+      an iteration is spliced into the run under its own id prefix. Still open
+      in this item: it **cannot reference a file from the repository**. A
+      trigger's bound inputs reach the sink and no run carries them.
 
       The file reference NEEDS A DECISION, not an implementation, and the
       reason is that the phrase "the definition's repository" names something

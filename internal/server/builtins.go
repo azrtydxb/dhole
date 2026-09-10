@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/cas"
+	"github.com/azrtydxb/dhole/internal/dynamic"
 	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/runstore"
@@ -81,6 +83,22 @@ const builtinQueue = 64
 // loop, which is a write to the bus per step per few milliseconds.
 const minRenewInterval = 100 * time.Millisecond
 
+// maxRunFragments bounds how much GRAPH one run may grow, across every
+// generator and every loop in it.
+//
+// It is not a loop's ceiling and does not replace one: `max_iterations` stops a
+// loop emitting the controller that would ask for another pass, which is what
+// bounds an individual loop. This is the last line of defence behind that —
+// one run-wide counter, read off the run's own log by internal/dynamic — for
+// the case a loop's body contains another loop, where per-loop ceilings
+// multiply instead of adding.
+const maxRunFragments = 256
+
+// maxLoopStateBytes bounds one body output read back as an exit condition's
+// state. A condition reads a small answer; a body that wrote a gigabyte would
+// otherwise be loaded into the plane's memory to be handed to CEL.
+const maxLoopStateBytes = 1 << 20
+
 // llmRetention is how long a recorded prompt is kept. Prompts are the one
 // thing here that can carry a person's data, so they expire.
 const llmRetention = 24 * time.Hour
@@ -95,6 +113,18 @@ const llmRetention = 24 * time.Hour
 // hands it in, and a plane with no factory refuses `builtin:llm` steps with
 // that named reason rather than pretending to run them.
 type ModelFactory func(ctx context.Context, providerName, modelID string) (provider.LanguageModel, error)
+
+// Graphs is where a loop learns the graph its run ACTUALLY has: the pinned
+// revision plus every fragment already realised into it. The scheduler is what
+// satisfies it.
+//
+// A loop that spliced its next iteration against the AUTHORED definition would
+// be splicing against a pipeline missing every iteration before it, and the id
+// collision it failed to see would surface later in the scheduler as a run
+// that can no longer be advanced at all.
+type Graphs interface {
+	Graph(ctx context.Context, tenantID, runID string) (*dholev1.Pipeline, error)
+}
 
 // builtins is the plane's own dispatcher for the step types it hosts.
 //
@@ -111,6 +141,10 @@ type builtins struct {
 	// resume advances the run a gate has just opened. It is the scheduler.
 	resume approval.Resumer
 	models ModelFactory
+	// graphs is the run's current graph, which a `builtin:loop` step needs to
+	// splice its next iteration into (ADR 0022). It is the scheduler, assigned
+	// after it is built for the same reason resume is: each needs the other.
+	graphs Graphs
 	calls  *llm.Recorder
 	// leases is what makes a builtin step recoverable. A step this plane runs
 	// is leased exactly as a step dispatched to an engine is, because the
@@ -481,88 +515,241 @@ func (b *builtins) answer(
 	return step.Run(ctx, job.runID, stepID, prompt)
 }
 
-// iterate is `builtin:loop`: another builtin step type repeated up to a hard
-// ceiling, which is the property ADR 0015 is about.
+// iterate is `builtin:loop`: one decision about whether this run gets another
+// iteration, and the splice that gives it one (ADR 0022).
 //
-// The body is named by `config.body` and is itself a builtin reference, and
-// the loop step's own config configures it. That is narrower than what
-// internal/steps/loop can express — its Node.Subgraph is a whole pipeline —
-// and the reason is that the definition format has no syntax for a nested
-// pipeline and no run can contain another. A body that dispatched steps to
-// engines needs nested runs; this is what can be wired without inventing that.
+// The body is NOT run here. It is a fragment — a dhole.v1.Pipeline in
+// `config.body` — and an iteration realises it into the run's own graph under
+// the iteration's own step-id prefix, records GENERATOR_FRAGMENT_REALISED as
+// any generator does, and lets the scheduler pick the steps up on its next
+// pass. That is what makes a body able to dispatch to an ENGINE: a spliced
+// step is an ordinary step. The body used to be a single `builtin:` reference
+// the plane ran itself in a worker, because the definition format had no
+// syntax for a subgraph and no run could contain another.
+//
+// The fragment ends in the controller for the NEXT pass, so this function is
+// called once per iteration, on a different step each time, and each call does
+// exactly one of three things: exit because the condition held, stop because
+// the ceiling is reached, or realise one more iteration.
 func (b *builtins) iterate(
-	ctx context.Context, job builtinJob, attempt uint32,
+	ctx context.Context, job builtinJob, _ uint32,
 ) ([]*dholev1.OutputRef, error) {
-	cfg := job.step.GetConfig()
-	ceiling, err := strconv.Atoi(strings.TrimSpace(cfg["max_iterations"]))
+	spec, err := loop.ParseSpec(job.step)
 	if err != nil {
-		return nil, fmt.Errorf("a loop step's max_iterations %q: %w", cfg["max_iterations"], err)
-	}
-	body := cfg["body"]
-	if body != BuiltinLLM {
-		return nil, fmt.Errorf(
-			"a loop step's `body` must be %q; %q names no body this control plane can repeat",
-			BuiltinLLM, body)
+		return nil, err
 	}
 
-	bounded, err := loop.New(loop.Node{
-		// The body as a pipeline in its own right, which is what loop.New
-		// validates. One step, because that is what `body` names.
-		Subgraph: &dholev1.Pipeline{
-			Id:     job.step.GetId() + "-body",
-			Tenant: &dholev1.Tenant{Id: job.tenantID},
-			Steps: []*dholev1.Step{{
-				Id:          "pass",
-				PluginRef:   body,
-				EffectClass: dholev1.EffectClass_EFFECT_CLASS_IDEMPOTENT,
-			}},
-		},
-		MaxIterations: ceiling,
-		ExitCondition: cfg["exit_condition"],
-	}, loop.Options{
+	// Everything past the first controller is asked about the pass that has
+	// just finished, because THAT is what the exit condition is about.
+	if spec.Iteration > 1 {
+		state, err := b.iterationState(ctx, job, spec)
+		if err != nil {
+			return nil, b.recordLoop(ctx, job, spec, loop.EventFailed, loop.Record{
+				Reason: err.Error(),
+			}, err)
+		}
+		if err := b.recordLoop(ctx, job, spec, loop.EventIterationFinished, loop.Record{
+			StepID: loop.ControllerID(spec.Loop, spec.Iteration-1), State: state,
+		}, nil); err != nil {
+			return nil, err
+		}
+		done, err := spec.ExitCondition.Holds(ctx, spec.Iteration-1, spec.Max, state)
+		if err != nil {
+			// Failing closed, for internal/policy's reason: an expression
+			// nobody can evaluate has not said "keep going".
+			return nil, b.recordLoop(ctx, job, spec, loop.EventFailed, loop.Record{
+				Reason: err.Error(),
+			}, err)
+		}
+		if done {
+			return nil, b.recordLoop(ctx, job, spec, loop.EventExited, loop.Record{
+				State: state,
+				Reason: fmt.Sprintf("loop %q exited after %d of %d iterations",
+					spec.Loop, spec.Iteration-1, spec.Max),
+			}, nil)
+		}
+	}
+
+	if spec.Iteration > spec.Max {
+		// The ceiling now bounds the SIZE OF THE GRAPH and not merely the
+		// number of attempts: every iteration adds its body to the run. The
+		// step FAILS rather than succeeding quietly, because a loop that spent
+		// its whole allowance without its condition holding has not done what
+		// it was asked, and an AT_MOST_ONCE loop must not be retried into
+		// spending it again.
+		reason := fmt.Sprintf(
+			"%s: loop %q ran its maximum of %d iterations without its exit condition holding",
+			loop.CeilingReason, spec.Loop, spec.Max)
+		if err := b.recordLoop(ctx, job, spec, loop.EventCeilingReached, loop.Record{
+			Reason: reason,
+		}, nil); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", loop.ErrIterationCeiling, reason)
+	}
+
+	if err := b.realise(ctx, job, spec); err != nil {
+		return nil, b.recordLoop(ctx, job, spec, loop.EventFailed, loop.Record{
+			Reason: err.Error(),
+		}, err)
+	}
+	return nil, b.recordLoop(ctx, job, spec, loop.EventIterationStarted, loop.Record{
+		StepID: loop.ControllerID(spec.Loop, spec.Iteration),
+	}, nil)
+}
+
+// realise splices one iteration into the run, through internal/dynamic.
+//
+// It goes through the generator machinery rather than appending the record
+// itself, and that is the whole of the replay guarantee: Realise reads the log
+// FIRST, so a controller re-run after a restart re-splices the fragment
+// already recorded for it instead of building a second one. It also splices
+// against the graph the run actually has before recording anything, so a
+// fragment that would collide with an existing step id is refused by name
+// rather than discovered by the scheduler on the next advance.
+func (b *builtins) realise(ctx context.Context, job builtinJob, spec loop.Spec) error {
+	if b.graphs == nil {
+		// Never in the shipping binary: Start assigns the scheduler. A loop
+		// with no graph to splice into could only record a fragment nobody
+		// checked.
+		return errors.New(
+			"this control plane cannot read a run's graph, so a loop body could not be spliced into it")
+	}
+	fragment, err := spec.Fragment()
+	if err != nil {
+		return err
+	}
+	parent, err := b.graphs.Graph(ctx, job.tenantID, job.runID)
+	if err != nil {
+		return err
+	}
+	generator, err := dynamic.New(dynamic.Options{
 		Store:    b.store,
 		TenantID: job.tenantID,
-		Body: func(ctx context.Context, it loop.Iteration) (map[string]any, error) {
-			// Each pass is recorded under its own unrolled step id, so a run
-			// view can expand the container into what actually ran — and
-			// under the LOOP's attempt as well from the second one on. The
-			// model-call record is unique per (run, step, attempt), so a
-			// retried loop whose second pass one reused the first's id
-			// failed on that constraint instead of running. Observed.
-			answer, err := b.answer(ctx, job, cfg["prompt"], bodyStepID(it.StepID, attempt))
-			if err != nil {
-				return nil, err
-			}
-			var state map[string]any
-			if err := json.Unmarshal(answer, &state); err != nil {
-				return nil, fmt.Errorf("a loop body's answer is not an object: %w", err)
-			}
-			return state, nil
+		// The run-wide bound on how much graph one run may grow. It is NOT
+		// this loop's ceiling: a loop's own ceiling stops it emitting further
+		// controllers, and this is the last line of defence behind that, over
+		// every generator and every loop in the run at once.
+		MaxExpansions: maxRunFragments,
+		Emit: func(context.Context, dynamic.Input) (*dholev1.Pipeline, error) {
+			return fragment, nil
 		},
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	result, err := bounded.Run(ctx, job.runID, job.step.GetId(), map[string]any{})
-	if err != nil {
-		return nil, err
-	}
-	final, err := json.Marshal(result.State)
-	if err != nil {
-		return nil, err
-	}
-	return b.emit(ctx, job, final)
+	_, err = generator.Realise(ctx, job.runID, job.step.GetId(), parent)
+	return err
 }
 
-// bodyStepID is the id one pass of a loop records its model call under. The
-// loop's own attempt appears only from the second one, so an ordinary loop's
-// ids are exactly what internal/steps/loop unrolled.
-func bodyStepID(stepID string, attempt uint32) string {
-	if attempt <= 1 {
-		return stepID
+// iterationState is what the exit condition is asked about: the outputs of the
+// PREVIOUS iteration's exit steps, keyed by the body step that produced each.
+//
+// It is read back out of the log and the content-addressed store rather than
+// held in memory, because the controller asking is a different step, usually
+// on a different plane, from the one that realised the pass.
+func (b *builtins) iterationState(
+	ctx context.Context, job builtinJob, spec loop.Spec,
+) (map[string]any, error) {
+	previous := spec.At(spec.Iteration - 1)
+	events, err := b.store.Replay(ctx, job.tenantID, job.runID)
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Sprintf("%s@%d", stepID, attempt)
+	outputs := map[string][]*dholev1.OutputRef{}
+	for _, e := range events {
+		if e.Type != runstore.StepSucceeded {
+			continue
+		}
+		status := &dholev1.JobStatus{}
+		if err := proto.Unmarshal(e.Payload, status); err != nil {
+			return nil, fmt.Errorf("decoding the status of %s: %w", e.StepID, err)
+		}
+		outputs[e.StepID] = status.GetOutputs()
+	}
+
+	state := map[string]any{}
+	for _, exit := range previous.ExitSteps() {
+		id := previous.BodyStepID(exit.GetId())
+		port := exit.GetOutputs()[0].GetName()
+		ref := findOutput(outputs[id], port)
+		if ref == nil {
+			return nil, fmt.Errorf(
+				"iteration %d of loop %q produced nothing on %s.%s, so its exit condition has "+
+					"nothing to read", previous.Iteration, spec.Loop, id, port)
+		}
+		value, err := b.readState(ctx, job.tenantID, ref)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s.%s: %w", id, port, err)
+		}
+		state[exit.GetId()] = value
+	}
+	return state, nil
+}
+
+// readState decodes one output into the value the exit condition sees. A JSON
+// object is that object; anything else is its text, so a body that prints a
+// word is readable rather than an error nobody expected.
+func (b *builtins) readState(
+	ctx context.Context, tenantID string, ref *dholev1.OutputRef,
+) (any, error) {
+	reader, err := b.cas.Get(ctx, tenantID, ref.GetDigest())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = reader.Close() }()
+	// Bounded: an exit condition reads a small answer, and a body that wrote a
+	// gigabyte would otherwise be loaded into the plane's memory to be handed
+	// to CEL.
+	body, err := io.ReadAll(io.LimitReader(reader, maxLoopStateBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxLoopStateBytes {
+		return nil, fmt.Errorf("a loop body's output is larger than %d bytes, "+
+			"which is more than an exit condition can be asked about", maxLoopStateBytes)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(body, &object); err == nil {
+		return object, nil
+	}
+	return string(body), nil
+}
+
+func findOutput(refs []*dholev1.OutputRef, port string) *dholev1.OutputRef {
+	for _, ref := range refs {
+		if ref.GetPort() == port {
+			return ref
+		}
+	}
+	return nil
+}
+
+// recordLoop appends one of the loop's own events, always under the AUTHORED
+// loop's step id: a run view looking for what one loop did would otherwise
+// have to know that the run grew a controller step per pass. cause is returned
+// unchanged when there is one, so a caller can record and fail in one line.
+func (b *builtins) recordLoop(
+	ctx context.Context, job builtinJob, spec loop.Spec,
+	kind runstore.EventType, rec loop.Record, cause error,
+) error {
+	rec.Loop = spec.Loop
+	rec.Iteration = spec.Iteration
+	rec.Of = spec.Max
+	payload, err := json.Marshal(rec)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := b.store.Append(ctx, job.tenantID, runstore.Event{
+		RunID:   job.runID,
+		StepID:  spec.Loop,
+		Type:    kind,
+		Payload: payload,
+		At:      time.Now().UTC(),
+	}); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }
 
 // --- writing the step down -------------------------------------------------

@@ -464,13 +464,7 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		return nil
 	}
 
-	pipeline, err := s.defs.Get(ctx, tenantID, state.pipelineID, state.revisionID)
-	if err != nil {
-		return fmt.Errorf("scheduler: run %q pins revision %q: %w", runID, state.revisionID, err)
-	}
-	// The pinned definition is what was AUTHORED; the run's graph is that plus
-	// whatever its generators realised, which only the log knows.
-	pipeline, err = spliceRealised(runID, pipeline, state.fragments)
+	pipeline, err := s.graphOf(ctx, tenantID, runID, state)
 	if err != nil {
 		return err
 	}
@@ -576,6 +570,46 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		return s.Advance(ctx, tenantID, runID)
 	}
 	return nil
+}
+
+// Graph is the pipeline this run ACTUALLY has: the revision it pinned, plus
+// every fragment its generators realised, in the order the log recorded them.
+//
+// It is exported for the one caller that has to grow the graph rather than
+// read it: a `builtin:loop` step splices its next iteration into the run
+// (ADR 0022), and dynamic.Splice refuses a fragment that does not fit — which
+// it can only decide against the graph as it stands. A loop that spliced
+// against the AUTHORED definition instead would splice against a pipeline
+// missing every iteration before it, and the collision it failed to see would
+// surface here, in the scheduler, as a run that can no longer be advanced.
+func (s *Scheduler) Graph(
+	ctx context.Context, tenantID, runID string,
+) (*dholev1.Pipeline, error) {
+	if tenantID == "" {
+		return nil, fmt.Errorf("scheduler: graph: %w", runstore.ErrTenantRequired)
+	}
+	if runID == "" {
+		return nil, errors.New("scheduler: graph: run id is required")
+	}
+	state, err := s.load(ctx, tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	return s.graphOf(ctx, tenantID, runID, state)
+}
+
+// graphOf is Graph over a state that has already been folded, so one advance
+// replays the log once.
+func (s *Scheduler) graphOf(
+	ctx context.Context, tenantID, runID string, state *runState,
+) (*dholev1.Pipeline, error) {
+	pipeline, err := s.defs.Get(ctx, tenantID, state.pipelineID, state.revisionID)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: run %q pins revision %q: %w", runID, state.revisionID, err)
+	}
+	// The pinned definition is what was AUTHORED; the run's graph is that plus
+	// whatever its generators realised, which only the log knows.
+	return spliceRealised(runID, pipeline, state.fragments)
 }
 
 // takeBuiltin offers a ready step to the plane's own step types.
