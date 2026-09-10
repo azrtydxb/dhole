@@ -1,14 +1,3 @@
-// Package containerd will hold the containerd/OCI executor (Task 36, blocked
-// on this machine for want of a container runtime). What lives here now is the
-// half of Task 38 that is about pull cost rather than about running anything:
-// deciding whether an image can be mounted lazily.
-//
-// Lazy pull is one of the levers ADR 0006 names for making containers feel
-// fast without adding a backend to work around a caching deficiency. With the
-// stargz snapshotter plugged into containerd, a container starts on an
-// eStargz image after fetching its table of contents and the few chunks the
-// command actually touches, so a 500MB image running `true` reads a few
-// megabytes. Without it, the runtime pulls and unpacks every layer first.
 package containerd
 
 import (
@@ -17,6 +6,12 @@ import (
 	"slices"
 )
 
+// Lazy pull is one of the levers ADR 0006 names for making containers feel
+// fast without adding a backend to work around a caching deficiency. With the
+// stargz snapshotter plugged into containerd, a container starts on an
+// eStargz image after fetching its table of contents and the few chunks the
+// command actually touches, so a 500MB image running `true` reads a few
+// megabytes. Without it, the runtime pulls and unpacks every layer first.
 const (
 	// StargzSnapshotter is the containerd snapshotter that mounts eStargz
 	// images lazily, fetching chunks on demand.

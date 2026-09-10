@@ -66,18 +66,19 @@ func TestLazyPullFallsBackWhenSnapshottersCannotBeListed(t *testing.T) {
 //
 // It cannot run here, and it is deliberately NOT written against a fake
 // registry: a byte count asserted against a mock proves the mock, not the
-// pull. Running it needs three things this machine does not have — a reachable
-// containerd (Task 36 is recorded as blocked for exactly that reason: no
-// Docker daemon, and k3s's containerd is reachable only from a privileged pod
-// on a node), the stargz snapshotter plugged into that containerd, and Task
-// 36's containerd.New to drive the pull through it. A real registry IS
-// available at DHOLE_TEST_OCI_REGISTRY, so the missing half is the runtime.
+// pull. Task 36's containerd.New now exists to drive the pull, so what is
+// still missing is the runtime half — a reachable containerd whose stargz
+// snapshotter WORKS, and a 500MB eStargz image to pull through it. Working is
+// the operative word: the one real containerd this was run against (a k3s
+// node) advertises a stargz snapshotter that cannot create a container, which
+// is why the executor demotes it empirically rather than trusting the plugin
+// list.
 func TestLazyPullFetchesFewerBytesThanFullImage(t *testing.T) {
 	if os.Getenv("DHOLE_TEST_CONTAINERD_SOCK") == "" {
-		t.Skip("needs a containerd socket in DHOLE_TEST_CONTAINERD_SOCK with the stargz " +
-			"snapshotter plugged in, plus Task 36's containerd executor to drive the pull; " +
-			"a mock registry would prove nothing about how many bytes a real pull reads")
+		t.Skip("needs a containerd socket in DHOLE_TEST_CONTAINERD_SOCK with a WORKING stargz " +
+			"snapshotter, plus an eStargz image large enough for the byte count to mean " +
+			"something; a mock registry would prove nothing about how many bytes a real pull reads")
 	}
-	t.Skip("containerd executor (Task 36) is not implemented yet, so there is nothing to " +
-		"pull the image with; unskip together with Task 36")
+	t.Skip("no eStargz fixture image is published yet, and no containerd Dhole can reach has a " +
+		"working stargz snapshotter; unskip when both exist")
 }
