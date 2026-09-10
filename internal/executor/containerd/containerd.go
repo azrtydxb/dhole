@@ -927,6 +927,23 @@ func (s *sandbox) Put(ctx context.Context, name string, r io.Reader) error {
 	return nil
 }
 
+// Mkdir creates a directory in the sandbox, with its parents. It is idempotent:
+// a directory that already exists is not an error.
+func (s *sandbox) Mkdir(ctx context.Context, name string) error {
+	target, err := resolve(sandboxRoot, name)
+	if err != nil {
+		return err
+	}
+	code, err := s.run(ctx, "", []string{"sh", "-c", "mkdir -p " + shellQuote(target)}, nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("containerd executor: mkdir %q: %w", name, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("containerd executor: mkdir %q: exited %d", name, code)
+	}
+	return nil
+}
+
 // Get reads a file back out of the sandbox. The caller closes the reader; a
 // file that is missing or unreadable surfaces as a read error rather than as
 // silently empty content.

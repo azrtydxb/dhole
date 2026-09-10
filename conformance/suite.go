@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -905,38 +906,36 @@ func (h *harness) redemptions(handle string) int {
 }
 
 // readBlob reads an object by the key a JobStatus named. The store is a
-// directory (the harness's convention, since the contract defines no object
-// store protocol); a key that escapes it is a failure, not a read.
-// readBlob's tenant fallback. The suite's convention is that a key is a path
-// relative to DHOLE_BLOB_DIR, which is what the reference Python engine
-// implements. Dhole's own engines cannot: every stored record is tenant-scoped
-// by the spec, structurally rather than by a filter, so their keys land under
-// <tenant>/<key> and every case that read a log or an output reported the
-// object missing. The convention was not wrong so much as incomplete — it
-// could not describe a tenant-scoped store at all — so the unscoped path is
-// still tried and a store that scopes by the dispatch's tenant is now also
-// found.
+// directory — the harness's convention, since the contract names no object
+// store PROTOCOL — and within it every object is tenant-scoped, which the
+// contract now does state: an object named by key k for tenant t resolves at
+// <tenant>/<key> (docs/wire-contract.md, "The object store").
+//
+// The scoping is not decoration. The suite used to try a flat path first and
+// the tenant-scoped one after, which is a harness accommodating two engines
+// rather than a contract: an engine that wrote flat keys passed here and would
+// have served one tenant's log to another in any real deployment. A key that
+// escapes the store is a failure, not a read.
 func (h *harness) readBlob(key string) ([]byte, error) {
-	// #nosec G304 -- the key comes from the engine under test, which this
-	// package launches on purpose; the read is confined to the suite's own
-	// temporary blob directory.
-	if b, err := os.ReadFile(filepath.Join(h.blobDir, dispatchTenant, key)); err == nil {
-		return b, nil
-	}
-	path, err := h.resolve(key)
+	path, err := h.resolve(scoped(key))
 	if err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(path) // #nosec G304 -- path is confined to the harness's own temp directory by resolve.
 	if err != nil {
-		return nil, fmt.Errorf("no object at key %q under the store the engine was given as DHOLE_BLOB_DIR: %w",
-			key, err)
+		return nil, fmt.Errorf("no object at key %q for tenant %q — the suite looked at %q under the store the "+
+			"engine was given as DHOLE_BLOB_DIR, because every object is tenant-scoped: %w",
+			key, dispatchTenant, scoped(key), err)
 	}
 	return data, nil
 }
 
+// scoped is where an object named by key lives for the tenant every dispatch
+// in this suite carries.
+func scoped(key string) string { return path.Join(dispatchTenant, key) }
+
 func (h *harness) writeBlob(key string, data []byte) error {
-	path, err := h.resolve(key)
+	path, err := h.resolve(scoped(key))
 	if err != nil {
 		return err
 	}
@@ -963,12 +962,20 @@ func (h *harness) readOutput(out *dholev1.OutputRef) ([]byte, error) {
 	if key := out.GetKey(); key != "" {
 		return h.readBlob(key)
 	}
-	if hex := out.GetDigest().GetHex(); hex != "" {
+	if hexDigest := out.GetDigest().GetHex(); hexDigest != "" {
 		algo := out.GetDigest().GetAlgo()
 		if algo == "" {
 			algo = "sha256"
 		}
-		return h.readBlob("cas/" + algo + "/" + hex)
+		// The content-addressed layout the contract states:
+		// <algo>/<first two hex>/<hex>, tenant-scoped like every other object.
+		// The suite used to accept "cas/<algo>/<hex>" as well, which is one
+		// more place two engines had each guessed a shape.
+		if len(hexDigest) < 2 {
+			return nil, fmt.Errorf("the OutputRef for port %q reports a %s digest of %q, which is not a digest",
+				out.GetPort(), algo, hexDigest)
+		}
+		return h.readBlob(path.Join(algo, hexDigest[:2], hexDigest))
 	}
 	return nil, fmt.Errorf("the OutputRef for port %q names neither a key nor a digest, so the bytes it reports "+
 		"cannot be found by anybody", out.GetPort())

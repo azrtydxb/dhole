@@ -90,7 +90,7 @@ func shardsOf(generator string, ids []string) *dholev1.Pipeline {
 		p.Steps = append(p.Steps, &dholev1.Step{
 			Id:          id,
 			Name:        id,
-			PluginRef:   commandRef("printf one > shard"),
+			PluginRef:   commandRef("printf one > outputs/shard"),
 			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
 			LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
 			Inputs: []*dholev1.Port{{
@@ -299,9 +299,9 @@ func shaped(id, name string) (*dholev1.Pipeline, error) {
 			// named after its port. A step that only wrote its file produced
 			// no log at all, so "the log streams into the open page" had
 			// nothing to wait for.
-			step("first", "echo first ran; printf one > out",
+			step("first", "echo first ran; printf one > outputs/out",
 				dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
-			step("second", "echo second ran; cat in > out",
+			step("second", "echo second ran; cat inputs/in > outputs/out",
 				dholev1.EffectClass_EFFECT_CLASS_PURE, []string{"in"}, []string{"out"}),
 		}, Edges: []*dholev1.Edge{
 			{FromStep: "first", FromPort: "out", ToStep: "second", ToPort: "in"},
@@ -316,14 +316,14 @@ func shaped(id, name string) (*dholev1.Pipeline, error) {
 		// It prints BEFORE it sleeps, so there is something to tail rather
 		// than an open stream carrying nothing.
 		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
-			step("first", "echo starting; sleep 5; printf one > out",
+			step("first", "echo starting; sleep 5; printf one > outputs/out",
 				dholev1.EffectClass_EFFECT_CLASS_PURE, nil, []string{"out"}),
 		}}, nil
 	case "impure":
 		// No effect class, so cache.Eligible refuses it and the run view must
 		// show the reason rather than a blank.
 		return &dholev1.Pipeline{Id: id, Steps: []*dholev1.Step{
-			step("first", "printf one > out", dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED, nil, []string{"out"}),
+			step("first", "printf one > outputs/out", dholev1.EffectClass_EFFECT_CLASS_UNSPECIFIED, nil, []string{"out"}),
 		}}, nil
 	default:
 		return nil, fmt.Errorf("seed: unknown shape %q", name)

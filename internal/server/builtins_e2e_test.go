@@ -66,7 +66,7 @@ func TestATimerStepMakesTheRunWaitAndThePlanesOwnPollEndsTheWait(t *testing.T) {
 		Id:     "builtin-timer",
 		Tenant: &dholev1.Tenant{Id: tenantID},
 		Steps: []*dholev1.Step{
-			commandStep("work", `printf %s done > out`),
+			commandStep("work", `printf %s done > outputs/out`),
 			{
 				Id:          "hold",
 				Name:        "wait for the timer",
@@ -293,7 +293,7 @@ func TestAConfiguredScheduleAndWebhookEachStartARunThroughTheServer(t *testing.T
 		Tenant: &dholev1.Tenant{Id: tenantID},
 		Steps: []*dholev1.Step{{
 			Id:          "work",
-			PluginRef:   `command:{"args":["/bin/sh","-c","printf %s ok > out"]}`,
+			PluginRef:   `command:{"args":["/bin/sh","-c","printf %s ok > outputs/out"]}`,
 			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
 			// A free input port IS the pipeline's declared input, and what a
 			// trigger binds to (ADR 0007). There is no separate inputs list.
@@ -383,7 +383,7 @@ func TestAWebhookTriggerIsRefusedForAPipelineInputItDoesNotDeclare(t *testing.T)
 	pipeline := &dholev1.Pipeline{
 		Id:     "no-inputs",
 		Tenant: &dholev1.Tenant{Id: tenantID},
-		Steps:  []*dholev1.Step{commandStep("work", `printf %s ok > out`)},
+		Steps:  []*dholev1.Step{commandStep("work", `printf %s ok > outputs/out`)},
 	}
 	seed := startEmbeddedOn(ctx, t, dir)
 	approveThroughTheContract(ctx, t, seed, dir, pipeline)

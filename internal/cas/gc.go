@@ -209,6 +209,7 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 	// blob that survived is safe, keeping one to a blob that did not is not.
 	freed := 0
 	var deleteErr error
+	var collected []*dholev1.Digest
 	for _, text := range collectable {
 		d, err := parseDigestText(text)
 		if err != nil {
@@ -223,18 +224,14 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 			deleteErr = err
 		default:
 			freed++
-			// After the delete, never before: crediting bytes that are still
-			// there would let a tenant free storage they still hold.
-			//
-			// A failure here does NOT undo the collection — the bytes are gone
-			// and pretending otherwise would charge for them forever — but it
-			// IS returned, because a credit that silently fails is exactly the
-			// bug this hook exists to fix, one sweep later.
-			if g.Collected != nil {
-				if err := g.Collected.Collected(ctx, tenantID, d); err != nil {
-					deleteErr = fmt.Errorf("cas: crediting collected blob: %w", err)
-				}
-			}
+			// Remembered here and credited after the COMMIT, never inside the
+			// transaction. The credit reads the ledger, which lives in this
+			// same database, and a SQLite run store holds exactly one
+			// connection — so a query issued while this transaction is open
+			// waits for a connection the transaction will not release until
+			// the query returns. That is a deadlock in Go's connection pool,
+			// where no busy timeout applies: the sweep simply never finishes.
+			collected = append(collected, d)
 		}
 		if deleteErr != nil {
 			break
@@ -247,6 +244,23 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 	committed = true
 	if deleteErr != nil {
 		return freed, deleteErr
+	}
+
+	// The credits, now that the transaction is closed and the connection is
+	// free. A failure here does NOT undo the collection — the bytes are gone,
+	// and pretending otherwise would charge for them forever — but it IS
+	// returned, because a credit that silently fails is the bug this hook
+	// exists to fix, arriving one sweep later.
+	//
+	// Safe to run after the commit precisely because it is idempotent: the
+	// credit is keyed by the same digest as the charge, so a blob whose index
+	// row outlived its bytes is credited once however many sweeps see it.
+	if g.Collected != nil {
+		for _, d := range collected {
+			if err := g.Collected.Collected(ctx, tenantID, d); err != nil {
+				return freed, fmt.Errorf("cas: crediting collected blob: %w", err)
+			}
+		}
 	}
 	return freed, nil
 }

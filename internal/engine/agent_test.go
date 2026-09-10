@@ -302,7 +302,9 @@ func TestAgentMaterialisesInputsAndReportsOutputs(t *testing.T) {
 		Slots:    1,
 	})
 
-	d := newDispatch("run-6", "copy", "/bin/sh", "-c", "cat src > dst")
+	// inputs/<port> and outputs/<port>, which is the layout the wire contract
+	// states: a step that reads "src" at the sandbox root reads nothing.
+	d := newDispatch("run-6", "copy", "/bin/sh", "-c", "cat inputs/src > outputs/dst")
 	d.Step.Inputs = []*dholev1.Port{{Name: "src"}}
 	d.Step.Outputs = []*dholev1.Port{{Name: "dst"}}
 	d.Inputs = []*dholev1.InputRef{{Port: "src", Digest: digest}}
@@ -320,6 +322,93 @@ func TestAgentMaterialisesInputsAndReportsOutputs(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = r.Close() }()
 	require.Equal(t, "payload\n", string(readAll(t, r)))
+}
+
+// TestAnInputAndAnOutputSharingAPortNameDoNotCollide is why the layout is two
+// directories rather than the sandbox root. An in-place transform names its
+// input and its output the same thing; flat, the engine materialised the input
+// over the output's path and then collected the untouched input back as the
+// step's result, so a step that did nothing reported success with its own
+// input as its output.
+func TestAnInputAndAnOutputSharingAPortNameDoNotCollide(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	statuses := h.statuses(ctx, t, "run-ports", "transform")
+
+	digest, err := h.cas.Put(ctx, tenantID, strings.NewReader("before\n"))
+	require.NoError(t, err)
+
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-ports",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: process.New(),
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	d := newDispatch("run-ports", "transform", "/bin/sh", "-c", "printf 'after\n' > outputs/doc")
+	d.Step.Inputs = []*dholev1.Port{{Name: "doc"}}
+	d.Step.Outputs = []*dholev1.Port{{Name: "doc"}}
+	d.Inputs = []*dholev1.InputRef{{Port: "doc", Digest: digest}}
+	h.publishDispatch(ctx, t, d)
+
+	status := awaitTerminal(ctx, t, statuses)
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, status.GetPhase(), status.GetError())
+	require.Len(t, status.GetOutputs(), 1)
+	out := status.GetOutputs()[0]
+	require.NotEqual(t, digest.GetHex(), out.GetDigest().GetHex(),
+		"the reported output is the input's own digest: the input was materialised over the output's path")
+
+	r, err := h.cas.Get(ctx, tenantID, out.GetDigest())
+	require.NoError(t, err)
+	defer func() { _ = r.Close() }()
+	require.Equal(t, "after\n", string(readAll(t, r)))
+}
+
+// TestAStepThatOutlivesItsTimeoutIsKilledAndReportedFailedWith137: an engine
+// that enforces nothing holds its slot and renews its lease for the step's
+// full runtime, so a runaway step is indistinguishable from a slow one. The
+// phase is FAILED rather than CANCELLED because a cancellation says an
+// operator asked for this and is not retried.
+func TestAStepThatOutlivesItsTimeoutIsKilledAndReportedFailedWith137(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	statuses := h.statuses(ctx, t, "run-timeout", "sleeper")
+
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-timeout",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: process.New(),
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	d := newDispatch("run-timeout", "sleeper", "/bin/sh", "-c", "printf 'sleeping\n'; sleep 60")
+	d.Step.TimeoutSeconds = 1
+	started := time.Now()
+	h.publishDispatch(ctx, t, d)
+
+	status := awaitTerminal(ctx, t, statuses)
+	require.Equal(t, dholev1.Phase_PHASE_FAILED, status.GetPhase(), status.GetError())
+	require.Equal(t, int32(137), status.GetExitCode(),
+		"a step the engine killed reports 137 whatever the platform did to it")
+	require.Contains(t, status.GetError(), "timed out")
+	require.Less(t, time.Since(started), 30*time.Second,
+		"the step ran to completion: the timeout was not enforced")
+
+	// The evidence is durable before the status naming it is published.
+	logs, err := h.blobs.Read(ctx, tenantID, status.GetLogKey())
+	require.NoError(t, err)
+	defer func() { _ = logs.Close() }()
+	require.Contains(t, string(readAll(t, logs)), "sleeping")
 }
 
 // TestAgentRefusesSecretsItCannotRedeemWithoutLeakingTheHandle: the process

@@ -38,7 +38,7 @@ tenant:
 steps:
   - id: brief
     name: gather the brief
-    plugin_ref: 'command:{"args":["/bin/sh","-c","sleep 5; printf %s \"$BRIEF\" > brief"],"env":{"BRIEF":"release 1.4.0 changes a public interface"}}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","sleep 5; printf %s \"$BRIEF\" > outputs/brief"],"env":{"BRIEF":"release 1.4.0 changes a public interface"}}'
     effect_class: EFFECT_CLASS_PURE
     outputs:
       - name: brief
@@ -111,7 +111,7 @@ steps:
             schema_id: dhole:acceptance/decision
   - id: apply
     name: apply the release
-    plugin_ref: 'command:{"args":["/bin/sh","-c","printf applied > receipt"]}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","printf applied > outputs/receipt"]}'
     effect_class: EFFECT_CLASS_AT_MOST_ONCE
     inputs:
       - name: decision

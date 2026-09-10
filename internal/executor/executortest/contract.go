@@ -182,6 +182,27 @@ func Contract(t *testing.T, e executor.Executor) {
 		require.Equal(t, payload, got)
 	})
 
+	t.Run("mkdir creates a directory a step can redirect into, and is idempotent", func(t *testing.T) {
+		sb := acquire(t, e)
+		// The concrete failure: a step whose command is `... > outputs/copy`
+		// exits 1 with "No such file or directory" when nothing created
+		// outputs/ first, and the engine reports a broken pipeline rather
+		// than a missing sandbox convention. Every backend has to create it.
+		require.NoError(t, sb.Mkdir(t.Context(), "outputs"))
+		require.NoError(t, sb.Mkdir(t.Context(), "outputs"), "creating a directory twice must not be an error")
+
+		code, err := sb.Exec(t.Context(), executor.Cmd{Args: []string{"sh", "-c", "printf ok > outputs/copy"}})
+		require.NoError(t, err)
+		require.Equal(t, int32(0), code)
+
+		r, err := sb.Get(t.Context(), "outputs/copy")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, r.Close()) }()
+		got, err := io.ReadAll(r)
+		require.NoError(t, err)
+		require.Equal(t, "ok", string(got))
+	})
+
 	t.Run("release is idempotent", func(t *testing.T) {
 		sb, err := e.Acquire(t.Context(), executor.Spec{Lease: executor.LeaseStep})
 		require.NoError(t, err)

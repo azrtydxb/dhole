@@ -206,8 +206,29 @@ func TestARealSweepCreditsTheTenantsLedger(t *testing.T) {
 		Type: runstore.RunCompleted, At: time.Now().UTC().Add(-48 * time.Hour),
 	}))
 
-	collected, err := gc.Collect(ctx, "acme", time.Hour)
-	require.NoError(t, err)
+	// Bounded, and the bound is the test. Crediting inside the collector's own
+	// transaction deadlocks rather than fails: the credit reads the ledger in
+	// the same database, a SQLite run store holds exactly one connection, and
+	// the query waits for a connection the open transaction will not release.
+	// Nothing times out down there — no busy timeout applies to a wait in Go's
+	// connection pool — so without this the sweep hangs until the whole
+	// PACKAGE hits its deadline and the reason is a stack dump.
+	swept := make(chan int, 1)
+	sweepErr := make(chan error, 1)
+	go func() {
+		n, err := gc.Collect(ctx, "acme", time.Hour)
+		swept <- n
+		sweepErr <- err
+	}()
+
+	var collected int
+	select {
+	case collected = <-swept:
+		require.NoError(t, <-sweepErr)
+	case <-time.After(20 * time.Second):
+		t.Fatal("the sweep never returned: the credit is running inside the collector's transaction, " +
+			"and it is waiting for a connection that transaction holds")
+	}
 	require.Equal(t, 1, collected)
 
 	after, err := store.CASBytes(ctx, "acme")

@@ -36,7 +36,7 @@ steps:
   # no interval left to lose and no reason to hold the gate out of reach.
   - id: host
     name: probe the host engine
-    plugin_ref: 'command:{"args":["/bin/sh","-c","uname -s > probe"]}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","uname -s > outputs/probe"]}'
     effect_class: EFFECT_CLASS_PURE
     inputs:
       - name: event
@@ -71,7 +71,7 @@ steps:
             media_type: text/plain
   - id: cluster
     name: probe the kubernetes engine
-    plugin_ref: 'command:{"args":["/bin/sh","-c","uname -s > probe"]}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","uname -s > outputs/probe"]}'
     effect_class: EFFECT_CLASS_PURE
     capabilities:
       - CAPABILITY_NETWORK

@@ -318,9 +318,23 @@ type Step struct {
 	// asked for NETWORK and hoped, and a step that had to run as a host process
 	// could not be expressed at all. Both the planner and the dispatcher read
 	// it straight off the step, so the placement they compute cannot disagree.
-	EngineType    string `protobuf:"bytes,11,opt,name=engine_type,json=engineType,proto3" json:"engine_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EngineType string `protobuf:"bytes,11,opt,name=engine_type,json=engineType,proto3" json:"engine_type,omitempty"`
+	// How long this step may run before the engine kills it, in seconds. Zero
+	// means unbounded, which is the only compatible default: every pipeline
+	// written before this field existed carries none.
+	//
+	// It is a field rather than an environment variable because enforcement is
+	// an ENGINE obligation and an environment variable is a step's own input:
+	// a step could unset it, and an engine reading one would be taking its
+	// timeout from the thing it is timing. The conformance suite passed
+	// DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env for exactly as long as
+	// there was no field, and said so as a gap.
+	//
+	// Added in protocol version 3. An engine that negotiated 2 ignores it and
+	// runs the step unbounded — see docs/wire-contract.md, "Step timeouts".
+	TimeoutSeconds uint32 `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Step) Reset() {
@@ -428,6 +442,13 @@ func (x *Step) GetEngineType() string {
 		return x.EngineType
 	}
 	return ""
+}
+
+func (x *Step) GetTimeoutSeconds() uint32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
 }
 
 // Edge connects one step's output port to another step's input port. The DAG
@@ -590,7 +611,7 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\x04kind\"B\n" +
 	"\x04Port\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
-	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\xec\x03\n" +
+	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\x95\x04\n" +
 	"\x04Step\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -606,7 +627,8 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\x05image\x18\n" +
 	" \x01(\tR\x05image\x12\x1f\n" +
 	"\vengine_type\x18\v \x01(\tR\n" +
-	"engineType\x1a9\n" +
+	"engineType\x12'\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\rR\x0etimeoutSeconds\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +

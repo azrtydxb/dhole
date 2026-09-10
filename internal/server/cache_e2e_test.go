@@ -131,7 +131,7 @@ func warmTheFleet(ctx context.Context, t *testing.T, srv *server.Server) {
 		Steps: []*dholev1.Step{{
 			Id:          "w",
 			Name:        "warm",
-			PluginRef:   `command:{"args":["/bin/sh","-c","printf warm > out"]}`,
+			PluginRef:   `command:{"args":["/bin/sh","-c","printf warm > outputs/out"]}`,
 			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
 			Outputs: []*dholev1.Port{{
 				Name: "out",

@@ -14,7 +14,7 @@ tenant:
 steps:
   - id: a
     name: write
-    plugin_ref: 'command:{"args":["/bin/sh","-c","printf %s \"$GREETING\" > out"],"env":{"GREETING":"hello from a"}}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","printf %s \"$GREETING\" > outputs/out"],"env":{"GREETING":"hello from a"}}'
     effect_class: EFFECT_CLASS_PURE
     outputs:
       - name: out
@@ -23,7 +23,7 @@ steps:
             media_type: text/plain
   - id: b
     name: read
-    plugin_ref: 'command:{"args":["/bin/sh","-c","cat in > out; printf %s \"; b read it\" >> out"]}'
+    plugin_ref: 'command:{"args":["/bin/sh","-c","cat inputs/in > outputs/out; printf %s \"; b read it\" >> outputs/out"]}'
     effect_class: EFFECT_CLASS_PURE
     inputs:
       - name: in

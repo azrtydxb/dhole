@@ -32,25 +32,27 @@ import (
 //     learns its bus URL, its engine id, or its tier. The suite passes them in
 //     the environment: DHOLE_NATS_URL, DHOLE_ENGINE_ID, DHOLE_ENGINE_TIER.
 //  2. WHAT THE OBJECT STORE IS. JobDispatch.output_prefix and
-//     JobStatus.log_key name objects in a store whose protocol appears nowhere
-//     in the contract. The suite uses a directory, passed as DHOLE_BLOB_DIR;
-//     a key is a path relative to it.
+//     JobStatus.log_key name objects in a store whose PROTOCOL still appears
+//     nowhere in the contract. The suite uses a directory, passed as
+//     DHOLE_BLOB_DIR. The SHAPE of a key is no longer the suite's invention:
+//     the contract states that every object is tenant-scoped, so a key k for
+//     tenant t resolves at <tenant>/<key>, and a content-addressed object at
+//     <tenant>/<algo>/<first two hex>/<hex>.
 //  3. HOW A SECRET IS REDEEMED. The contract says a handle is redeemed and
 //     never says on what subject or with what message. The suite serves a
 //     core-NATS request/reply on DHOLE_SECRET_SUBJECT: the request body is the
 //     handle, the reply body is the value, and a reply beginning "ERR " is a
 //     refusal.
-//  4. WHERE A STEP'S PORTS LIVE ON DISK. The contract has ports but no file
-//     layout. The suite runs the command in a working directory holding
-//     inputs/<port>, and collects outputs/<port>.
-//  5. WHAT BOUNDS A STEP'S RUNTIME. There is no timeout field anywhere in the
-//     schema. The suite passes DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env.
-//  6. HOW A FENCE IS COMPARED. Fence tokens are opaque strings with no stated
+//  4. HOW A FENCE IS COMPARED. Fence tokens are opaque strings with no stated
 //     ordering, so no case asks an engine to decide which of two fences is
 //     newer — only whether a fence EQUALS the one it holds.
 //
 // Every one of those is reported as a contract gap, not worked around
 // silently.
+
+// killedExitCode is the exit status the contract reserves for a step the
+// engine killed, timeouts included.
+const killedExitCode int32 = 137
 
 // caseTimeout is the default bound on one case. A case that needs longer says
 // so; nothing here may hang, because a conformance run that never returns is
@@ -326,19 +328,20 @@ func cancellationCase() kase {
 // it, which is what makes a rolling upgrade unsafe.
 const cancellationBudget = 2 * time.Second
 
-// timeoutCase. The schema has NO timeout field, which is reported as a gap;
-// the suite passes one in JobDispatch.env so the obligation is at least
-// testable.
+// timeoutCase: docs/wire-contract.md, "Step timeouts". The bound is
+// Step.timeout_seconds, added in protocol version 3; it used to be
+// DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env, which was a harness
+// convention two engines had each read differently.
 func timeoutCase() kase {
 	return kase{
 		name: "step-timeout",
-		obligation: "A step that outlives its timeout is stopped by the engine and reported terminally rather " +
-			"than left running. (Nothing in the schema carries a timeout — the suite passes " +
-			"DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env, which is a harness convention, not the contract.)",
+		obligation: "A step that outlives Step.timeout_seconds is killed by the engine and reported terminally — " +
+			"a non-successful phase carrying exit_code 137 — rather than left running while the engine holds " +
+			"the slot and renews the lease.",
 		run: func(ctx context.Context, h *harness) error {
 			d := h.newDispatch("timeout")
 			d.Command = []string{"sh", "-c", "printf 'sleeping\n'; sleep 30"}
-			d.Env = map[string]string{"DHOLE_STEP_TIMEOUT_SECONDS": "2"}
+			d.Step.TimeoutSeconds = 2
 			watch := h.watchStatus(d)
 			started := time.Now()
 			if err := h.dispatch(ctx, d); err != nil {
@@ -348,7 +351,7 @@ func timeoutCase() kase {
 			defer cancel()
 			status, err := watch.await(budget, terminal, "a terminal JobStatus")
 			if err != nil {
-				return fmt.Errorf("%w for a step with DHOLE_STEP_TIMEOUT_SECONDS=2 running `sleep 30`; an engine "+
+				return fmt.Errorf("%w for a step with Step.timeout_seconds=2 running `sleep 30`; an engine "+
 					"that does not enforce the timeout holds the slot for the full 30 seconds", err)
 			}
 			if status.GetPhase() == dholev1.Phase_PHASE_SUCCEEDED {
@@ -358,6 +361,16 @@ func timeoutCase() kase {
 			if elapsed := time.Since(started); elapsed > 15*time.Second {
 				return fmt.Errorf("the terminal status arrived %s after dispatch for a 2 second timeout",
 					elapsed.Round(time.Millisecond))
+			}
+			// One code for one thing: a step the ENGINE killed reports 137 on
+			// every platform and every backend, so a plane can tell a step it
+			// stopped from one that died on its own. A negative code — the
+			// -1 a signalled process has instead of a status — is refused by
+			// the same rule, and sign-extends to ten bytes on the wire.
+			if status.GetExitCode() != killedExitCode {
+				return fmt.Errorf("the timed-out step reported exit_code %d, expected %d; a step the engine "+
+					"killed reports 137 whatever the platform did to it (docs/wire-contract.md, \"Exit codes\")",
+					status.GetExitCode(), killedExitCode)
 			}
 			return h.checkFence(d, status)
 		},
