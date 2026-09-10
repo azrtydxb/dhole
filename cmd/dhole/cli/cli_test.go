@@ -233,6 +233,7 @@ func serverCommands() []struct {
 		{"run start", []string{"run", "start", "p1"}, false},
 		{"run watch", []string{"run", "watch", "run_1"}, false},
 		{"run logs", []string{"run", "logs", "run_1"}, false},
+		{"run approve", []string{"run", "approve", "run_1", "step_a"}, false},
 	}
 }
 

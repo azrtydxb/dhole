@@ -104,6 +104,18 @@ type Store interface {
 	// PutPrincipal writes or replaces a principal.
 	PutPrincipal(ctx context.Context, p StoredPrincipal) error
 
+	// EnsurePrincipal records a principal only if the tenant does not
+	// already have one with that subject, and leaves an existing row exactly
+	// as it stands.
+	//
+	// It is separate from PutPrincipal because the upsert there replaces
+	// credential_hash, and issuing a service token to a subject who also has
+	// a password would then wipe that password. "Establish this identity if
+	// it does not exist" and "set this identity's credential" are two
+	// different intentions and only one of them is safe to perform on a
+	// principal somebody else created.
+	EnsurePrincipal(ctx context.Context, p StoredPrincipal) error
+
 	// PrincipalCredential returns one principal, or ErrNotFound.
 	PrincipalCredential(ctx context.Context, tenantID, subject string) (StoredPrincipal, error)
 

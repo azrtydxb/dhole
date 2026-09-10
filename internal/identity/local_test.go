@@ -277,6 +277,11 @@ func (r *recordingStore) PutPrincipal(context.Context, identity.StoredPrincipal)
 	return nil
 }
 
+func (r *recordingStore) EnsurePrincipal(context.Context, identity.StoredPrincipal) error {
+	r.called = true
+	return nil
+}
+
 func (r *recordingStore) PrincipalCredential(context.Context, string, string) (identity.StoredPrincipal, error) {
 	r.called = true
 	return identity.StoredPrincipal{}, identity.ErrNotFound
@@ -407,4 +412,64 @@ func TestProviderInterfaceIsSatisfied(t *testing.T) {
 	require.NotNil(t, p)
 	_, err := p.Authenticate(context.Background(), "not-a-dhole-credential")
 	require.True(t, errors.Is(err, identity.ErrCredentialFormat))
+}
+
+// TestAnIssuedTokenMakesItsSubjectAPrincipalOfTheTenant: a credential's
+// identity and an approver's identity used to live in different tables.
+// IssueToken wrote `tokens`, every "is this a principal of this tenant" check
+// reads `principals`, and a token minted the only way `dhole token issue`
+// offers therefore authenticated every API call and was then refused by
+// approval.Decide as "not a principal of tenant". One credential, two answers
+// about who holds it.
+func TestAnIssuedTokenMakesItsSubjectAPrincipalOfTheTenant(t *testing.T) {
+	ctx := context.Background()
+	local, store, _ := newLocal(t)
+
+	_, err := local.IssueToken(ctx, identity.Principal{
+		TenantID: "acme", Subject: "runner", Kind: identity.PrincipalService,
+	}, time.Hour)
+	require.NoError(t, err)
+
+	stored, err := store.PrincipalCredential(ctx, "acme", "runner")
+	require.NoError(t, err, "the subject a token was issued to is not a principal of its tenant")
+	require.Equal(t, identity.PrincipalService, stored.Kind)
+	require.Empty(t, stored.CredentialHash,
+		"a principal that authenticates by token was given a password hash")
+
+	// And only within its own tenant: the same subject elsewhere is a
+	// different person, and a token cannot establish them there.
+	_, err = store.PrincipalCredential(ctx, "other", "runner")
+	require.ErrorIs(t, err, identity.ErrNotFound)
+}
+
+// TestIssuingATokenToAPersonDoesNotDestroyTheirPassword: establishing the
+// principal at the mint must not be an upsert. PutPrincipal replaces
+// credential_hash, so issuing a service token to a human subject would have
+// silently wiped the password they log in with — a fix for one identity
+// problem creating a worse one.
+func TestIssuingATokenToAPersonDoesNotDestroyTheirPassword(t *testing.T) {
+	ctx := context.Background()
+	local, store, _ := newLocal(t)
+
+	require.NoError(t, local.CreateUser(ctx, "acme", "ada", "correct horse"))
+	before, err := store.PrincipalCredential(ctx, "acme", "ada")
+	require.NoError(t, err)
+
+	_, err = local.IssueToken(ctx, identity.Principal{
+		TenantID: "acme", Subject: "ada", Kind: identity.PrincipalService,
+	}, time.Hour)
+	require.NoError(t, err)
+
+	after, err := store.PrincipalCredential(ctx, "acme", "ada")
+	require.NoError(t, err)
+	require.Equal(t, before.CredentialHash, after.CredentialHash,
+		"issuing a token overwrote the principal's password")
+	require.Equal(t, identity.PrincipalUser, after.Kind,
+		"issuing a token demoted a person to a service")
+
+	// The password still works, which is the property the hash comparison
+	// above is only evidence for.
+	who, err := local.Authenticate(ctx, identity.PasswordCredential("acme", "ada", "correct horse"))
+	require.NoError(t, err)
+	require.Equal(t, "ada", who.Subject)
 }

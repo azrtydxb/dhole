@@ -89,7 +89,8 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 	// The credential store shares the run log's database and its dialect: a
 	// Postgres deployment whose identity tables were addressed with SQLite
 	// placeholders would refuse every login.
-	local := identity.NewLocal(identity.NewSQLStoreWithDialect(s.infra.db, s.infra.dialect))
+	principals := identity.NewSQLStoreWithDialect(s.infra.db, s.infra.dialect)
+	local := identity.NewLocal(principals)
 
 	token, err := local.IssueToken(runCtx, identity.Principal{
 		TenantID: DefaultTenant,
@@ -111,12 +112,16 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// each plane remembers privately is no concurrency check between them
 		// — both accept an edit against the same base and one of the two
 		// disappears.
-		Heads:    defstore.NewHeads(s.infra.db, s.infra.dialect),
-		Runs:     s.infra.store,
-		Advancer: s.sched,
-		Cache:    s.infra.cache,
-		Fleet:    s.fleet,
-		Drain:    s.fleet,
+		Heads: defstore.NewHeads(s.infra.db, s.infra.dialect),
+		Runs:  s.infra.store,
+		// The same principal table the credential above was authenticated
+		// against, because an approval gate is decided by the principal this
+		// plane authenticated and by nobody else.
+		Approvers: principals,
+		Advancer:  s.sched,
+		Cache:     s.infra.cache,
+		Fleet:     s.fleet,
+		Drain:     s.fleet,
 		// The plane's own bus connection, so a cancel travels the same way
 		// every dispatch does. An API reaching engines over a connection of
 		// its own would be a second control plane.
