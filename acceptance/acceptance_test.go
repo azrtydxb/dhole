@@ -15,6 +15,7 @@
 package acceptance_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -110,6 +111,11 @@ func TestAcceptanceCICacheHit(t *testing.T) {
 	require.NoError(t, err)
 
 	srv := startPlane(ctx, t, t.TempDir(), exec)
+	// The Dockerfile the definition carries, uploaded before anything runs.
+	// This is what `dhole pipeline push` does: the bytes go into the tenant's
+	// content-addressed store and the definition names their digest, so the
+	// revision pins exactly the file checked in beside this test (ADR 0023).
+	attachFiles(ctx, t, srv, pipeline, "ci")
 	watcher := watchDispatches(ctx, t, srv)
 
 	firstStart := time.Now()
@@ -150,46 +156,6 @@ func TestAcceptanceCICacheHit(t *testing.T) {
 	require.Less(t, secondDuration, firstDuration/5,
 		"a cached run does no work: it must finish in well under a fifth of the first run's %s",
 		firstDuration)
-}
-
-// TestCIPipelineBuildsTheCheckedInDockerfile keeps the checked-in Dockerfile
-// load-bearing.
-//
-// A pipeline definition has no way to reference a file from the repository:
-// a step's inputs come from edges and from nothing else (ADR 0001), and no
-// trigger input reaches a step today. So the definition carries the
-// Dockerfile's text in the step that emits it, and this test is what stops
-// that copy drifting from the file it claims to be.
-//
-// It cannot simply be implemented, which is why it is still here. "The
-// definition's repository" names something this system does not have: git is a
-// one-way mirror OUT of the definition store (ADR 0008), and the git trigger
-// parses a webhook rather than cloning, so there is no repository to read a
-// file from and no credential for one. Adding either a definition-attached
-// file or a source-fetch step is a decision about what a pipeline's source of
-// truth is; the options are written out in .procoder/plans/dhole.md under
-// "A pipeline cannot name the image its steps run in".
-func TestCIPipelineBuildsTheCheckedInDockerfile(t *testing.T) {
-	pipeline := loadPipeline(t, "ci/pipeline.yaml")
-	want, err := os.ReadFile("ci/Dockerfile")
-	require.NoError(t, err)
-
-	var source *dholev1.Step
-	for _, step := range pipeline.GetSteps() {
-		if step.GetId() == "source" {
-			source = step
-		}
-	}
-	require.NotNil(t, source, "the CI pipeline has a step that emits the Dockerfile")
-
-	ref := source.GetPluginRef()
-	require.True(t, strings.HasPrefix(ref, scheduler.CommandScheme))
-	var spec struct {
-		Env map[string]string `json:"env"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(ref, scheduler.CommandScheme)), &spec))
-	require.Equal(t, string(want), spec.Env["DOCKERFILE"],
-		"the source step emits text that is no longer the checked-in Dockerfile")
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +265,27 @@ func loadPipeline(t *testing.T, path string) *dholev1.Pipeline {
 	p, err := mirror.FromYAML(raw)
 	require.NoError(t, err)
 	return p
+}
+
+// attachFiles uploads every file the definition declares, reading it from dir
+// and filling in the digest the document deliberately leaves empty.
+//
+// The digest is COMPUTED from the checked-in file rather than written into the
+// YAML, which is the whole point of ADR 0023: a digest in the document would
+// be a second copy of the file's identity, and a second copy is what needed a
+// test to keep it equal to the first.
+func attachFiles(
+	ctx context.Context, t *testing.T, srv *server.Server, p *dholev1.Pipeline, dir string,
+) {
+	t.Helper()
+	for _, f := range p.GetFiles() {
+		content, err := os.ReadFile(filepath.Join(dir, f.GetPath()))
+		require.NoError(t, err, "the definition carries a file that is not checked in beside it")
+		digest, err := srv.CAS().Put(ctx, tenantID, bytes.NewReader(content))
+		require.NoError(t, err)
+		f.Digest = digest
+		f.SizeBytes = uint64(len(content))
+	}
 }
 
 func awaitRunCompleted(

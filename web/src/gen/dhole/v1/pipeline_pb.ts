@@ -6,6 +6,7 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type {
   Capability,
+  Digest,
   EffectClass,
   LeaseScope,
   Tenant,
@@ -19,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_pipeline: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUikQMKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUSKgoGY29uZmlnGAkgAygLMhouZGhvbGUudjEuU3RlcC5Db25maWdFbnRyeRINCgVpbWFnZRgKIAEoCRITCgtlbmdpbmVfdHlwZRgLIAEoCRIXCg90aW1lb3V0X3NlY29uZHMYDCABKA0aLQoLQ29uZmlnRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJOCgRFZGdlEhEKCWZyb21fc3RlcBgBIAEoCRIRCglmcm9tX3BvcnQYAiABKAkSDwoHdG9fc3RlcBgDIAEoCRIPCgd0b19wb3J0GAQgASgJInYKCFBpcGVsaW5lEgoKAmlkGAEgASgJEiAKBnRlbmFudBgCIAEoCzIQLmRob2xlLnYxLlRlbmFudBIdCgVzdGVwcxgDIAMoCzIOLmRob2xlLnYxLlN0ZXASHQoFZWRnZXMYBCADKAsyDi5kaG9sZS52MS5FZGdlQo4BCgxjb20uZGhvbGUudjFCDVBpcGVsaW5lUHJvdG9QAVouZ2l0aHViLmNvbS9henJ0eWR4Yi9kaG9sZS9nZW4vZGhvbGUvdjE7ZGhvbGV2MaICA0RYWKoCCERob2xlLlYxygIIRGhvbGVcVjHiAhREaG9sZVxWMVxHUEJNZXRhZGF0YeoCCURob2xlOjpWMWIGcHJvdG8z",
+    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUiXgoERmlsZRIMCgRwYXRoGAEgASgJEiAKBmRpZ2VzdBgCIAEoCzIQLmRob2xlLnYxLkRpZ2VzdBISCgpzaXplX2J5dGVzGAMgASgEEhIKCm1lZGlhX3R5cGUYBCABKAkiJwoJRmlsZUlucHV0EgwKBHBvcnQYASABKAkSDAoEcGF0aBgCIAEoCSK7AwoEU3RlcBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhIKCnBsdWdpbl9yZWYYAyABKAkSKwoMZWZmZWN0X2NsYXNzGAQgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSHgoGaW5wdXRzGAUgAygLMg4uZGhvbGUudjEuUG9ydBIfCgdvdXRwdXRzGAYgAygLMg4uZGhvbGUudjEuUG9ydBIqCgxjYXBhYmlsaXRpZXMYByADKA4yFC5kaG9sZS52MS5DYXBhYmlsaXR5EikKC2xlYXNlX3Njb3BlGAggASgOMhQuZGhvbGUudjEuTGVhc2VTY29wZRIqCgZjb25maWcYCSADKAsyGi5kaG9sZS52MS5TdGVwLkNvbmZpZ0VudHJ5Eg0KBWltYWdlGAogASgJEhMKC2VuZ2luZV90eXBlGAsgASgJEhcKD3RpbWVvdXRfc2Vjb25kcxgMIAEoDRIoCgtmaWxlX2lucHV0cxgNIAMoCzITLmRob2xlLnYxLkZpbGVJbnB1dBotCgtDb25maWdFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIk4KBEVkZ2USEQoJZnJvbV9zdGVwGAEgASgJEhEKCWZyb21fcG9ydBgCIAEoCRIPCgd0b19zdGVwGAMgASgJEg8KB3RvX3BvcnQYBCABKAkilQEKCFBpcGVsaW5lEgoKAmlkGAEgASgJEiAKBnRlbmFudBgCIAEoCzIQLmRob2xlLnYxLlRlbmFudBIdCgVzdGVwcxgDIAMoCzIOLmRob2xlLnYxLlN0ZXASHQoFZWRnZXMYBCADKAsyDi5kaG9sZS52MS5FZGdlEh0KBWZpbGVzGAUgAygLMg4uZGhvbGUudjEuRmlsZUKOAQoMY29tLmRob2xlLnYxQg1QaXBlbGluZVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
     [file_dhole_v1_common],
   );
 
@@ -138,6 +139,95 @@ export type Port = Message<"dhole.v1.Port"> & {
 export const PortSchema: GenMessage<Port> =
   /*@__PURE__*/
   messageDesc(file_dhole_v1_pipeline, 3);
+
+/**
+ * File is a byte string the DEFINITION carries, named by a path and identified
+ * by the digest of its content (ADR 0023).
+ *
+ * It exists because a pipeline could not reference a file. "Read it from the
+ * repository" names something this system does not have — git is a one-way
+ * mirror OUT of the definition store (ADR 0008) and nothing in the tree clones
+ * — so the CI acceptance pipeline embedded a Dockerfile's TEXT in a step and a
+ * test kept that copy equal to the checked-in file.
+ *
+ * The digest is what a run pins. Because the file is part of the definition it
+ * is part of the revision's content hash, so a revision names exact bytes and
+ * two definitions whose file differs are two revisions. The bytes themselves
+ * live in the tenant's content-addressed store, uploaded before the definition
+ * that names them, and they count against the tenant's max_cas_bytes like
+ * every other stored byte rather than against a ceiling invented for files.
+ *
+ * @generated from message dhole.v1.File
+ */
+export type File = Message<"dhole.v1.File"> & {
+  /**
+   * Path the file is known by within the definition. It is the name a step
+   * binds to and the name the git mirror exports it under; it is not a path
+   * on any machine.
+   *
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: dhole.v1.Digest digest = 2;
+   */
+  digest?: Digest | undefined;
+
+  /**
+   * Size of the content, for a reader that wants to show it without fetching.
+   *
+   * @generated from field: uint64 size_bytes = 3;
+   */
+  sizeBytes: bigint;
+
+  /**
+   * Advisory media type, e.g. "text/plain". Nothing type-checks against it.
+   *
+   * @generated from field: string media_type = 4;
+   */
+  mediaType: string;
+};
+
+/**
+ * Describes the message dhole.v1.File.
+ * Use `create(FileSchema)` to create a new message.
+ */
+export const FileSchema: GenMessage<File> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_pipeline, 4);
+
+/**
+ * FileInput binds one of a step's input ports to a file the definition
+ * carries, which is how a file reaches a step: as a DECLARED INPUT like any
+ * other, so ADR 0001 holds — the step inherits no ambient filesystem state,
+ * and the file's digest is already what the cache key is built from.
+ *
+ * @generated from message dhole.v1.FileInput
+ */
+export type FileInput = Message<"dhole.v1.FileInput"> & {
+  /**
+   * The step's input port this file satisfies.
+   *
+   * @generated from field: string port = 1;
+   */
+  port: string;
+
+  /**
+   * The path of the file, as the pipeline's files declare it.
+   *
+   * @generated from field: string path = 2;
+   */
+  path: string;
+};
+
+/**
+ * Describes the message dhole.v1.FileInput.
+ * Use `create(FileInputSchema)` to create a new message.
+ */
+export const FileInputSchema: GenMessage<FileInput> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_pipeline, 5);
 
 /**
  * Step is one unit of work: a plugin reference, its typed ports, the effect
@@ -265,6 +355,20 @@ export type Step = Message<"dhole.v1.Step"> & {
    * @generated from field: uint32 timeout_seconds = 12;
    */
   timeoutSeconds: number;
+
+  /**
+   * Input ports this step reads from files the DEFINITION carries rather than
+   * from an edge (ADR 0023). Each names a port of `inputs` and a path of the
+   * pipeline's `files`.
+   *
+   * It is an input like any other: the engine materialises it at
+   * inputs/<port>, and its digest is folded into the cache key alongside the
+   * digests arriving over edges — which is what makes a changed file a cache
+   * miss rather than a stale hit.
+   *
+   * @generated from field: repeated dhole.v1.FileInput file_inputs = 13;
+   */
+  fileInputs: FileInput[];
 };
 
 /**
@@ -273,7 +377,7 @@ export type Step = Message<"dhole.v1.Step"> & {
  */
 export const StepSchema: GenMessage<Step> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_pipeline, 4);
+  messageDesc(file_dhole_v1_pipeline, 6);
 
 /**
  * Edge connects one step's output port to another step's input port. The DAG
@@ -310,7 +414,7 @@ export type Edge = Message<"dhole.v1.Edge"> & {
  */
 export const EdgeSchema: GenMessage<Edge> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_pipeline, 5);
+  messageDesc(file_dhole_v1_pipeline, 7);
 
 /**
  * Pipeline is a tenant-scoped set of steps and the edges between them.
@@ -337,6 +441,14 @@ export type Pipeline = Message<"dhole.v1.Pipeline"> & {
    * @generated from field: repeated dhole.v1.Edge edges = 4;
    */
   edges: Edge[];
+
+  /**
+   * The files this definition carries, which its steps declare as inputs.
+   * Content-addressed, so the revision pins the bytes (ADR 0023).
+   *
+   * @generated from field: repeated dhole.v1.File files = 5;
+   */
+  files: File[];
 };
 
 /**
@@ -345,4 +457,4 @@ export type Pipeline = Message<"dhole.v1.Pipeline"> & {
  */
 export const PipelineSchema: GenMessage<Pipeline> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_pipeline, 6);
+  messageDesc(file_dhole_v1_pipeline, 8);

@@ -17,29 +17,33 @@
 # Every step is EFFECT_CLASS_PURE with the default step-scoped sandbox lease,
 # which is what cache.Eligible requires; the third ingredient, a stable
 # environment identity, is the sandbox image's digest and comes from the
-# executor rather than from this file. A pipeline cannot name its own image
-# today — see the finding in acceptance_test.go.
+# executor rather than from this file.
 id: acceptance-ci
 tenant:
   id: default
+# The file this pipeline builds from, carried by the DEFINITION rather than
+# read from a repository (ADR 0023). There is no repository to read from: git
+# is a one-way mirror OUT of the definition store (ADR 0008), so the bytes are
+# uploaded beside the definition and a revision pins them.
+#
+# The digest is deliberately absent HERE and filled in at push time from the
+# checked-in acceptance/ci/Dockerfile, which is what `dhole pipeline push-file`
+# does and what attachFiles does in acceptance_test.go. Writing it down in this
+# document would be a second copy of the file's identity that could drift from
+# the file — the exact defect this feature removed.
+files:
+  - path: Dockerfile
+    media_type: text/plain
 steps:
-  # The source of truth for the build, emitted rather than fetched: a step's
-  # inputs come from edges and from nothing else (ADR 0001), and no trigger
-  # input reaches a step yet, so a pipeline cannot read a file from a
-  # repository. TestCIPipelineBuildsTheCheckedInDockerfile keeps this equal
-  # to acceptance/ci/Dockerfile.
-  - id: source
-    name: checkout
-    plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"printf %s \\\"$DOCKERFILE\\\" > outputs/context\"],\"env\":{\"DOCKERFILE\":\"# The image the CI acceptance pipeline builds.\\n#\\n# It is checked in, and `TestCIPipelineBuildsTheCheckedInDockerfile` requires\\n# that the pipeline's `source` step emits exactly these bytes: a definition\\n# cannot reference a file from the repository \u2014 a step's inputs come from\\n# edges and nothing else (ADR 0001) \u2014 so the text is carried in the step, and\\n# that test is what stops the copy drifting from this file.\\nFROM busybox:1.36\\nCOPY hello /usr/local/bin/hello\\n# Never root: nothing here needs it, and the gate refuses a Dockerfile that\\n# does not say so.\\nUSER 65534:65534\\nENTRYPOINT [\\\"/usr/local/bin/hello\\\"]\\n\"}}"
-    effect_class: EFFECT_CLASS_PURE
-    outputs:
-      - name: context
-        type:
-          blob:
-            media_type: text/plain
-  # The expensive step, and the one the cache claim is about. It sleeps for
-  # five seconds on purpose: a second run that genuinely hits the cache does
-  # not spend them, and the wall-clock assertion is what notices.
+  # The expensive step, and the one the cache claim is about. Its Dockerfile
+  # arrives as a DECLARED INPUT on the `context` port, materialised by the
+  # engine at inputs/context exactly as bytes arriving over an edge would be
+  # (ADR 0001: no step inherits ambient filesystem state). Its digest is part
+  # of the cache key for free, so editing the Dockerfile is a miss rather than
+  # a stale hit.
+  #
+  # It sleeps for five seconds on purpose: a second run that genuinely hits the
+  # cache does not spend them, and the wall-clock assertion is what notices.
   - id: build
     name: build image
     plugin_ref: "command:{\"args\":[\"/bin/sh\",\"-c\",\"set -e\\nsleep 5\\nmkdir -p layer/usr/local/bin\\ncp inputs/context layer/Dockerfile\\nprintf '#!/bin/sh\\\\necho hello from dhole\\\\n' > layer/usr/local/bin/hello\\nchmod +x layer/usr/local/bin/hello\\ncd layer && find . -type f | sort | xargs sha256sum > ../outputs/image\"]}"
@@ -49,6 +53,9 @@ steps:
         type:
           blob:
             media_type: text/plain
+    file_inputs:
+      - port: context
+        path: Dockerfile
     outputs:
       - name: image
         type:
@@ -72,10 +79,6 @@ steps:
           blob:
             media_type: text/plain
 edges:
-  - from_step: source
-    from_port: context
-    to_step: build
-    to_port: context
   - from_step: build
     from_port: image
     to_step: test

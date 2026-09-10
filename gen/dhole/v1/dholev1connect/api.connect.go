@@ -50,6 +50,9 @@ const (
 	// PipelineServiceApplyOperationProcedure is the fully-qualified name of the PipelineService's
 	// ApplyOperation RPC.
 	PipelineServiceApplyOperationProcedure = "/dhole.v1.PipelineService/ApplyOperation"
+	// PipelineServicePutDefinitionFileProcedure is the fully-qualified name of the PipelineService's
+	// PutDefinitionFile RPC.
+	PipelineServicePutDefinitionFileProcedure = "/dhole.v1.PipelineService/PutDefinitionFile"
 	// PipelineServiceValidateProcedure is the fully-qualified name of the PipelineService's Validate
 	// RPC.
 	PipelineServiceValidateProcedure = "/dhole.v1.PipelineService/Validate"
@@ -211,6 +214,11 @@ type PipelineServiceClient interface {
 	GetPipeline(context.Context, *connect.Request[v1.GetPipelineRequest]) (*connect.Response[v1.GetPipelineResponse], error)
 	// ApplyOperation applies one edit and returns the diff and its inverse.
 	ApplyOperation(context.Context, *connect.Request[v1.ApplyOperationRequest]) (*connect.Response[v1.ApplyOperationResponse], error)
+	// PutDefinitionFile stores the bytes of a file a definition carries and
+	// returns the File that names them. Without it a set_file operation could
+	// only name a digest nobody had uploaded, and a definition could not carry
+	// a file at all (ADR 0023).
+	PutDefinitionFile(context.Context, *connect.Request[v1.PutDefinitionFileRequest]) (*connect.Response[v1.PutDefinitionFileResponse], error)
 	// Validate returns structured diagnostics with source positions.
 	Validate(context.Context, *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.ValidateResponse], error)
 	// Plan is a dry run: what would execute, what is a cache hit, and which
@@ -286,6 +294,12 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			httpClient,
 			baseURL+PipelineServiceApplyOperationProcedure,
 			connect.WithSchema(pipelineServiceMethods.ByName("ApplyOperation")),
+			connect.WithClientOptions(opts...),
+		),
+		putDefinitionFile: connect.NewClient[v1.PutDefinitionFileRequest, v1.PutDefinitionFileResponse](
+			httpClient,
+			baseURL+PipelineServicePutDefinitionFileProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("PutDefinitionFile")),
 			connect.WithClientOptions(opts...),
 		),
 		validate: connect.NewClient[v1.ValidateRequest, v1.ValidateResponse](
@@ -383,24 +397,25 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 
 // pipelineServiceClient implements PipelineServiceClient.
 type pipelineServiceClient struct {
-	createPipeline  *connect.Client[v1.CreatePipelineRequest, v1.CreatePipelineResponse]
-	getPipeline     *connect.Client[v1.GetPipelineRequest, v1.GetPipelineResponse]
-	applyOperation  *connect.Client[v1.ApplyOperationRequest, v1.ApplyOperationResponse]
-	validate        *connect.Client[v1.ValidateRequest, v1.ValidateResponse]
-	plan            *connect.Client[v1.PlanRequest, v1.PlanResponse]
-	getPlugin       *connect.Client[v1.GetPluginRequest, v1.GetPluginResponse]
-	publishPlugin   *connect.Client[v1.PublishPluginRequest, v1.PublishPluginResponse]
-	createTrigger   *connect.Client[v1.CreateTriggerRequest, v1.CreateTriggerResponse]
-	listTriggers    *connect.Client[v1.ListTriggersRequest, v1.ListTriggersResponse]
-	deleteTrigger   *connect.Client[v1.DeleteTriggerRequest, v1.DeleteTriggerResponse]
-	listRevisions   *connect.Client[v1.ListRevisionsRequest, v1.ListRevisionsResponse]
-	approveRevision *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
-	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
-	watchRun        *connect.Client[v1.WatchRunRequest, v1.WatchRunResponse]
-	decideApproval  *connect.Client[v1.DecideApprovalRequest, v1.DecideApprovalResponse]
-	cancelRun       *connect.Client[v1.CancelRunRequest, v1.CancelRunResponse]
-	watchPresence   *connect.Client[v1.WatchPresenceRequest, v1.WatchPresenceResponse]
-	updatePresence  *connect.Client[v1.UpdatePresenceRequest, v1.UpdatePresenceResponse]
+	createPipeline    *connect.Client[v1.CreatePipelineRequest, v1.CreatePipelineResponse]
+	getPipeline       *connect.Client[v1.GetPipelineRequest, v1.GetPipelineResponse]
+	applyOperation    *connect.Client[v1.ApplyOperationRequest, v1.ApplyOperationResponse]
+	putDefinitionFile *connect.Client[v1.PutDefinitionFileRequest, v1.PutDefinitionFileResponse]
+	validate          *connect.Client[v1.ValidateRequest, v1.ValidateResponse]
+	plan              *connect.Client[v1.PlanRequest, v1.PlanResponse]
+	getPlugin         *connect.Client[v1.GetPluginRequest, v1.GetPluginResponse]
+	publishPlugin     *connect.Client[v1.PublishPluginRequest, v1.PublishPluginResponse]
+	createTrigger     *connect.Client[v1.CreateTriggerRequest, v1.CreateTriggerResponse]
+	listTriggers      *connect.Client[v1.ListTriggersRequest, v1.ListTriggersResponse]
+	deleteTrigger     *connect.Client[v1.DeleteTriggerRequest, v1.DeleteTriggerResponse]
+	listRevisions     *connect.Client[v1.ListRevisionsRequest, v1.ListRevisionsResponse]
+	approveRevision   *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
+	startRun          *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
+	watchRun          *connect.Client[v1.WatchRunRequest, v1.WatchRunResponse]
+	decideApproval    *connect.Client[v1.DecideApprovalRequest, v1.DecideApprovalResponse]
+	cancelRun         *connect.Client[v1.CancelRunRequest, v1.CancelRunResponse]
+	watchPresence     *connect.Client[v1.WatchPresenceRequest, v1.WatchPresenceResponse]
+	updatePresence    *connect.Client[v1.UpdatePresenceRequest, v1.UpdatePresenceResponse]
 }
 
 // CreatePipeline calls dhole.v1.PipelineService.CreatePipeline.
@@ -416,6 +431,11 @@ func (c *pipelineServiceClient) GetPipeline(ctx context.Context, req *connect.Re
 // ApplyOperation calls dhole.v1.PipelineService.ApplyOperation.
 func (c *pipelineServiceClient) ApplyOperation(ctx context.Context, req *connect.Request[v1.ApplyOperationRequest]) (*connect.Response[v1.ApplyOperationResponse], error) {
 	return c.applyOperation.CallUnary(ctx, req)
+}
+
+// PutDefinitionFile calls dhole.v1.PipelineService.PutDefinitionFile.
+func (c *pipelineServiceClient) PutDefinitionFile(ctx context.Context, req *connect.Request[v1.PutDefinitionFileRequest]) (*connect.Response[v1.PutDefinitionFileResponse], error) {
+	return c.putDefinitionFile.CallUnary(ctx, req)
 }
 
 // Validate calls dhole.v1.PipelineService.Validate.
@@ -504,6 +524,11 @@ type PipelineServiceHandler interface {
 	GetPipeline(context.Context, *connect.Request[v1.GetPipelineRequest]) (*connect.Response[v1.GetPipelineResponse], error)
 	// ApplyOperation applies one edit and returns the diff and its inverse.
 	ApplyOperation(context.Context, *connect.Request[v1.ApplyOperationRequest]) (*connect.Response[v1.ApplyOperationResponse], error)
+	// PutDefinitionFile stores the bytes of a file a definition carries and
+	// returns the File that names them. Without it a set_file operation could
+	// only name a digest nobody had uploaded, and a definition could not carry
+	// a file at all (ADR 0023).
+	PutDefinitionFile(context.Context, *connect.Request[v1.PutDefinitionFileRequest]) (*connect.Response[v1.PutDefinitionFileResponse], error)
 	// Validate returns structured diagnostics with source positions.
 	Validate(context.Context, *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.ValidateResponse], error)
 	// Plan is a dry run: what would execute, what is a cache hit, and which
@@ -575,6 +600,12 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		PipelineServiceApplyOperationProcedure,
 		svc.ApplyOperation,
 		connect.WithSchema(pipelineServiceMethods.ByName("ApplyOperation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServicePutDefinitionFileHandler := connect.NewUnaryHandler(
+		PipelineServicePutDefinitionFileProcedure,
+		svc.PutDefinitionFile,
+		connect.WithSchema(pipelineServiceMethods.ByName("PutDefinitionFile")),
 		connect.WithHandlerOptions(opts...),
 	)
 	pipelineServiceValidateHandler := connect.NewUnaryHandler(
@@ -675,6 +706,8 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceGetPipelineHandler.ServeHTTP(w, r)
 		case PipelineServiceApplyOperationProcedure:
 			pipelineServiceApplyOperationHandler.ServeHTTP(w, r)
+		case PipelineServicePutDefinitionFileProcedure:
+			pipelineServicePutDefinitionFileHandler.ServeHTTP(w, r)
 		case PipelineServiceValidateProcedure:
 			pipelineServiceValidateHandler.ServeHTTP(w, r)
 		case PipelineServicePlanProcedure:
@@ -724,6 +757,10 @@ func (UnimplementedPipelineServiceHandler) GetPipeline(context.Context, *connect
 
 func (UnimplementedPipelineServiceHandler) ApplyOperation(context.Context, *connect.Request[v1.ApplyOperationRequest]) (*connect.Response[v1.ApplyOperationResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.ApplyOperation is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) PutDefinitionFile(context.Context, *connect.Request[v1.PutDefinitionFileRequest]) (*connect.Response[v1.PutDefinitionFileResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.PutDefinitionFile is not implemented"))
 }
 
 func (UnimplementedPipelineServiceHandler) Validate(context.Context, *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.ValidateResponse], error) {

@@ -375,6 +375,14 @@ exactly what it declared (ADR 0001). An output port with no file at
 `outputs/<port>` when the command exits is a FAILED step naming the port, never
 a success with an empty artifact.
 
+An input port's bytes come either from an edge — a predecessor's output — or
+from a FILE THE DEFINITION CARRIES (ADR 0023), and **an engine cannot tell the
+two apart, on purpose**. Both arrive as a `JobDispatch.inputs[]` entry naming a
+port and a digest, and both are fetched from the content-addressed store the
+same way. There is nothing for an engine to implement here: a definition file
+is an input like any other, which is exactly what makes it land in the cache
+key and keeps ADR 0001 intact.
+
 ## The object store
 
 `JobDispatch.output_prefix`, `JobDispatch.inputs[].key` and `JobStatus.log_key`

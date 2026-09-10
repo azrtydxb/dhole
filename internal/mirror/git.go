@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,12 +53,26 @@ var (
 	// caller that mirrors anyway should hear so rather than guess a URL.
 	ErrNoRemote = errors.New("no git mirror configured for tenant")
 
+	// ErrUnsafeFilePath refuses a definition file whose path would write
+	// outside the directory the mirror owns. Refused rather than sanitised,
+	// for the reason ErrUnsafePipelineID gives: a sanitised name is not the
+	// name the definition binds by, so the export would be wrong rather than
+	// merely tidy.
+	ErrUnsafeFilePath = errors.New("definition file path is not safe to export")
+
 	// ErrUnsafePipelineID refuses an id that would write outside the
 	// directory the mirror owns. It is refused rather than sanitised:
 	// sanitising invents a path nobody asked for and quietly exports the
 	// definition under a name that is not its identity.
 	ErrUnsafePipelineID = errors.New("pipeline id is not a safe file name")
 )
+
+// FileSource reads the bytes of a file a definition carries. It is the read
+// half of the content-addressed store and nothing more: the mirror exports,
+// and must never be able to write or delete what it is exporting.
+type FileSource interface {
+	Get(ctx context.Context, tenantID string, d *dholev1.Digest) (io.ReadCloser, error)
+}
 
 // DefaultBranch is the branch a mirror writes when none is configured.
 const DefaultBranch = "main"
@@ -107,6 +122,15 @@ type Config struct {
 	// WorkDir is where the per-tenant working clones live. It is a cache,
 	// not state: deleting it costs one clone.
 	WorkDir string
+
+	// Files reads the bytes of the files a definition carries (ADR 0023), so
+	// the export holds the file and not only the digest that names it. A
+	// mirror without one exports definitions alone, which is what every
+	// deployment had before a definition could carry a file; a definition
+	// that carries one is then refused rather than exported incomplete.
+	//
+	// *cas.filesystem and the quota-guarded wrapper both satisfy it.
+	Files FileSource
 
 	// Branch is the branch written in every repository, DefaultBranch when
 	// empty.
@@ -181,9 +205,18 @@ func (g *Git) Push(ctx context.Context, tenantID string, rev defstore.Revision, 
 	if err != nil {
 		return err
 	}
+	// The files are read BEFORE the push begins, and a file that cannot be
+	// read stops it: an export that quietly dropped one would look complete
+	// and would not be, and the first sign of it would be a clone missing the
+	// file its definition names.
+	files, err := g.exportedFiles(ctx, tenantID, p)
+	if err != nil {
+		g.record(tenantID, rev, err)
+		return fmt.Errorf("mirror: push revision %s for tenant %s: %w", rev.ID, tenantID, err)
+	}
 
 	err = g.retry(ctx, func() error {
-		return g.pushOnce(tenantID, remote, path, content, rev)
+		return g.pushOnce(tenantID, remote, path, content, files, rev)
 	})
 	g.record(tenantID, rev, err)
 	if err != nil {
@@ -262,7 +295,9 @@ func (g *Git) retry(ctx context.Context, attempt func() error) error {
 // built on whatever anybody else pushed and lands as a fast-forward — and
 // because the file is written wholesale rather than merged, a hand edit to it
 // is simply gone. Everything else in the repository is left exactly as it was.
-func (g *Git) pushOnce(tenantID, remote, path string, content []byte, rev defstore.Revision) error {
+func (g *Git) pushOnce(
+	tenantID, remote, path string, content []byte, files map[string][]byte, rev defstore.Revision,
+) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -288,6 +323,22 @@ func (g *Git) pushOnce(tenantID, remote, path string, content []byte, rev defsto
 	}
 	if _, err := wt.Add(path); err != nil {
 		return fmt.Errorf("stage %s: %w", path, err)
+	}
+
+	// The files the definition carries, beside it. Written wholesale like the
+	// definition, so a hand edit in a clone is simply gone on the next
+	// authoritative push — the mirror is an export in this direction too.
+	for filePath, bytes := range files {
+		full := filepath.Join(dir, filepath.FromSlash(filePath))
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", filepath.Dir(filePath), err)
+		}
+		if err := os.WriteFile(full, bytes, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", filePath, err)
+		}
+		if _, err := wt.Add(filePath); err != nil {
+			return fmt.Errorf("stage %s: %w", filePath, err)
+		}
 	}
 
 	status, err := wt.Status()
@@ -433,6 +484,72 @@ func definitionPath(id string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrUnsafePipelineID, id)
 	}
 	return definitionDir + "/" + id + ".yaml", nil
+}
+
+// exportedFiles reads every file the definition carries, keyed by the path in
+// the repository it is written to.
+//
+// A definition carrying files with no configured source is refused rather than
+// exported without them: a mirror that holds a YAML naming a Dockerfile and
+// not the Dockerfile is a copy nobody can read back, which is the one thing
+// the mirror exists to be.
+func (g *Git) exportedFiles(
+	ctx context.Context, tenantID string, p *dholev1.Pipeline,
+) (map[string][]byte, error) {
+	if len(p.GetFiles()) == 0 {
+		return nil, nil
+	}
+	if g.cfg.Files == nil {
+		return nil, fmt.Errorf(
+			"definition %s carries %d file(s) and this mirror has no file source configured",
+			p.GetId(), len(p.GetFiles()))
+	}
+
+	out := make(map[string][]byte, len(p.GetFiles()))
+	for _, f := range p.GetFiles() {
+		path, err := filePath(p.GetId(), f.GetPath())
+		if err != nil {
+			return nil, err
+		}
+		rc, err := g.cfg.Files.Get(ctx, tenantID, f.GetDigest())
+		if err != nil {
+			return nil, fmt.Errorf("read file %q of definition %s: %w", f.GetPath(), p.GetId(), err)
+		}
+		content, readErr := io.ReadAll(rc)
+		closeErr := rc.Close()
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return nil, fmt.Errorf("read file %q of definition %s: %w", f.GetPath(), p.GetId(), err)
+		}
+		out[path] = content
+	}
+	return out, nil
+}
+
+// filePath is where one of a definition's files is written in the repository:
+// beside the definition, in a directory named after it.
+//
+// Every segment is checked the way a pipeline id is. A path with a parent
+// reference in it would write outside the directory the mirror owns — over
+// another definition's export, or over something in the repository that is
+// none of the mirror's business — so it is refused rather than cleaned up.
+func filePath(pipelineID, name string) (string, error) {
+	definition, err := definitionPath(pipelineID)
+	if err != nil {
+		return "", err
+	}
+	if name == "" {
+		return "", fmt.Errorf("%w: empty", ErrUnsafeFilePath)
+	}
+	if strings.ContainsRune(name, 0) || strings.Contains(name, `\`) ||
+		filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeFilePath, name)
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", fmt.Errorf("%w: %q", ErrUnsafeFilePath, name)
+		}
+	}
+	return strings.TrimSuffix(definition, ".yaml") + ".files/" + name, nil
 }
 
 // tenantDir is the working-clone directory for one tenant, named so that a
