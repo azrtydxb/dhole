@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_pipeline: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUi+AIKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUSKgoGY29uZmlnGAkgAygLMhouZGhvbGUudjEuU3RlcC5Db25maWdFbnRyeRINCgVpbWFnZRgKIAEoCRITCgtlbmdpbmVfdHlwZRgLIAEoCRotCgtDb25maWdFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIk4KBEVkZ2USEQoJZnJvbV9zdGVwGAEgASgJEhEKCWZyb21fcG9ydBgCIAEoCRIPCgd0b19zdGVwGAMgASgJEg8KB3RvX3BvcnQYBCABKAkidgoIUGlwZWxpbmUSCgoCaWQYASABKAkSIAoGdGVuYW50GAIgASgLMhAuZGhvbGUudjEuVGVuYW50Eh0KBXN0ZXBzGAMgAygLMg4uZGhvbGUudjEuU3RlcBIdCgVlZGdlcxgEIAMoCzIOLmRob2xlLnYxLkVkZ2VCjgEKDGNvbS5kaG9sZS52MUINUGlwZWxpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
+    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUikQMKBFN0ZXASCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRISCgpwbHVnaW5fcmVmGAMgASgJEisKDGVmZmVjdF9jbGFzcxgEIAEoDjIVLmRob2xlLnYxLkVmZmVjdENsYXNzEh4KBmlucHV0cxgFIAMoCzIOLmRob2xlLnYxLlBvcnQSHwoHb3V0cHV0cxgGIAMoCzIOLmRob2xlLnYxLlBvcnQSKgoMY2FwYWJpbGl0aWVzGAcgAygOMhQuZGhvbGUudjEuQ2FwYWJpbGl0eRIpCgtsZWFzZV9zY29wZRgIIAEoDjIULmRob2xlLnYxLkxlYXNlU2NvcGUSKgoGY29uZmlnGAkgAygLMhouZGhvbGUudjEuU3RlcC5Db25maWdFbnRyeRINCgVpbWFnZRgKIAEoCRITCgtlbmdpbmVfdHlwZRgLIAEoCRIXCg90aW1lb3V0X3NlY29uZHMYDCABKA0aLQoLQ29uZmlnRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJOCgRFZGdlEhEKCWZyb21fc3RlcBgBIAEoCRIRCglmcm9tX3BvcnQYAiABKAkSDwoHdG9fc3RlcBgDIAEoCRIPCgd0b19wb3J0GAQgASgJInYKCFBpcGVsaW5lEgoKAmlkGAEgASgJEiAKBnRlbmFudBgCIAEoCzIQLmRob2xlLnYxLlRlbmFudBIdCgVzdGVwcxgDIAMoCzIOLmRob2xlLnYxLlN0ZXASHQoFZWRnZXMYBCADKAsyDi5kaG9sZS52MS5FZGdlQo4BCgxjb20uZGhvbGUudjFCDVBpcGVsaW5lUHJvdG9QAVouZ2l0aHViLmNvbS9henJ0eWR4Yi9kaG9sZS9nZW4vZGhvbGUvdjE7ZGhvbGV2MaICA0RYWKoCCERob2xlLlYxygIIRGhvbGVcVjHiAhREaG9sZVxWMVxHUEJNZXRhZGF0YeoCCURob2xlOjpWMWIGcHJvdG8z",
     [file_dhole_v1_common],
   );
 
@@ -246,6 +246,25 @@ export type Step = Message<"dhole.v1.Step"> & {
    * @generated from field: string engine_type = 11;
    */
   engineType: string;
+
+  /**
+   * How long this step may run before the engine kills it, in seconds. Zero
+   * means unbounded, which is the only compatible default: every pipeline
+   * written before this field existed carries none.
+   *
+   * It is a field rather than an environment variable because enforcement is
+   * an ENGINE obligation and an environment variable is a step's own input:
+   * a step could unset it, and an engine reading one would be taking its
+   * timeout from the thing it is timing. The conformance suite passed
+   * DHOLE_STEP_TIMEOUT_SECONDS in JobDispatch.env for exactly as long as
+   * there was no field, and said so as a gap.
+   *
+   * Added in protocol version 3. An engine that negotiated 2 ignores it and
+   * runs the step unbounded — see docs/wire-contract.md, "Step timeouts".
+   *
+   * @generated from field: uint32 timeout_seconds = 12;
+   */
+  timeoutSeconds: number;
 };
 
 /**

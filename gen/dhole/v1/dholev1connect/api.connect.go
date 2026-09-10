@@ -61,6 +61,15 @@ const (
 	// PipelineServicePublishPluginProcedure is the fully-qualified name of the PipelineService's
 	// PublishPlugin RPC.
 	PipelineServicePublishPluginProcedure = "/dhole.v1.PipelineService/PublishPlugin"
+	// PipelineServiceCreateTriggerProcedure is the fully-qualified name of the PipelineService's
+	// CreateTrigger RPC.
+	PipelineServiceCreateTriggerProcedure = "/dhole.v1.PipelineService/CreateTrigger"
+	// PipelineServiceListTriggersProcedure is the fully-qualified name of the PipelineService's
+	// ListTriggers RPC.
+	PipelineServiceListTriggersProcedure = "/dhole.v1.PipelineService/ListTriggers"
+	// PipelineServiceDeleteTriggerProcedure is the fully-qualified name of the PipelineService's
+	// DeleteTrigger RPC.
+	PipelineServiceDeleteTriggerProcedure = "/dhole.v1.PipelineService/DeleteTrigger"
 	// PipelineServiceListRevisionsProcedure is the fully-qualified name of the PipelineService's
 	// ListRevisions RPC.
 	PipelineServiceListRevisionsProcedure = "/dhole.v1.PipelineService/ListRevisions"
@@ -215,6 +224,16 @@ type PipelineServiceClient interface {
 	// the supported way to put one there; without it, GetPlugin read a store
 	// nothing on the contract could write.
 	PublishPlugin(context.Context, *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error)
+	// CreateTrigger stores an event source in the caller's tenant. Without it
+	// triggers could only be declared in the plane's own configuration file and
+	// read at start-up, so an operator without shell access to the control
+	// plane's host could not create one at all (ADR 0013).
+	CreateTrigger(context.Context, *connect.Request[v1.CreateTriggerRequest]) (*connect.Response[v1.CreateTriggerResponse], error)
+	// ListTriggers returns the tenant's triggers, stored and declared alike,
+	// and never their secrets.
+	ListTriggers(context.Context, *connect.Request[v1.ListTriggersRequest]) (*connect.Response[v1.ListTriggersResponse], error)
+	// DeleteTrigger removes one stored trigger.
+	DeleteTrigger(context.Context, *connect.Request[v1.DeleteTriggerRequest]) (*connect.Response[v1.DeleteTriggerResponse], error)
 	// ListRevisions returns a pipeline's revision history.
 	ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error)
 	// ApproveRevision promotes a revision to active.
@@ -293,6 +312,24 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("PublishPlugin")),
 			connect.WithClientOptions(opts...),
 		),
+		createTrigger: connect.NewClient[v1.CreateTriggerRequest, v1.CreateTriggerResponse](
+			httpClient,
+			baseURL+PipelineServiceCreateTriggerProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("CreateTrigger")),
+			connect.WithClientOptions(opts...),
+		),
+		listTriggers: connect.NewClient[v1.ListTriggersRequest, v1.ListTriggersResponse](
+			httpClient,
+			baseURL+PipelineServiceListTriggersProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("ListTriggers")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteTrigger: connect.NewClient[v1.DeleteTriggerRequest, v1.DeleteTriggerResponse](
+			httpClient,
+			baseURL+PipelineServiceDeleteTriggerProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("DeleteTrigger")),
+			connect.WithClientOptions(opts...),
+		),
 		listRevisions: connect.NewClient[v1.ListRevisionsRequest, v1.ListRevisionsResponse](
 			httpClient,
 			baseURL+PipelineServiceListRevisionsProcedure,
@@ -353,6 +390,9 @@ type pipelineServiceClient struct {
 	plan            *connect.Client[v1.PlanRequest, v1.PlanResponse]
 	getPlugin       *connect.Client[v1.GetPluginRequest, v1.GetPluginResponse]
 	publishPlugin   *connect.Client[v1.PublishPluginRequest, v1.PublishPluginResponse]
+	createTrigger   *connect.Client[v1.CreateTriggerRequest, v1.CreateTriggerResponse]
+	listTriggers    *connect.Client[v1.ListTriggersRequest, v1.ListTriggersResponse]
+	deleteTrigger   *connect.Client[v1.DeleteTriggerRequest, v1.DeleteTriggerResponse]
 	listRevisions   *connect.Client[v1.ListRevisionsRequest, v1.ListRevisionsResponse]
 	approveRevision *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
 	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
@@ -396,6 +436,21 @@ func (c *pipelineServiceClient) GetPlugin(ctx context.Context, req *connect.Requ
 // PublishPlugin calls dhole.v1.PipelineService.PublishPlugin.
 func (c *pipelineServiceClient) PublishPlugin(ctx context.Context, req *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error) {
 	return c.publishPlugin.CallUnary(ctx, req)
+}
+
+// CreateTrigger calls dhole.v1.PipelineService.CreateTrigger.
+func (c *pipelineServiceClient) CreateTrigger(ctx context.Context, req *connect.Request[v1.CreateTriggerRequest]) (*connect.Response[v1.CreateTriggerResponse], error) {
+	return c.createTrigger.CallUnary(ctx, req)
+}
+
+// ListTriggers calls dhole.v1.PipelineService.ListTriggers.
+func (c *pipelineServiceClient) ListTriggers(ctx context.Context, req *connect.Request[v1.ListTriggersRequest]) (*connect.Response[v1.ListTriggersResponse], error) {
+	return c.listTriggers.CallUnary(ctx, req)
+}
+
+// DeleteTrigger calls dhole.v1.PipelineService.DeleteTrigger.
+func (c *pipelineServiceClient) DeleteTrigger(ctx context.Context, req *connect.Request[v1.DeleteTriggerRequest]) (*connect.Response[v1.DeleteTriggerResponse], error) {
+	return c.deleteTrigger.CallUnary(ctx, req)
 }
 
 // ListRevisions calls dhole.v1.PipelineService.ListRevisions.
@@ -462,6 +517,16 @@ type PipelineServiceHandler interface {
 	// the supported way to put one there; without it, GetPlugin read a store
 	// nothing on the contract could write.
 	PublishPlugin(context.Context, *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error)
+	// CreateTrigger stores an event source in the caller's tenant. Without it
+	// triggers could only be declared in the plane's own configuration file and
+	// read at start-up, so an operator without shell access to the control
+	// plane's host could not create one at all (ADR 0013).
+	CreateTrigger(context.Context, *connect.Request[v1.CreateTriggerRequest]) (*connect.Response[v1.CreateTriggerResponse], error)
+	// ListTriggers returns the tenant's triggers, stored and declared alike,
+	// and never their secrets.
+	ListTriggers(context.Context, *connect.Request[v1.ListTriggersRequest]) (*connect.Response[v1.ListTriggersResponse], error)
+	// DeleteTrigger removes one stored trigger.
+	DeleteTrigger(context.Context, *connect.Request[v1.DeleteTriggerRequest]) (*connect.Response[v1.DeleteTriggerResponse], error)
 	// ListRevisions returns a pipeline's revision history.
 	ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error)
 	// ApproveRevision promotes a revision to active.
@@ -536,6 +601,24 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("PublishPlugin")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServiceCreateTriggerHandler := connect.NewUnaryHandler(
+		PipelineServiceCreateTriggerProcedure,
+		svc.CreateTrigger,
+		connect.WithSchema(pipelineServiceMethods.ByName("CreateTrigger")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServiceListTriggersHandler := connect.NewUnaryHandler(
+		PipelineServiceListTriggersProcedure,
+		svc.ListTriggers,
+		connect.WithSchema(pipelineServiceMethods.ByName("ListTriggers")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServiceDeleteTriggerHandler := connect.NewUnaryHandler(
+		PipelineServiceDeleteTriggerProcedure,
+		svc.DeleteTrigger,
+		connect.WithSchema(pipelineServiceMethods.ByName("DeleteTrigger")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pipelineServiceListRevisionsHandler := connect.NewUnaryHandler(
 		PipelineServiceListRevisionsProcedure,
 		svc.ListRevisions,
@@ -600,6 +683,12 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceGetPluginHandler.ServeHTTP(w, r)
 		case PipelineServicePublishPluginProcedure:
 			pipelineServicePublishPluginHandler.ServeHTTP(w, r)
+		case PipelineServiceCreateTriggerProcedure:
+			pipelineServiceCreateTriggerHandler.ServeHTTP(w, r)
+		case PipelineServiceListTriggersProcedure:
+			pipelineServiceListTriggersHandler.ServeHTTP(w, r)
+		case PipelineServiceDeleteTriggerProcedure:
+			pipelineServiceDeleteTriggerHandler.ServeHTTP(w, r)
 		case PipelineServiceListRevisionsProcedure:
 			pipelineServiceListRevisionsHandler.ServeHTTP(w, r)
 		case PipelineServiceApproveRevisionProcedure:
@@ -651,6 +740,18 @@ func (UnimplementedPipelineServiceHandler) GetPlugin(context.Context, *connect.R
 
 func (UnimplementedPipelineServiceHandler) PublishPlugin(context.Context, *connect.Request[v1.PublishPluginRequest]) (*connect.Response[v1.PublishPluginResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.PublishPlugin is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) CreateTrigger(context.Context, *connect.Request[v1.CreateTriggerRequest]) (*connect.Response[v1.CreateTriggerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.CreateTrigger is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) ListTriggers(context.Context, *connect.Request[v1.ListTriggersRequest]) (*connect.Response[v1.ListTriggersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.ListTriggers is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) DeleteTrigger(context.Context, *connect.Request[v1.DeleteTriggerRequest]) (*connect.Response[v1.DeleteTriggerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.DeleteTrigger is not implemented"))
 }
 
 func (UnimplementedPipelineServiceHandler) ListRevisions(context.Context, *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error) {

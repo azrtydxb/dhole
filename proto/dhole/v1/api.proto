@@ -380,6 +380,87 @@ message PublishPluginResponse {
   Plugin plugin = 1;
 }
 
+// Trigger is one configured event source, as the contract carries it.
+//
+// It is on the contract because it was not: triggers could only be declared on
+// the plane's own configuration file and read at start-up by `--triggers`, so
+// creating one was a capability reserved for whoever could edit a file on the
+// control plane's host and restart it. The GUI and an agent can do neither,
+// which is exactly what ADR 0013 refuses. A trigger binds to a pipeline's
+// typed inputs (ADR 0007), and the binding is checked when the trigger is
+// CREATED rather than at 3am inside the first step of a run that should never
+// have started.
+message Trigger {
+  // Identity within the tenant. A schedule's id is the key of its row, so two
+  // planes running the same id run ONE schedule between them.
+  string id = 1;
+  // "schedule", "http" or "git".
+  string kind = 2;
+  // The pipeline this trigger drives. Its ACTIVE revision is resolved when
+  // the trigger fires, never pinned when it is created.
+  string pipeline_id = 3;
+  // Each of the pipeline's declared inputs to the field of this trigger's own
+  // event that fills it. The pipeline's vocabulary is the stable one.
+  map<string, string> input_mapping = 4;
+  // A five- or six-field cron expression. Schedules only.
+  string expression = 5;
+  // Mark every value this trigger produces as tainted (ADR 0015).
+  bool untrusted = 6;
+  // The shared secret a forge signs its webhooks with. Git triggers only, and
+  // required for them: an endpoint that can verify nothing is an
+  // unauthenticated way to start somebody's pipeline.
+  //
+  // WRITE-ONLY. It is never returned by ListTriggers — a contract that read
+  // back the secret it was given would make every credential-listing client a
+  // way to exfiltrate it. has_secret says whether one is held.
+  string secret = 7;
+  // Read-only: this trigger is DECLARED in the plane's `--triggers` file
+  // rather than stored. A declared trigger wins over a stored one of the same
+  // id and cannot be changed or deleted through this contract, because the
+  // file is what the next restart will read.
+  bool declared = 8;
+  // Read-only: a secret is held for this trigger.
+  bool has_secret = 9;
+}
+
+// CreateTriggerRequest stores one trigger in the caller's tenant.
+//
+// The tenant is the credential's, like everywhere else. The binding is
+// validated against the pipeline's active revision before anything is stored:
+// a trigger naming an input the pipeline does not declare is a mistake made
+// while wiring it up, and finding it now is worth far more than finding it in
+// a run.
+message CreateTriggerRequest {
+  Trigger trigger = 1;
+}
+
+// CreateTriggerResponse is the trigger as it is now stored, without its
+// secret.
+message CreateTriggerResponse {
+  Trigger trigger = 1;
+}
+
+// ListTriggersRequest asks for every trigger the caller's tenant has: the
+// stored ones and the ones the plane's own configuration declares, so an
+// operator mid-migration can see both and which is which.
+message ListTriggersRequest {}
+
+// ListTriggersResponse is those triggers, in id order and without secrets.
+message ListTriggersResponse {
+  repeated Trigger triggers = 1;
+}
+
+// DeleteTriggerRequest removes one stored trigger. A DECLARED trigger is
+// refused: it lives in the plane's configuration file, and deleting the row
+// would leave the file to put it back at the next restart.
+message DeleteTriggerRequest {
+  string trigger_id = 1;
+}
+
+// DeleteTriggerResponse is empty. The trigger is gone; there is nothing left
+// to say about it.
+message DeleteTriggerResponse {}
+
 // CancelRunRequest stops a run.
 //
 // Cancellation is a control-plane act with an engine-side half: the run is
@@ -568,6 +649,16 @@ service PipelineService {
   // the supported way to put one there; without it, GetPlugin read a store
   // nothing on the contract could write.
   rpc PublishPlugin(PublishPluginRequest) returns (PublishPluginResponse);
+  // CreateTrigger stores an event source in the caller's tenant. Without it
+  // triggers could only be declared in the plane's own configuration file and
+  // read at start-up, so an operator without shell access to the control
+  // plane's host could not create one at all (ADR 0013).
+  rpc CreateTrigger(CreateTriggerRequest) returns (CreateTriggerResponse);
+  // ListTriggers returns the tenant's triggers, stored and declared alike,
+  // and never their secrets.
+  rpc ListTriggers(ListTriggersRequest) returns (ListTriggersResponse);
+  // DeleteTrigger removes one stored trigger.
+  rpc DeleteTrigger(DeleteTriggerRequest) returns (DeleteTriggerResponse);
   // ListRevisions returns a pipeline's revision history.
   rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
   // ApproveRevision promotes a revision to active.

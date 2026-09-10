@@ -163,6 +163,13 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// answered "this server was built without an execution environment"
 		// on every deployment that is not the single binary (ADR 0021).
 		Tier: DefaultTier,
+		// The trigger table, and the triggers this plane's own `--triggers`
+		// file declares. Both, because a create has to know which ids the
+		// file already claims: a declared trigger wins, and a row that
+		// shadowed one would fire or not depending on a file the caller
+		// cannot see.
+		TriggerStore:     s.triggerStore(),
+		DeclaredTriggers: s.declaredTriggers(),
 	}
 
 	apiSrv, err := api.NewServer(cfg)
@@ -341,9 +348,12 @@ func (s *Server) rootHandler(api http.Handler) http.Handler {
 	// are registered ahead of the app's catch-all so a deep link cannot
 	// shadow one, and they are outside isAPIPath's two prefixes so neither
 	// can shadow the other.
-	if s.triggerMux != nil {
-		mux.Handle(TriggerPrefix, s.triggerMux)
-	}
+	// Mounted unconditionally and dispatched through serveTrigger, which
+	// reads the mux as it stands at REQUEST time. A trigger created through
+	// the contract has to be served without a restart, and a handler that
+	// closed over the mux this plane happened to have at start-up never
+	// could be.
+	mux.HandleFunc(TriggerPrefix, s.serveTrigger)
 
 	if app, ok := webui.Handler(); ok {
 		mux.Handle("/", app)

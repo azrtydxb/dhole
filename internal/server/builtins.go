@@ -17,6 +17,7 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/identity"
+	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/steps/approval"
@@ -75,6 +76,11 @@ const builtinWorkers = 4
 // advance tick — 250ms later — offers it again.
 const builtinQueue = 64
 
+// minRenewInterval floors how often a builtin step's lease is renewed. A
+// deployment that configured a very short TTL would otherwise renew in a tight
+// loop, which is a write to the bus per step per few milliseconds.
+const minRenewInterval = 100 * time.Millisecond
+
 // llmRetention is how long a recorded prompt is kept. Prompts are the one
 // thing here that can carry a person's data, so they expire.
 const llmRetention = 24 * time.Hour
@@ -106,6 +112,17 @@ type builtins struct {
 	resume approval.Resumer
 	models ModelFactory
 	calls  *llm.Recorder
+	// leases is what makes a builtin step recoverable. A step this plane runs
+	// is leased exactly as a step dispatched to an engine is, because the
+	// sweeper that recovers a dead holder knows nothing else: before this, a
+	// builtin wrote STEP_DISPATCHED and held no lease, so a plane that died
+	// mid-step left the run in flight forever with nothing anywhere able to
+	// notice — no engine would ever report a status for it either.
+	leases lease.Manager
+	// ttl is how long that lease lives without renewal, and it is the
+	// scheduler's own so that a plane holding one engine step and one builtin
+	// step gives both back at the same moment.
+	ttl time.Duration
 
 	jobs chan builtinJob
 
@@ -186,7 +203,7 @@ func (b *builtins) work(ctx context.Context) {
 
 // run does one builtin step, and records the failure if it cannot.
 func (b *builtins) run(ctx context.Context, job builtinJob) {
-	err := b.execute(ctx, job)
+	token, err := b.execute(ctx, job)
 	if err == nil || ctx.Err() != nil {
 		return
 	}
@@ -196,22 +213,31 @@ func (b *builtins) run(ctx context.Context, job builtinJob) {
 	// The failure goes in the LOG, not only in the log file. A step that
 	// failed and said so nowhere the run can see leaves the run open forever,
 	// which is the failure mode this project is most afraid of.
-	if writeErr := b.fail(ctx, job, err); writeErr != nil && ctx.Err() == nil {
+	if writeErr := b.fail(ctx, job, token, err); writeErr != nil && ctx.Err() == nil {
 		b.log.Error("recording a builtin step's failure",
 			"run", job.runID, "step", job.step.GetId(), "error", writeErr)
 	}
 }
 
-func (b *builtins) execute(ctx context.Context, job builtinJob) error {
+// execute runs one builtin step and returns the lease it held while doing it.
+//
+// The token travels back so a FAILURE can be written under the same fence the
+// dispatch was: a step whose lease was swept while it ran belongs to a later
+// attempt, and recording this one's failure against it would fail work that is
+// currently running.
+func (b *builtins) execute(ctx context.Context, job builtinJob) (lease.Token, error) {
 	switch ref := job.step.GetPluginRef(); ref {
 	case BuiltinApproval:
-		return b.request(ctx, job)
+		// A gate holds no lease. It is not work in flight: it writes no
+		// STEP_DISPATCHED, nothing is running, and a run waiting at one is
+		// waiting for a person rather than for a process that could die.
+		return lease.Token{}, b.request(ctx, job)
 	case BuiltinLLM:
 		return b.attempt(ctx, job, b.callModel)
 	case BuiltinLoop:
 		return b.attempt(ctx, job, b.iterate)
 	default:
-		return fmt.Errorf("no step type is registered for %q", ref)
+		return lease.Token{}, fmt.Errorf("no step type is registered for %q", ref)
 	}
 }
 
@@ -263,27 +289,42 @@ func (b *builtins) gate(tenantID string) (*approval.Step, error) {
 // declared AT_MOST_ONCE, whose whole promise is that it is not. Observed the
 // first time a model call was allowed to fail.
 //
-// The cost of writing it is that a builtin in flight when the plane dies is
-// not recovered: it holds no lease, so the orphan sweeper cannot see it. That
-// is a real gap and it is named here rather than hidden — closing it means
-// giving a builtin step a lease of its own.
+// The step is LEASED for as long as it runs, under the same manager and the
+// same fence discipline a dispatch to an engine uses. Without that a builtin
+// in flight when the plane died was not recovered at all: the sweeper finds
+// dead holders through lease.Expire and by no other means, and no engine would
+// ever report a status for a step no engine ever had — so the run stayed in
+// flight forever. The lease is claimed BEFORE the dispatch event, because a
+// dispatch that is recorded and then fails to be leased is the same
+// unrecoverable step this closes.
 func (b *builtins) attempt(
 	ctx context.Context, job builtinJob,
 	do func(ctx context.Context, job builtinJob, attempt uint32) ([]*dholev1.OutputRef, error),
-) error {
+) (lease.Token, error) {
 	attempt, err := b.nextAttempt(ctx, job)
 	if err != nil {
-		return err
+		return lease.Token{}, err
 	}
+	token, err := b.claim(ctx, job, attempt)
+	if err != nil {
+		return lease.Token{}, err
+	}
+	// Renewed for as long as the work runs. A model call or a bounded loop can
+	// outlive the TTL, and a holder that stopped proving it was alive while it
+	// was still working would have its own step swept out from under it.
+	stopRenewing := b.renew(ctx, token)
+	defer stopRenewing()
+
 	payload, err := scheduler.MarshalDispatched(scheduler.Dispatched{
 		Attempt: attempt,
+		Fence:   token.Fence,
 		// Never cacheable, and the reason travels with the dispatch so that
 		// nobody hunts for a cache that was never going to apply: a model
 		// answer is not reproducible and a loop is not one step.
 		CacheIneligibleReason: "the control plane runs this step type itself",
 	})
 	if err != nil {
-		return err
+		return token, err
 	}
 	if err := b.store.Append(ctx, job.tenantID, runstore.Event{
 		RunID:   job.runID,
@@ -293,14 +334,73 @@ func (b *builtins) attempt(
 		Payload: payload,
 		At:      time.Now().UTC(),
 	}); err != nil {
-		return err
+		return token, err
 	}
 
 	outputs, err := do(ctx, job, attempt)
 	if err != nil {
-		return err
+		return token, err
 	}
-	return b.succeed(ctx, job, attempt, outputs)
+	return token, b.succeed(ctx, job, attempt, token, outputs)
+}
+
+// claim takes the lease on a builtin step for one attempt.
+func (b *builtins) claim(ctx context.Context, job builtinJob, attempt uint32) (lease.Token, error) {
+	if b.leases == nil {
+		// Never in the shipping binary: Start builds this with the lease
+		// manager it already opened. A builtins assembled without one would
+		// run steps nothing could recover, which is the bug this closes, so it
+		// refuses rather than running them.
+		return lease.Token{}, errors.New(
+			"this control plane has no lease manager, so a builtin step it ran could never be recovered")
+	}
+	token, err := b.leases.Claim(ctx, job.tenantID, job.runID, job.step.GetId(), attempt, b.ttl)
+	if err != nil {
+		return lease.Token{}, fmt.Errorf("claiming the lease on %s/%s: %w",
+			job.runID, job.step.GetId(), err)
+	}
+	return token, nil
+}
+
+// renew keeps a lease alive while the step runs, and returns the function that
+// stops doing so.
+//
+// A third of the TTL, so two renewals can be missed — a slow database, a
+// reconnecting bus — before a step that is perfectly healthy is declared lost.
+func (b *builtins) renew(ctx context.Context, token lease.Token) func() {
+	renewCtx, stop := context.WithCancel(ctx)
+	interval := b.ttl / 3
+	if interval < minRenewInterval {
+		interval = minRenewInterval
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-renewCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			if err := b.leases.Renew(renewCtx, token); err != nil {
+				if errors.Is(err, lease.ErrFenced) {
+					// Somebody else holds this step now. Renewing again would
+					// be this plane propping up a claim it has lost; the work
+					// carries on and its result is refused at the commit.
+					return
+				}
+				if renewCtx.Err() == nil {
+					b.log.Warn("renewing a builtin step's lease", "fence", token.Fence, "error", err)
+				}
+			}
+		}
+	}()
+	return func() {
+		stop()
+		<-done
+	}
 }
 
 // nextAttempt is one past the highest attempt the LOG records for this step.
@@ -492,9 +592,10 @@ func (b *builtins) emit(
 // have: the scheduler reads a STEP_SUCCEEDED payload as a JobStatus, and a
 // second encoding here would be a second thing to keep in step.
 func (b *builtins) succeed(
-	ctx context.Context, job builtinJob, attempt uint32, outputs []*dholev1.OutputRef,
+	ctx context.Context, job builtinJob, attempt uint32,
+	token lease.Token, outputs []*dholev1.OutputRef,
 ) error {
-	return b.terminal(ctx, job, attempt, &dholev1.JobStatus{
+	return b.terminal(ctx, job, attempt, token, &dholev1.JobStatus{
 		RunId:   job.runID,
 		StepId:  job.step.GetId(),
 		Attempt: attempt,
@@ -506,7 +607,7 @@ func (b *builtins) succeed(
 // fail writes the step's failure with the reason attached. The reason is the
 // whole value of the event: a builtin step that failed silently would leave
 // the run open with nothing to read.
-func (b *builtins) fail(ctx context.Context, job builtinJob, cause error) error {
+func (b *builtins) fail(ctx context.Context, job builtinJob, token lease.Token, cause error) error {
 	attempt, err := b.attemptOf(ctx, job)
 	if err != nil {
 		return err
@@ -517,7 +618,7 @@ func (b *builtins) fail(ctx context.Context, job builtinJob, cause error) error 
 		// instead of arming forever.
 		attempt = 1
 	}
-	return b.terminal(ctx, job, attempt, &dholev1.JobStatus{
+	return b.terminal(ctx, job, attempt, token, &dholev1.JobStatus{
 		RunId:   job.runID,
 		StepId:  job.step.GetId(),
 		Attempt: attempt,
@@ -535,22 +636,45 @@ func (b *builtins) attemptOf(ctx context.Context, job builtinJob) (uint32, error
 	return next - 1, nil
 }
 
+// terminal writes a builtin step's verdict, under the fence it was run with.
+//
+// The fence is validated INSIDE the transaction that writes the event, exactly
+// as a cache hit's is: a step whose lease was swept while it ran has been given
+// to a later attempt, and a verdict written after that would decide a step
+// somebody else is currently running. A fenced write is discarded silently —
+// this plane did nothing wrong, it was simply overtaken.
 func (b *builtins) terminal(
 	ctx context.Context, job builtinJob, attempt uint32,
-	status *dholev1.JobStatus, kind runstore.EventType,
+	token lease.Token, status *dholev1.JobStatus, kind runstore.EventType,
 ) error {
 	payload, err := proto.Marshal(status)
 	if err != nil {
 		return err
 	}
-	return b.store.Append(ctx, job.tenantID, runstore.Event{
+	event := runstore.Event{
 		RunID:   job.runID,
 		StepID:  job.step.GetId(),
 		Attempt: attempt,
 		Type:    kind,
 		Payload: payload,
 		At:      time.Now().UTC(),
+	}
+	if token.Value == "" || b.leases == nil {
+		// A gate: no lease was ever taken, because nothing was in flight.
+		return b.store.Append(ctx, job.tenantID, event)
+	}
+	err = b.store.WithTx(ctx, func(tx runstore.Tx) error {
+		if err := tx.Append(ctx, job.tenantID, event); err != nil {
+			return err
+		}
+		return b.leases.Validate(ctx, token)
 	})
+	if errors.Is(err, lease.ErrFenced) {
+		b.log.Warn("a builtin step's result was superseded before it was recorded",
+			"run", job.runID, "step", job.step.GetId(), "attempt", attempt)
+		return nil
+	}
+	return err
 }
 
 // structuredSchema is the JSON schema a step's first output port declares, or
@@ -594,7 +718,10 @@ func (s *Server) Approve(
 // already opened. Nothing here opens a store, a bus or a connection of its
 // own: a step type writing to a second copy of the run log would be a
 // different system from the one the scheduler is advancing.
-func newBuiltins(in *infra, models ModelFactory, resume approval.Resumer, log *slog.Logger) (*builtins, error) {
+func newBuiltins(
+	in *infra, models ModelFactory, resume approval.Resumer,
+	leases lease.Manager, ttl time.Duration, log *slog.Logger,
+) (*builtins, error) {
 	calls, err := llm.NewRecorder(in.db, in.dialect, llmRetention)
 	if err != nil {
 		return nil, err
@@ -607,6 +734,8 @@ func newBuiltins(in *infra, models ModelFactory, resume approval.Resumer, log *s
 		resume:    resume,
 		models:    models,
 		calls:     calls,
+		leases:    leases,
+		ttl:       ttl,
 		jobs:      make(chan builtinJob, builtinQueue),
 		running:   map[string]bool{},
 	}, nil

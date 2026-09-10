@@ -2460,6 +2460,411 @@ func (x *PublishPluginResponse) GetPlugin() *Plugin {
 	return nil
 }
 
+// Trigger is one configured event source, as the contract carries it.
+//
+// It is on the contract because it was not: triggers could only be declared on
+// the plane's own configuration file and read at start-up by `--triggers`, so
+// creating one was a capability reserved for whoever could edit a file on the
+// control plane's host and restart it. The GUI and an agent can do neither,
+// which is exactly what ADR 0013 refuses. A trigger binds to a pipeline's
+// typed inputs (ADR 0007), and the binding is checked when the trigger is
+// CREATED rather than at 3am inside the first step of a run that should never
+// have started.
+type Trigger struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Identity within the tenant. A schedule's id is the key of its row, so two
+	// planes running the same id run ONE schedule between them.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// "schedule", "http" or "git".
+	Kind string `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	// The pipeline this trigger drives. Its ACTIVE revision is resolved when
+	// the trigger fires, never pinned when it is created.
+	PipelineId string `protobuf:"bytes,3,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	// Each of the pipeline's declared inputs to the field of this trigger's own
+	// event that fills it. The pipeline's vocabulary is the stable one.
+	InputMapping map[string]string `protobuf:"bytes,4,rep,name=input_mapping,json=inputMapping,proto3" json:"input_mapping,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// A five- or six-field cron expression. Schedules only.
+	Expression string `protobuf:"bytes,5,opt,name=expression,proto3" json:"expression,omitempty"`
+	// Mark every value this trigger produces as tainted (ADR 0015).
+	Untrusted bool `protobuf:"varint,6,opt,name=untrusted,proto3" json:"untrusted,omitempty"`
+	// The shared secret a forge signs its webhooks with. Git triggers only, and
+	// required for them: an endpoint that can verify nothing is an
+	// unauthenticated way to start somebody's pipeline.
+	//
+	// WRITE-ONLY. It is never returned by ListTriggers — a contract that read
+	// back the secret it was given would make every credential-listing client a
+	// way to exfiltrate it. has_secret says whether one is held.
+	Secret string `protobuf:"bytes,7,opt,name=secret,proto3" json:"secret,omitempty"`
+	// Read-only: this trigger is DECLARED in the plane's `--triggers` file
+	// rather than stored. A declared trigger wins over a stored one of the same
+	// id and cannot be changed or deleted through this contract, because the
+	// file is what the next restart will read.
+	Declared bool `protobuf:"varint,8,opt,name=declared,proto3" json:"declared,omitempty"`
+	// Read-only: a secret is held for this trigger.
+	HasSecret     bool `protobuf:"varint,9,opt,name=has_secret,json=hasSecret,proto3" json:"has_secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Trigger) Reset() {
+	*x = Trigger{}
+	mi := &file_dhole_v1_api_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Trigger) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Trigger) ProtoMessage() {}
+
+func (x *Trigger) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Trigger.ProtoReflect.Descriptor instead.
+func (*Trigger) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *Trigger) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Trigger) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *Trigger) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *Trigger) GetInputMapping() map[string]string {
+	if x != nil {
+		return x.InputMapping
+	}
+	return nil
+}
+
+func (x *Trigger) GetExpression() string {
+	if x != nil {
+		return x.Expression
+	}
+	return ""
+}
+
+func (x *Trigger) GetUntrusted() bool {
+	if x != nil {
+		return x.Untrusted
+	}
+	return false
+}
+
+func (x *Trigger) GetSecret() string {
+	if x != nil {
+		return x.Secret
+	}
+	return ""
+}
+
+func (x *Trigger) GetDeclared() bool {
+	if x != nil {
+		return x.Declared
+	}
+	return false
+}
+
+func (x *Trigger) GetHasSecret() bool {
+	if x != nil {
+		return x.HasSecret
+	}
+	return false
+}
+
+// CreateTriggerRequest stores one trigger in the caller's tenant.
+//
+// The tenant is the credential's, like everywhere else. The binding is
+// validated against the pipeline's active revision before anything is stored:
+// a trigger naming an input the pipeline does not declare is a mistake made
+// while wiring it up, and finding it now is worth far more than finding it in
+// a run.
+type CreateTriggerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Trigger       *Trigger               `protobuf:"bytes,1,opt,name=trigger,proto3" json:"trigger,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTriggerRequest) Reset() {
+	*x = CreateTriggerRequest{}
+	mi := &file_dhole_v1_api_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTriggerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTriggerRequest) ProtoMessage() {}
+
+func (x *CreateTriggerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTriggerRequest.ProtoReflect.Descriptor instead.
+func (*CreateTriggerRequest) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *CreateTriggerRequest) GetTrigger() *Trigger {
+	if x != nil {
+		return x.Trigger
+	}
+	return nil
+}
+
+// CreateTriggerResponse is the trigger as it is now stored, without its
+// secret.
+type CreateTriggerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Trigger       *Trigger               `protobuf:"bytes,1,opt,name=trigger,proto3" json:"trigger,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTriggerResponse) Reset() {
+	*x = CreateTriggerResponse{}
+	mi := &file_dhole_v1_api_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTriggerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTriggerResponse) ProtoMessage() {}
+
+func (x *CreateTriggerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTriggerResponse.ProtoReflect.Descriptor instead.
+func (*CreateTriggerResponse) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *CreateTriggerResponse) GetTrigger() *Trigger {
+	if x != nil {
+		return x.Trigger
+	}
+	return nil
+}
+
+// ListTriggersRequest asks for every trigger the caller's tenant has: the
+// stored ones and the ones the plane's own configuration declares, so an
+// operator mid-migration can see both and which is which.
+type ListTriggersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTriggersRequest) Reset() {
+	*x = ListTriggersRequest{}
+	mi := &file_dhole_v1_api_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTriggersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTriggersRequest) ProtoMessage() {}
+
+func (x *ListTriggersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTriggersRequest.ProtoReflect.Descriptor instead.
+func (*ListTriggersRequest) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{41}
+}
+
+// ListTriggersResponse is those triggers, in id order and without secrets.
+type ListTriggersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Triggers      []*Trigger             `protobuf:"bytes,1,rep,name=triggers,proto3" json:"triggers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTriggersResponse) Reset() {
+	*x = ListTriggersResponse{}
+	mi := &file_dhole_v1_api_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTriggersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTriggersResponse) ProtoMessage() {}
+
+func (x *ListTriggersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTriggersResponse.ProtoReflect.Descriptor instead.
+func (*ListTriggersResponse) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *ListTriggersResponse) GetTriggers() []*Trigger {
+	if x != nil {
+		return x.Triggers
+	}
+	return nil
+}
+
+// DeleteTriggerRequest removes one stored trigger. A DECLARED trigger is
+// refused: it lives in the plane's configuration file, and deleting the row
+// would leave the file to put it back at the next restart.
+type DeleteTriggerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TriggerId     string                 `protobuf:"bytes,1,opt,name=trigger_id,json=triggerId,proto3" json:"trigger_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTriggerRequest) Reset() {
+	*x = DeleteTriggerRequest{}
+	mi := &file_dhole_v1_api_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTriggerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTriggerRequest) ProtoMessage() {}
+
+func (x *DeleteTriggerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTriggerRequest.ProtoReflect.Descriptor instead.
+func (*DeleteTriggerRequest) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *DeleteTriggerRequest) GetTriggerId() string {
+	if x != nil {
+		return x.TriggerId
+	}
+	return ""
+}
+
+// DeleteTriggerResponse is empty. The trigger is gone; there is nothing left
+// to say about it.
+type DeleteTriggerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTriggerResponse) Reset() {
+	*x = DeleteTriggerResponse{}
+	mi := &file_dhole_v1_api_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTriggerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTriggerResponse) ProtoMessage() {}
+
+func (x *DeleteTriggerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_api_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTriggerResponse.ProtoReflect.Descriptor instead.
+func (*DeleteTriggerResponse) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{44}
+}
+
 // CancelRunRequest stops a run.
 //
 // Cancellation is a control-plane act with an engine-side half: the run is
@@ -2478,7 +2883,7 @@ type CancelRunRequest struct {
 
 func (x *CancelRunRequest) Reset() {
 	*x = CancelRunRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[38]
+	mi := &file_dhole_v1_api_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2490,7 +2895,7 @@ func (x *CancelRunRequest) String() string {
 func (*CancelRunRequest) ProtoMessage() {}
 
 func (x *CancelRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[38]
+	mi := &file_dhole_v1_api_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2503,7 +2908,7 @@ func (x *CancelRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRunRequest.ProtoReflect.Descriptor instead.
 func (*CancelRunRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{38}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *CancelRunRequest) GetRunId() string {
@@ -2533,7 +2938,7 @@ type CancelledStep struct {
 
 func (x *CancelledStep) Reset() {
 	*x = CancelledStep{}
-	mi := &file_dhole_v1_api_proto_msgTypes[39]
+	mi := &file_dhole_v1_api_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2545,7 +2950,7 @@ func (x *CancelledStep) String() string {
 func (*CancelledStep) ProtoMessage() {}
 
 func (x *CancelledStep) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[39]
+	mi := &file_dhole_v1_api_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2558,7 +2963,7 @@ func (x *CancelledStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelledStep.ProtoReflect.Descriptor instead.
 func (*CancelledStep) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{39}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *CancelledStep) GetStepId() string {
@@ -2595,7 +3000,7 @@ type CancelRunResponse struct {
 
 func (x *CancelRunResponse) Reset() {
 	*x = CancelRunResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[40]
+	mi := &file_dhole_v1_api_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2607,7 +3012,7 @@ func (x *CancelRunResponse) String() string {
 func (*CancelRunResponse) ProtoMessage() {}
 
 func (x *CancelRunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[40]
+	mi := &file_dhole_v1_api_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2620,7 +3025,7 @@ func (x *CancelRunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRunResponse.ProtoReflect.Descriptor instead.
 func (*CancelRunResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{40}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *CancelRunResponse) GetRunId() string {
@@ -2657,7 +3062,7 @@ type Engine struct {
 
 func (x *Engine) Reset() {
 	*x = Engine{}
-	mi := &file_dhole_v1_api_proto_msgTypes[41]
+	mi := &file_dhole_v1_api_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2669,7 +3074,7 @@ func (x *Engine) String() string {
 func (*Engine) ProtoMessage() {}
 
 func (x *Engine) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[41]
+	mi := &file_dhole_v1_api_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2682,7 +3087,7 @@ func (x *Engine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Engine.ProtoReflect.Descriptor instead.
 func (*Engine) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{41}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *Engine) GetId() string {
@@ -2751,7 +3156,7 @@ type ListEnginesRequest struct {
 
 func (x *ListEnginesRequest) Reset() {
 	*x = ListEnginesRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[42]
+	mi := &file_dhole_v1_api_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2763,7 +3168,7 @@ func (x *ListEnginesRequest) String() string {
 func (*ListEnginesRequest) ProtoMessage() {}
 
 func (x *ListEnginesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[42]
+	mi := &file_dhole_v1_api_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2776,7 +3181,7 @@ func (x *ListEnginesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnginesRequest.ProtoReflect.Descriptor instead.
 func (*ListEnginesRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{42}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{49}
 }
 
 // ListEnginesResponse is the live fleet, by engine id.
@@ -2789,7 +3194,7 @@ type ListEnginesResponse struct {
 
 func (x *ListEnginesResponse) Reset() {
 	*x = ListEnginesResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[43]
+	mi := &file_dhole_v1_api_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2801,7 +3206,7 @@ func (x *ListEnginesResponse) String() string {
 func (*ListEnginesResponse) ProtoMessage() {}
 
 func (x *ListEnginesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[43]
+	mi := &file_dhole_v1_api_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2814,7 +3219,7 @@ func (x *ListEnginesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnginesResponse.ProtoReflect.Descriptor instead.
 func (*ListEnginesResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{43}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ListEnginesResponse) GetEngines() []*Engine {
@@ -2834,7 +3239,7 @@ type DrainEngineRequest struct {
 
 func (x *DrainEngineRequest) Reset() {
 	*x = DrainEngineRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[44]
+	mi := &file_dhole_v1_api_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2846,7 +3251,7 @@ func (x *DrainEngineRequest) String() string {
 func (*DrainEngineRequest) ProtoMessage() {}
 
 func (x *DrainEngineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[44]
+	mi := &file_dhole_v1_api_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2859,7 +3264,7 @@ func (x *DrainEngineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainEngineRequest.ProtoReflect.Descriptor instead.
 func (*DrainEngineRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{44}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *DrainEngineRequest) GetEngineId() string {
@@ -2882,7 +3287,7 @@ type DrainEngineResponse struct {
 
 func (x *DrainEngineResponse) Reset() {
 	*x = DrainEngineResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[45]
+	mi := &file_dhole_v1_api_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2894,7 +3299,7 @@ func (x *DrainEngineResponse) String() string {
 func (*DrainEngineResponse) ProtoMessage() {}
 
 func (x *DrainEngineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[45]
+	mi := &file_dhole_v1_api_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2907,7 +3312,7 @@ func (x *DrainEngineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainEngineResponse.ProtoReflect.Descriptor instead.
 func (*DrainEngineResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{45}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *DrainEngineResponse) GetEngine() *Engine {
@@ -2930,7 +3335,7 @@ type Cursor struct {
 
 func (x *Cursor) Reset() {
 	*x = Cursor{}
-	mi := &file_dhole_v1_api_proto_msgTypes[46]
+	mi := &file_dhole_v1_api_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2942,7 +3347,7 @@ func (x *Cursor) String() string {
 func (*Cursor) ProtoMessage() {}
 
 func (x *Cursor) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[46]
+	mi := &file_dhole_v1_api_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2955,7 +3360,7 @@ func (x *Cursor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cursor.ProtoReflect.Descriptor instead.
 func (*Cursor) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{46}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *Cursor) GetX() float64 {
@@ -3002,7 +3407,7 @@ type PresenceEvent struct {
 
 func (x *PresenceEvent) Reset() {
 	*x = PresenceEvent{}
-	mi := &file_dhole_v1_api_proto_msgTypes[47]
+	mi := &file_dhole_v1_api_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3014,7 +3419,7 @@ func (x *PresenceEvent) String() string {
 func (*PresenceEvent) ProtoMessage() {}
 
 func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[47]
+	mi := &file_dhole_v1_api_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3027,7 +3432,7 @@ func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceEvent.ProtoReflect.Descriptor instead.
 func (*PresenceEvent) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{47}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *PresenceEvent) GetPrincipal() string {
@@ -3089,7 +3494,7 @@ type WatchPresenceRequest struct {
 
 func (x *WatchPresenceRequest) Reset() {
 	*x = WatchPresenceRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[48]
+	mi := &file_dhole_v1_api_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3101,7 +3506,7 @@ func (x *WatchPresenceRequest) String() string {
 func (*WatchPresenceRequest) ProtoMessage() {}
 
 func (x *WatchPresenceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[48]
+	mi := &file_dhole_v1_api_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3114,7 +3519,7 @@ func (x *WatchPresenceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPresenceRequest.ProtoReflect.Descriptor instead.
 func (*WatchPresenceRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{48}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *WatchPresenceRequest) GetPipelineId() string {
@@ -3157,7 +3562,7 @@ type WatchPresenceResponse struct {
 
 func (x *WatchPresenceResponse) Reset() {
 	*x = WatchPresenceResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[49]
+	mi := &file_dhole_v1_api_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3169,7 +3574,7 @@ func (x *WatchPresenceResponse) String() string {
 func (*WatchPresenceResponse) ProtoMessage() {}
 
 func (x *WatchPresenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[49]
+	mi := &file_dhole_v1_api_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3182,7 +3587,7 @@ func (x *WatchPresenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPresenceResponse.ProtoReflect.Descriptor instead.
 func (*WatchPresenceResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{49}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *WatchPresenceResponse) GetEvent() *PresenceEvent {
@@ -3211,7 +3616,7 @@ type UpdatePresenceRequest struct {
 
 func (x *UpdatePresenceRequest) Reset() {
 	*x = UpdatePresenceRequest{}
-	mi := &file_dhole_v1_api_proto_msgTypes[50]
+	mi := &file_dhole_v1_api_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3223,7 +3628,7 @@ func (x *UpdatePresenceRequest) String() string {
 func (*UpdatePresenceRequest) ProtoMessage() {}
 
 func (x *UpdatePresenceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[50]
+	mi := &file_dhole_v1_api_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3236,7 +3641,7 @@ func (x *UpdatePresenceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePresenceRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePresenceRequest) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{50}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *UpdatePresenceRequest) GetPipelineId() string {
@@ -3284,7 +3689,7 @@ type UpdatePresenceResponse struct {
 
 func (x *UpdatePresenceResponse) Reset() {
 	*x = UpdatePresenceResponse{}
-	mi := &file_dhole_v1_api_proto_msgTypes[51]
+	mi := &file_dhole_v1_api_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3296,7 +3701,7 @@ func (x *UpdatePresenceResponse) String() string {
 func (*UpdatePresenceResponse) ProtoMessage() {}
 
 func (x *UpdatePresenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_api_proto_msgTypes[51]
+	mi := &file_dhole_v1_api_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3309,7 +3714,7 @@ func (x *UpdatePresenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePresenceResponse.ProtoReflect.Descriptor instead.
 func (*UpdatePresenceResponse) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_api_proto_rawDescGZIP(), []int{51}
+	return file_dhole_v1_api_proto_rawDescGZIP(), []int{58}
 }
 
 var File_dhole_v1_api_proto protoreflect.FileDescriptor
@@ -3481,7 +3886,35 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x14PublishPluginRequest\x12(\n" +
 	"\x06plugin\x18\x01 \x01(\v2\x10.dhole.v1.PluginR\x06plugin\"A\n" +
 	"\x15PublishPluginResponse\x12(\n" +
-	"\x06plugin\x18\x01 \x01(\v2\x10.dhole.v1.PluginR\x06plugin\"A\n" +
+	"\x06plugin\x18\x01 \x01(\v2\x10.dhole.v1.PluginR\x06plugin\"\xea\x02\n" +
+	"\aTrigger\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1f\n" +
+	"\vpipeline_id\x18\x03 \x01(\tR\n" +
+	"pipelineId\x12H\n" +
+	"\rinput_mapping\x18\x04 \x03(\v2#.dhole.v1.Trigger.InputMappingEntryR\finputMapping\x12\x1e\n" +
+	"\n" +
+	"expression\x18\x05 \x01(\tR\n" +
+	"expression\x12\x1c\n" +
+	"\tuntrusted\x18\x06 \x01(\bR\tuntrusted\x12\x16\n" +
+	"\x06secret\x18\a \x01(\tR\x06secret\x12\x1a\n" +
+	"\bdeclared\x18\b \x01(\bR\bdeclared\x12\x1d\n" +
+	"\n" +
+	"has_secret\x18\t \x01(\bR\thasSecret\x1a?\n" +
+	"\x11InputMappingEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
+	"\x14CreateTriggerRequest\x12+\n" +
+	"\atrigger\x18\x01 \x01(\v2\x11.dhole.v1.TriggerR\atrigger\"D\n" +
+	"\x15CreateTriggerResponse\x12+\n" +
+	"\atrigger\x18\x01 \x01(\v2\x11.dhole.v1.TriggerR\atrigger\"\x15\n" +
+	"\x13ListTriggersRequest\"E\n" +
+	"\x14ListTriggersResponse\x12-\n" +
+	"\btriggers\x18\x01 \x03(\v2\x11.dhole.v1.TriggerR\btriggers\"5\n" +
+	"\x14DeleteTriggerRequest\x12\x1d\n" +
+	"\n" +
+	"trigger_id\x18\x01 \x01(\tR\ttriggerId\"\x17\n" +
+	"\x15DeleteTriggerResponse\"A\n" +
 	"\x10CancelRunRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"_\n" +
@@ -3544,7 +3977,7 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x13CHANGE_KIND_CHANGED\x10\x032\xa7\x01\n" +
 	"\rEngineService\x12J\n" +
 	"\vListEngines\x12\x1c.dhole.v1.ListEnginesRequest\x1a\x1d.dhole.v1.ListEnginesResponse\x12J\n" +
-	"\vDrainEngine\x12\x1c.dhole.v1.DrainEngineRequest\x1a\x1d.dhole.v1.DrainEngineResponse2\x8f\t\n" +
+	"\vDrainEngine\x12\x1c.dhole.v1.DrainEngineRequest\x1a\x1d.dhole.v1.DrainEngineResponse2\x82\v\n" +
 	"\x0fPipelineService\x12S\n" +
 	"\x0eCreatePipeline\x12\x1f.dhole.v1.CreatePipelineRequest\x1a .dhole.v1.CreatePipelineResponse\x12J\n" +
 	"\vGetPipeline\x12\x1c.dhole.v1.GetPipelineRequest\x1a\x1d.dhole.v1.GetPipelineResponse\x12S\n" +
@@ -3553,6 +3986,9 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x04Plan\x12\x15.dhole.v1.PlanRequest\x1a\x16.dhole.v1.PlanResponse\x12D\n" +
 	"\tGetPlugin\x12\x1a.dhole.v1.GetPluginRequest\x1a\x1b.dhole.v1.GetPluginResponse\x12P\n" +
 	"\rPublishPlugin\x12\x1e.dhole.v1.PublishPluginRequest\x1a\x1f.dhole.v1.PublishPluginResponse\x12P\n" +
+	"\rCreateTrigger\x12\x1e.dhole.v1.CreateTriggerRequest\x1a\x1f.dhole.v1.CreateTriggerResponse\x12M\n" +
+	"\fListTriggers\x12\x1d.dhole.v1.ListTriggersRequest\x1a\x1e.dhole.v1.ListTriggersResponse\x12P\n" +
+	"\rDeleteTrigger\x12\x1e.dhole.v1.DeleteTriggerRequest\x1a\x1f.dhole.v1.DeleteTriggerResponse\x12P\n" +
 	"\rListRevisions\x12\x1e.dhole.v1.ListRevisionsRequest\x1a\x1f.dhole.v1.ListRevisionsResponse\x12V\n" +
 	"\x0fApproveRevision\x12 .dhole.v1.ApproveRevisionRequest\x1a!.dhole.v1.ApproveRevisionResponse\x12A\n" +
 	"\bStartRun\x12\x19.dhole.v1.StartRunRequest\x1a\x1a.dhole.v1.StartRunResponse\x12C\n" +
@@ -3576,7 +4012,7 @@ func file_dhole_v1_api_proto_rawDescGZIP() []byte {
 }
 
 var file_dhole_v1_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_dhole_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
+var file_dhole_v1_api_proto_msgTypes = make([]protoimpl.MessageInfo, 61)
 var file_dhole_v1_api_proto_goTypes = []any{
 	(ChangeKind)(0),                 // 0: dhole.v1.ChangeKind
 	(*AddStep)(nil),                 // 1: dhole.v1.AddStep
@@ -3617,33 +4053,41 @@ var file_dhole_v1_api_proto_goTypes = []any{
 	(*GetPluginResponse)(nil),       // 36: dhole.v1.GetPluginResponse
 	(*PublishPluginRequest)(nil),    // 37: dhole.v1.PublishPluginRequest
 	(*PublishPluginResponse)(nil),   // 38: dhole.v1.PublishPluginResponse
-	(*CancelRunRequest)(nil),        // 39: dhole.v1.CancelRunRequest
-	(*CancelledStep)(nil),           // 40: dhole.v1.CancelledStep
-	(*CancelRunResponse)(nil),       // 41: dhole.v1.CancelRunResponse
-	(*Engine)(nil),                  // 42: dhole.v1.Engine
-	(*ListEnginesRequest)(nil),      // 43: dhole.v1.ListEnginesRequest
-	(*ListEnginesResponse)(nil),     // 44: dhole.v1.ListEnginesResponse
-	(*DrainEngineRequest)(nil),      // 45: dhole.v1.DrainEngineRequest
-	(*DrainEngineResponse)(nil),     // 46: dhole.v1.DrainEngineResponse
-	(*Cursor)(nil),                  // 47: dhole.v1.Cursor
-	(*PresenceEvent)(nil),           // 48: dhole.v1.PresenceEvent
-	(*WatchPresenceRequest)(nil),    // 49: dhole.v1.WatchPresenceRequest
-	(*WatchPresenceResponse)(nil),   // 50: dhole.v1.WatchPresenceResponse
-	(*UpdatePresenceRequest)(nil),   // 51: dhole.v1.UpdatePresenceRequest
-	(*UpdatePresenceResponse)(nil),  // 52: dhole.v1.UpdatePresenceResponse
-	nil,                             // 53: dhole.v1.Revision.LockfileEntry
-	(*Step)(nil),                    // 54: dhole.v1.Step
-	(*Edge)(nil),                    // 55: dhole.v1.Edge
-	(*Pipeline)(nil),                // 56: dhole.v1.Pipeline
-	(*Digest)(nil),                  // 57: dhole.v1.Digest
-	(EffectClass)(0),                // 58: dhole.v1.EffectClass
-	(Capability)(0),                 // 59: dhole.v1.Capability
-	(*InFlight)(nil),                // 60: dhole.v1.InFlight
+	(*Trigger)(nil),                 // 39: dhole.v1.Trigger
+	(*CreateTriggerRequest)(nil),    // 40: dhole.v1.CreateTriggerRequest
+	(*CreateTriggerResponse)(nil),   // 41: dhole.v1.CreateTriggerResponse
+	(*ListTriggersRequest)(nil),     // 42: dhole.v1.ListTriggersRequest
+	(*ListTriggersResponse)(nil),    // 43: dhole.v1.ListTriggersResponse
+	(*DeleteTriggerRequest)(nil),    // 44: dhole.v1.DeleteTriggerRequest
+	(*DeleteTriggerResponse)(nil),   // 45: dhole.v1.DeleteTriggerResponse
+	(*CancelRunRequest)(nil),        // 46: dhole.v1.CancelRunRequest
+	(*CancelledStep)(nil),           // 47: dhole.v1.CancelledStep
+	(*CancelRunResponse)(nil),       // 48: dhole.v1.CancelRunResponse
+	(*Engine)(nil),                  // 49: dhole.v1.Engine
+	(*ListEnginesRequest)(nil),      // 50: dhole.v1.ListEnginesRequest
+	(*ListEnginesResponse)(nil),     // 51: dhole.v1.ListEnginesResponse
+	(*DrainEngineRequest)(nil),      // 52: dhole.v1.DrainEngineRequest
+	(*DrainEngineResponse)(nil),     // 53: dhole.v1.DrainEngineResponse
+	(*Cursor)(nil),                  // 54: dhole.v1.Cursor
+	(*PresenceEvent)(nil),           // 55: dhole.v1.PresenceEvent
+	(*WatchPresenceRequest)(nil),    // 56: dhole.v1.WatchPresenceRequest
+	(*WatchPresenceResponse)(nil),   // 57: dhole.v1.WatchPresenceResponse
+	(*UpdatePresenceRequest)(nil),   // 58: dhole.v1.UpdatePresenceRequest
+	(*UpdatePresenceResponse)(nil),  // 59: dhole.v1.UpdatePresenceResponse
+	nil,                             // 60: dhole.v1.Revision.LockfileEntry
+	nil,                             // 61: dhole.v1.Trigger.InputMappingEntry
+	(*Step)(nil),                    // 62: dhole.v1.Step
+	(*Edge)(nil),                    // 63: dhole.v1.Edge
+	(*Pipeline)(nil),                // 64: dhole.v1.Pipeline
+	(*Digest)(nil),                  // 65: dhole.v1.Digest
+	(EffectClass)(0),                // 66: dhole.v1.EffectClass
+	(Capability)(0),                 // 67: dhole.v1.Capability
+	(*InFlight)(nil),                // 68: dhole.v1.InFlight
 }
 var file_dhole_v1_api_proto_depIdxs = []int32{
-	54, // 0: dhole.v1.AddStep.step:type_name -> dhole.v1.Step
-	55, // 1: dhole.v1.Connect.edge:type_name -> dhole.v1.Edge
-	55, // 2: dhole.v1.RemoveEdge.edge:type_name -> dhole.v1.Edge
+	62, // 0: dhole.v1.AddStep.step:type_name -> dhole.v1.Step
+	63, // 1: dhole.v1.Connect.edge:type_name -> dhole.v1.Edge
+	63, // 2: dhole.v1.RemoveEdge.edge:type_name -> dhole.v1.Edge
 	1,  // 3: dhole.v1.Operation.add_step:type_name -> dhole.v1.AddStep
 	3,  // 4: dhole.v1.Operation.connect:type_name -> dhole.v1.Connect
 	5,  // 5: dhole.v1.Operation.set_property:type_name -> dhole.v1.SetProperty
@@ -3652,78 +4096,88 @@ var file_dhole_v1_api_proto_depIdxs = []int32{
 	2,  // 8: dhole.v1.Operation.remove_step:type_name -> dhole.v1.RemoveStep
 	6,  // 9: dhole.v1.Operation.set_step_config:type_name -> dhole.v1.SetStepConfig
 	0,  // 10: dhole.v1.Change.kind:type_name -> dhole.v1.ChangeKind
-	55, // 11: dhole.v1.Change.edge:type_name -> dhole.v1.Edge
+	63, // 11: dhole.v1.Change.edge:type_name -> dhole.v1.Edge
 	9,  // 12: dhole.v1.Diff.changes:type_name -> dhole.v1.Change
-	53, // 13: dhole.v1.Revision.lockfile:type_name -> dhole.v1.Revision.LockfileEntry
-	56, // 14: dhole.v1.GetPipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
+	60, // 13: dhole.v1.Revision.lockfile:type_name -> dhole.v1.Revision.LockfileEntry
+	64, // 14: dhole.v1.GetPipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
 	11, // 15: dhole.v1.GetPipelineResponse.revision:type_name -> dhole.v1.Revision
-	56, // 16: dhole.v1.CreatePipelineRequest.pipeline:type_name -> dhole.v1.Pipeline
-	56, // 17: dhole.v1.CreatePipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
+	64, // 16: dhole.v1.CreatePipelineRequest.pipeline:type_name -> dhole.v1.Pipeline
+	64, // 17: dhole.v1.CreatePipelineResponse.pipeline:type_name -> dhole.v1.Pipeline
 	11, // 18: dhole.v1.CreatePipelineResponse.revision:type_name -> dhole.v1.Revision
 	8,  // 19: dhole.v1.ApplyOperationRequest.operation:type_name -> dhole.v1.Operation
 	11, // 20: dhole.v1.ApplyOperationResponse.revision:type_name -> dhole.v1.Revision
 	10, // 21: dhole.v1.ApplyOperationResponse.diff:type_name -> dhole.v1.Diff
 	8,  // 22: dhole.v1.ApplyOperationResponse.inverse:type_name -> dhole.v1.Operation
-	56, // 23: dhole.v1.ApplyOperationResponse.pipeline:type_name -> dhole.v1.Pipeline
-	56, // 24: dhole.v1.ValidateRequest.pipeline:type_name -> dhole.v1.Pipeline
+	64, // 23: dhole.v1.ApplyOperationResponse.pipeline:type_name -> dhole.v1.Pipeline
+	64, // 24: dhole.v1.ValidateRequest.pipeline:type_name -> dhole.v1.Pipeline
 	19, // 25: dhole.v1.ValidateResponse.diagnostics:type_name -> dhole.v1.Diagnostic
 	22, // 26: dhole.v1.PlanResponse.steps:type_name -> dhole.v1.PlannedStep
 	11, // 27: dhole.v1.ListRevisionsResponse.revisions:type_name -> dhole.v1.Revision
 	11, // 28: dhole.v1.ApproveRevisionResponse.revision:type_name -> dhole.v1.Revision
-	57, // 29: dhole.v1.Plugin.digest:type_name -> dhole.v1.Digest
-	58, // 30: dhole.v1.Plugin.effect_class:type_name -> dhole.v1.EffectClass
-	59, // 31: dhole.v1.Plugin.capabilities:type_name -> dhole.v1.Capability
+	65, // 29: dhole.v1.Plugin.digest:type_name -> dhole.v1.Digest
+	66, // 30: dhole.v1.Plugin.effect_class:type_name -> dhole.v1.EffectClass
+	67, // 31: dhole.v1.Plugin.capabilities:type_name -> dhole.v1.Capability
 	35, // 32: dhole.v1.GetPluginResponse.plugin:type_name -> dhole.v1.Plugin
 	35, // 33: dhole.v1.PublishPluginRequest.plugin:type_name -> dhole.v1.Plugin
 	35, // 34: dhole.v1.PublishPluginResponse.plugin:type_name -> dhole.v1.Plugin
-	40, // 35: dhole.v1.CancelRunResponse.steps:type_name -> dhole.v1.CancelledStep
-	59, // 36: dhole.v1.Engine.capabilities:type_name -> dhole.v1.Capability
-	60, // 37: dhole.v1.Engine.in_flight:type_name -> dhole.v1.InFlight
-	42, // 38: dhole.v1.ListEnginesResponse.engines:type_name -> dhole.v1.Engine
-	42, // 39: dhole.v1.DrainEngineResponse.engine:type_name -> dhole.v1.Engine
-	47, // 40: dhole.v1.PresenceEvent.cursor:type_name -> dhole.v1.Cursor
-	47, // 41: dhole.v1.WatchPresenceRequest.cursor:type_name -> dhole.v1.Cursor
-	48, // 42: dhole.v1.WatchPresenceResponse.event:type_name -> dhole.v1.PresenceEvent
-	47, // 43: dhole.v1.UpdatePresenceRequest.cursor:type_name -> dhole.v1.Cursor
-	43, // 44: dhole.v1.EngineService.ListEngines:input_type -> dhole.v1.ListEnginesRequest
-	45, // 45: dhole.v1.EngineService.DrainEngine:input_type -> dhole.v1.DrainEngineRequest
-	14, // 46: dhole.v1.PipelineService.CreatePipeline:input_type -> dhole.v1.CreatePipelineRequest
-	12, // 47: dhole.v1.PipelineService.GetPipeline:input_type -> dhole.v1.GetPipelineRequest
-	16, // 48: dhole.v1.PipelineService.ApplyOperation:input_type -> dhole.v1.ApplyOperationRequest
-	18, // 49: dhole.v1.PipelineService.Validate:input_type -> dhole.v1.ValidateRequest
-	21, // 50: dhole.v1.PipelineService.Plan:input_type -> dhole.v1.PlanRequest
-	34, // 51: dhole.v1.PipelineService.GetPlugin:input_type -> dhole.v1.GetPluginRequest
-	37, // 52: dhole.v1.PipelineService.PublishPlugin:input_type -> dhole.v1.PublishPluginRequest
-	24, // 53: dhole.v1.PipelineService.ListRevisions:input_type -> dhole.v1.ListRevisionsRequest
-	26, // 54: dhole.v1.PipelineService.ApproveRevision:input_type -> dhole.v1.ApproveRevisionRequest
-	28, // 55: dhole.v1.PipelineService.StartRun:input_type -> dhole.v1.StartRunRequest
-	30, // 56: dhole.v1.PipelineService.WatchRun:input_type -> dhole.v1.WatchRunRequest
-	32, // 57: dhole.v1.PipelineService.DecideApproval:input_type -> dhole.v1.DecideApprovalRequest
-	39, // 58: dhole.v1.PipelineService.CancelRun:input_type -> dhole.v1.CancelRunRequest
-	49, // 59: dhole.v1.PipelineService.WatchPresence:input_type -> dhole.v1.WatchPresenceRequest
-	51, // 60: dhole.v1.PipelineService.UpdatePresence:input_type -> dhole.v1.UpdatePresenceRequest
-	44, // 61: dhole.v1.EngineService.ListEngines:output_type -> dhole.v1.ListEnginesResponse
-	46, // 62: dhole.v1.EngineService.DrainEngine:output_type -> dhole.v1.DrainEngineResponse
-	15, // 63: dhole.v1.PipelineService.CreatePipeline:output_type -> dhole.v1.CreatePipelineResponse
-	13, // 64: dhole.v1.PipelineService.GetPipeline:output_type -> dhole.v1.GetPipelineResponse
-	17, // 65: dhole.v1.PipelineService.ApplyOperation:output_type -> dhole.v1.ApplyOperationResponse
-	20, // 66: dhole.v1.PipelineService.Validate:output_type -> dhole.v1.ValidateResponse
-	23, // 67: dhole.v1.PipelineService.Plan:output_type -> dhole.v1.PlanResponse
-	36, // 68: dhole.v1.PipelineService.GetPlugin:output_type -> dhole.v1.GetPluginResponse
-	38, // 69: dhole.v1.PipelineService.PublishPlugin:output_type -> dhole.v1.PublishPluginResponse
-	25, // 70: dhole.v1.PipelineService.ListRevisions:output_type -> dhole.v1.ListRevisionsResponse
-	27, // 71: dhole.v1.PipelineService.ApproveRevision:output_type -> dhole.v1.ApproveRevisionResponse
-	29, // 72: dhole.v1.PipelineService.StartRun:output_type -> dhole.v1.StartRunResponse
-	31, // 73: dhole.v1.PipelineService.WatchRun:output_type -> dhole.v1.WatchRunResponse
-	33, // 74: dhole.v1.PipelineService.DecideApproval:output_type -> dhole.v1.DecideApprovalResponse
-	41, // 75: dhole.v1.PipelineService.CancelRun:output_type -> dhole.v1.CancelRunResponse
-	50, // 76: dhole.v1.PipelineService.WatchPresence:output_type -> dhole.v1.WatchPresenceResponse
-	52, // 77: dhole.v1.PipelineService.UpdatePresence:output_type -> dhole.v1.UpdatePresenceResponse
-	61, // [61:78] is the sub-list for method output_type
-	44, // [44:61] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	61, // 35: dhole.v1.Trigger.input_mapping:type_name -> dhole.v1.Trigger.InputMappingEntry
+	39, // 36: dhole.v1.CreateTriggerRequest.trigger:type_name -> dhole.v1.Trigger
+	39, // 37: dhole.v1.CreateTriggerResponse.trigger:type_name -> dhole.v1.Trigger
+	39, // 38: dhole.v1.ListTriggersResponse.triggers:type_name -> dhole.v1.Trigger
+	47, // 39: dhole.v1.CancelRunResponse.steps:type_name -> dhole.v1.CancelledStep
+	67, // 40: dhole.v1.Engine.capabilities:type_name -> dhole.v1.Capability
+	68, // 41: dhole.v1.Engine.in_flight:type_name -> dhole.v1.InFlight
+	49, // 42: dhole.v1.ListEnginesResponse.engines:type_name -> dhole.v1.Engine
+	49, // 43: dhole.v1.DrainEngineResponse.engine:type_name -> dhole.v1.Engine
+	54, // 44: dhole.v1.PresenceEvent.cursor:type_name -> dhole.v1.Cursor
+	54, // 45: dhole.v1.WatchPresenceRequest.cursor:type_name -> dhole.v1.Cursor
+	55, // 46: dhole.v1.WatchPresenceResponse.event:type_name -> dhole.v1.PresenceEvent
+	54, // 47: dhole.v1.UpdatePresenceRequest.cursor:type_name -> dhole.v1.Cursor
+	50, // 48: dhole.v1.EngineService.ListEngines:input_type -> dhole.v1.ListEnginesRequest
+	52, // 49: dhole.v1.EngineService.DrainEngine:input_type -> dhole.v1.DrainEngineRequest
+	14, // 50: dhole.v1.PipelineService.CreatePipeline:input_type -> dhole.v1.CreatePipelineRequest
+	12, // 51: dhole.v1.PipelineService.GetPipeline:input_type -> dhole.v1.GetPipelineRequest
+	16, // 52: dhole.v1.PipelineService.ApplyOperation:input_type -> dhole.v1.ApplyOperationRequest
+	18, // 53: dhole.v1.PipelineService.Validate:input_type -> dhole.v1.ValidateRequest
+	21, // 54: dhole.v1.PipelineService.Plan:input_type -> dhole.v1.PlanRequest
+	34, // 55: dhole.v1.PipelineService.GetPlugin:input_type -> dhole.v1.GetPluginRequest
+	37, // 56: dhole.v1.PipelineService.PublishPlugin:input_type -> dhole.v1.PublishPluginRequest
+	40, // 57: dhole.v1.PipelineService.CreateTrigger:input_type -> dhole.v1.CreateTriggerRequest
+	42, // 58: dhole.v1.PipelineService.ListTriggers:input_type -> dhole.v1.ListTriggersRequest
+	44, // 59: dhole.v1.PipelineService.DeleteTrigger:input_type -> dhole.v1.DeleteTriggerRequest
+	24, // 60: dhole.v1.PipelineService.ListRevisions:input_type -> dhole.v1.ListRevisionsRequest
+	26, // 61: dhole.v1.PipelineService.ApproveRevision:input_type -> dhole.v1.ApproveRevisionRequest
+	28, // 62: dhole.v1.PipelineService.StartRun:input_type -> dhole.v1.StartRunRequest
+	30, // 63: dhole.v1.PipelineService.WatchRun:input_type -> dhole.v1.WatchRunRequest
+	32, // 64: dhole.v1.PipelineService.DecideApproval:input_type -> dhole.v1.DecideApprovalRequest
+	46, // 65: dhole.v1.PipelineService.CancelRun:input_type -> dhole.v1.CancelRunRequest
+	56, // 66: dhole.v1.PipelineService.WatchPresence:input_type -> dhole.v1.WatchPresenceRequest
+	58, // 67: dhole.v1.PipelineService.UpdatePresence:input_type -> dhole.v1.UpdatePresenceRequest
+	51, // 68: dhole.v1.EngineService.ListEngines:output_type -> dhole.v1.ListEnginesResponse
+	53, // 69: dhole.v1.EngineService.DrainEngine:output_type -> dhole.v1.DrainEngineResponse
+	15, // 70: dhole.v1.PipelineService.CreatePipeline:output_type -> dhole.v1.CreatePipelineResponse
+	13, // 71: dhole.v1.PipelineService.GetPipeline:output_type -> dhole.v1.GetPipelineResponse
+	17, // 72: dhole.v1.PipelineService.ApplyOperation:output_type -> dhole.v1.ApplyOperationResponse
+	20, // 73: dhole.v1.PipelineService.Validate:output_type -> dhole.v1.ValidateResponse
+	23, // 74: dhole.v1.PipelineService.Plan:output_type -> dhole.v1.PlanResponse
+	36, // 75: dhole.v1.PipelineService.GetPlugin:output_type -> dhole.v1.GetPluginResponse
+	38, // 76: dhole.v1.PipelineService.PublishPlugin:output_type -> dhole.v1.PublishPluginResponse
+	41, // 77: dhole.v1.PipelineService.CreateTrigger:output_type -> dhole.v1.CreateTriggerResponse
+	43, // 78: dhole.v1.PipelineService.ListTriggers:output_type -> dhole.v1.ListTriggersResponse
+	45, // 79: dhole.v1.PipelineService.DeleteTrigger:output_type -> dhole.v1.DeleteTriggerResponse
+	25, // 80: dhole.v1.PipelineService.ListRevisions:output_type -> dhole.v1.ListRevisionsResponse
+	27, // 81: dhole.v1.PipelineService.ApproveRevision:output_type -> dhole.v1.ApproveRevisionResponse
+	29, // 82: dhole.v1.PipelineService.StartRun:output_type -> dhole.v1.StartRunResponse
+	31, // 83: dhole.v1.PipelineService.WatchRun:output_type -> dhole.v1.WatchRunResponse
+	33, // 84: dhole.v1.PipelineService.DecideApproval:output_type -> dhole.v1.DecideApprovalResponse
+	48, // 85: dhole.v1.PipelineService.CancelRun:output_type -> dhole.v1.CancelRunResponse
+	57, // 86: dhole.v1.PipelineService.WatchPresence:output_type -> dhole.v1.WatchPresenceResponse
+	59, // 87: dhole.v1.PipelineService.UpdatePresence:output_type -> dhole.v1.UpdatePresenceResponse
+	68, // [68:88] is the sub-list for method output_type
+	48, // [48:68] is the sub-list for method input_type
+	48, // [48:48] is the sub-list for extension type_name
+	48, // [48:48] is the sub-list for extension extendee
+	0,  // [0:48] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_api_proto_init() }
@@ -3749,7 +4203,7 @@ func file_dhole_v1_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_api_proto_rawDesc), len(file_dhole_v1_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   53,
+			NumMessages:   61,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

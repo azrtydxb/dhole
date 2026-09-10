@@ -60,7 +60,11 @@ decide what may be cached and what may be retried.
   keeps a deployment's tokens in flight working),
   0023 gate_armed_once (bugfix: the same race again on the event that arms a
   durable wait — a step's STEP_AWAITING_TIMER is unique per step, so two
-  advances that both find one gate ready cannot both record it). A task
+  advances that both find one gate ready cannot both record it),
+  0024 triggers (the stored trigger table behind CreateTrigger/ListTriggers/
+  DeleteTrigger — before it, an event source could only be DECLARED in the
+  plane's `--triggers` file, so creating one needed a shell on that host and a
+  restart). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -387,8 +391,8 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
-- [ ] **What the plane still does not host, after the dispatcher landed.** Five
-      things, each named where it bites:
+- [ ] **What the plane still does not host, after the dispatcher landed.** Three
+      things left of the original five; (d) and (e) are closed below.
       (a) `internal/steps/agent` has no `builtin:agent` — the action space, the
       taint check and the per-action approval are still library-only, because
       an agent step needs an invoker for the actions it may take and nothing
@@ -400,12 +404,39 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       a nested pipeline: the definition format has no syntax for a subgraph and
       no run can contain another, so a body that dispatches to engines needs
       nested runs.
-      (d) There is no trigger table and no trigger RPC, so triggers are declared
-      on `server.Config` and read from a YAML file by `--triggers`. An operator
-      still cannot create one through the contract.
-      (e) A builtin step in flight when the plane dies is not recovered: it
-      writes STEP_DISPATCHED but holds no lease, so `SweepOrphans` cannot see
-      it. Closing it means giving a builtin step a lease of its own.
+- [x] **(d) An operator could not create a trigger through the contract.**
+      Triggers were declared on `server.Config` and read from a YAML file by
+      `--triggers`, so creating one needed a shell on the control plane's host
+      and a restart — the same shape as `CreatePipeline` and `PublishPlugin`,
+      and what ADR 0013 refuses. Closed by `CreateTrigger`, `ListTriggers` and
+      `DeleteTrigger` on `PipelineService` (`internal/api/triggers.go`), the
+      `triggers` table of migration 0024 (`internal/trigger/store.go`), and
+      `dhole trigger create|list|delete`. The binding is validated against the
+      pipeline's ACTIVE revision at creation, which is where ADR 0007 puts it.
+      A created trigger goes live without a restart: `internal/server`'s
+      reconciler polls the table every second and rebuilds the webhook mux the
+      listener dispatches through, so a second plane over one database runs the
+      first plane's triggers too. PRECEDENCE: a DECLARED trigger wins. The
+      `--triggers` path is untouched and still refuses at start-up; a create or
+      delete naming a declared id is refused with that reason, a stored row of
+      that id is shadowed, and `ListTriggers` shows both halves with `declared`
+      set — an operator mid-migration can see everything they have. A trigger's
+      shared secret travels inwards only: the contract returns `has_secret` and
+      never the value.
+- [x] **(e) A builtin step in flight when the plane died was never recovered.**
+      It wrote STEP_DISPATCHED and held no lease, so `SweepOrphans` — which
+      finds dead holders through `lease.Expire` and by no other means — could
+      not see it, and no engine would ever report a status for a step no engine
+      ever had. The run stayed in flight forever. The plan's own suggested fix
+      was right and is what landed: `internal/server/builtins.go` claims a
+      lease before the dispatch event, renews it every TTL/3 for as long as the
+      work runs, and validates the fence INSIDE the transaction that writes the
+      step's verdict — so a swept attempt cannot decide a step a later attempt
+      is running. `server.Config.LeaseTTL` now governs a plane's own steps and
+      its engines' alike. The behavioural test in
+      `internal/server/builtin_recovery_test.go` stops a plane mid-model-call
+      and a NEW plane over the same store recovers the run; its companion
+      proves a step slower than the TTL is not swept out from under itself.
 - [x] VERIFIED ON REAL INFRASTRUCTURE 2026-09-10: all four acceptance tests pass
       against the kw k3s cluster and a live Postgres — `TestAcceptanceCICacheHit`,
       `TestCIPipelineBuildsTheCheckedInDockerfile`,
