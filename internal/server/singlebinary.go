@@ -55,6 +55,9 @@ type infra struct {
 	// both answer to. One enforcer over one store, so a tenant's storage and
 	// its concurrency are measured against the same limits row.
 	quotas *tenancy.Enforcer
+	// reclaimer credits storage back when the collector reclaims it, so the
+	// ledger nets out instead of only ever growing.
+	reclaimer *tenancy.Reclaimer
 	// cache is the content-addressed step cache, and refs is the reference
 	// index that keeps the blobs an entry points at from being collected.
 	// Both live in the run store's database, which is what lets a
@@ -197,6 +200,12 @@ func (i *infra) guardBlobs() error {
 		return err
 	}
 	i.quotas = enforcer
+	// The other half of the same ledger. Charging for a write without
+	// crediting a collection makes storage usage a number that only ever
+	// grows, so a tenant who reclaimed a terabyte stayed charged for it and
+	// was eventually refused every write against a store that was nearly
+	// empty.
+	i.reclaimer = tenancy.NewReclaimer(tenants)
 	guarded, err := tenancy.GuardCAS(i.cas, enforcer)
 	if err != nil {
 		return err
@@ -211,7 +220,15 @@ func (i *infra) guardBlobs() error {
 // the run log.
 func (i *infra) openCache() {
 	i.cache = cache.New(i.db, i.dialect)
-	i.refs = &cas.GC{Store: i.cas, Runs: i.store, DB: i.db, Dialect: i.dialect}
+	i.refs = &cas.GC{
+		Store: i.cas, Runs: i.store, DB: i.db, Dialect: i.dialect,
+		// A nil *Reclaimer here is a non-nil interface holding nil, which the
+		// collector's `!= nil` check does not catch. Reclaimer.Collected
+		// therefore guards its own receiver rather than relying on that — the
+		// same trap this package already avoids for executor.Executor, and it
+		// is cheaper to be safe in the method than to reason about it here.
+		Collected: i.reclaimer,
+	}
 }
 
 // openBus starts or dials the bus and declares the two durable streams the

@@ -568,7 +568,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       and the triggers, and both belonged to other agents that round. Until it is wired, `max_runs_per_day` is
       a column nobody reads and the usage ledger has no `RUN_STARTED` rows to bill from. Found wiring Task 42
       and Task 58.
-- [ ] **A tenant's CAS usage only ever grows.** `MaxCASBytes` is measured by summing `KindCASBytes` usage
+- [x] **A tenant's CAS usage only ever grows.** `MaxCASBytes` is measured by summing `KindCASBytes` usage
       records, and `cas.GC` deletes blobs without writing anything that offsets them, so a tenant that
       reclaims a terabyte is still charged for it and is eventually refused every write with a store that is
       nearly empty. It needs a compensating usage record on collection — which is a metering decision and a

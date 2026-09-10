@@ -71,6 +71,17 @@ const (
 	// KindCASBytes is stored artifact bytes, keyed by digest so identical
 	// bytes are charged once.
 	KindCASBytes UsageKind = "cas_bytes"
+	// KindCASBytesReleased is stored artifact bytes the collector reclaimed,
+	// keyed by the same digest that was charged. Quantity is bytes, positive:
+	// it is subtracted by CASBytes rather than stored negative, because a
+	// ledger of signed quantities is one where a sign error is invisible and
+	// RecordUsage would have to stop refusing negatives.
+	//
+	// It exists because CAS usage only ever grew. The collector deleted blobs
+	// and wrote nothing that offset them, so a tenant who reclaimed a terabyte
+	// was still charged for it and was eventually refused every write against
+	// a store that was nearly empty.
+	KindCASBytesReleased UsageKind = "cas_bytes_released"
 )
 
 // Unit is the base unit of a kind's Quantity, for whoever formats an invoice.
@@ -78,7 +89,7 @@ func (k UsageKind) Unit() string {
 	switch k {
 	case KindStepSeconds, KindStepSecondsUnbilled:
 		return "ms"
-	case KindCASBytes:
+	case KindCASBytes, KindCASBytesReleased:
 		return "bytes"
 	case KindRunStarted, KindCacheHit:
 		return "count"
@@ -294,7 +305,7 @@ func (m *Meter) MeterRun(ctx context.Context, tenantID, runID string) (Summary, 
 		case KindStepSeconds:
 			sum.BilledAttempts++
 			sum.StepSeconds += float64(u.Quantity) / 1000
-		case KindRunStarted, KindCASBytes:
+		case KindRunStarted, KindCASBytes, KindCASBytesReleased:
 			// Not produced by this pass.
 		}
 	}
@@ -366,6 +377,13 @@ const countRunsToday = `SELECT COUNT(*) FROM usage_records
 const sumCASBytes = `SELECT COALESCE(SUM(quantity), 0) FROM usage_records
 	WHERE tenant_id = ? AND kind = ?`
 
+// chargedCASBytes is what a single digest was billed, which is the amount to
+// credit back when it is collected. Summed rather than read as one row: the
+// charge is keyed by digest, but reading a sum means a schema that ever allows
+// two rows for one digest still credits the right total.
+const chargedCASBytes = `SELECT COALESCE(SUM(quantity), 0) FROM usage_records
+	WHERE tenant_id = ? AND kind = ? AND step_id = ?`
+
 const sumBilledStepMillis = `SELECT COALESCE(SUM(quantity), 0) FROM usage_records
 	WHERE tenant_id = ? AND kind = ? AND billable = 1`
 
@@ -410,13 +428,38 @@ func (s *Store) CASBytes(ctx context.Context, tenantID string) (int64, error) {
 	if tenantID == "" {
 		return 0, fmt.Errorf("tenancy: totalling stored bytes: %w", runstore.ErrTenantRequired)
 	}
-	var total int64
-	err := s.db.QueryRowContext(ctx, s.dialect.Rebind(sumCASBytes),
-		tenantID, string(KindCASBytes)).Scan(&total)
-	if err != nil {
+	var stored, released int64
+	if err := s.db.QueryRowContext(ctx, s.dialect.Rebind(sumCASBytes),
+		tenantID, string(KindCASBytes)).Scan(&stored); err != nil {
 		return 0, fmt.Errorf("tenancy: totalling stored bytes for %q: %w", tenantID, err)
 	}
-	return total, nil
+	if err := s.db.QueryRowContext(ctx, s.dialect.Rebind(sumCASBytes),
+		tenantID, string(KindCASBytesReleased)).Scan(&released); err != nil {
+		return 0, fmt.Errorf("tenancy: totalling reclaimed bytes for %q: %w", tenantID, err)
+	}
+	// Floored at zero. The two sums are written by different components at
+	// different times, and a credit that outran its charge would otherwise
+	// report a tenant as holding a negative number of bytes — which is not a
+	// quantity anyone can act on, and would read as unlimited headroom.
+	if total := stored - released; total > 0 {
+		return total, nil
+	}
+	return 0, nil
+}
+
+// ChargedCASBytes is what this tenant was billed for one digest, or zero if it
+// was never charged for. Zero is not an error: blobs predate the metering.
+func (s *Store) ChargedCASBytes(ctx context.Context, tenantID, hex string) (int64, error) {
+	if tenantID == "" {
+		return 0, fmt.Errorf("tenancy: reading a charge: %w", runstore.ErrTenantRequired)
+	}
+	var charged int64
+	err := s.db.QueryRowContext(ctx, s.dialect.Rebind(chargedCASBytes),
+		tenantID, string(KindCASBytes), hex).Scan(&charged)
+	if err != nil {
+		return 0, fmt.Errorf("tenancy: reading the charge for %q: %w", hex, err)
+	}
+	return charged, nil
 }
 
 // BilledStepSeconds is the compute the tenant has been charged for, in

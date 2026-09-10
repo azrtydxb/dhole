@@ -52,6 +52,25 @@ type GC struct {
 	Runs    runstore.Store
 	DB      *sql.DB
 	Dialect runstore.Dialect
+	// Collected is told about every blob this collector actually removed.
+	//
+	// It exists because storage accounting only ever grew: the collector
+	// deleted blobs and nothing offset them, so a tenant who reclaimed a
+	// terabyte was still charged for it and was eventually refused every write
+	// against a store that was nearly empty.
+	//
+	// It is an interface declared HERE and implemented elsewhere because the
+	// dependency runs one way: the metering package knows about storage, and
+	// storage must not know about metering. Nil means nobody is counting,
+	// which is the right default for a collector run without a ledger.
+	Collected Collector
+}
+
+// Collector is told which blobs a sweep reclaimed, so something can credit
+// them back. A digest is enough: whoever charged for these bytes recorded how
+// many there were under the same digest.
+type Collector interface {
+	Collected(ctx context.Context, tenantID string, d *dholev1.Digest) error
 }
 
 // OpenIndex opens the reference index over the SQLite database at path,
@@ -204,6 +223,18 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 			deleteErr = err
 		default:
 			freed++
+			// After the delete, never before: crediting bytes that are still
+			// there would let a tenant free storage they still hold.
+			//
+			// A failure here does NOT undo the collection — the bytes are gone
+			// and pretending otherwise would charge for them forever — but it
+			// IS returned, because a credit that silently fails is exactly the
+			// bug this hook exists to fix, one sweep later.
+			if g.Collected != nil {
+				if err := g.Collected.Collected(ctx, tenantID, d); err != nil {
+					deleteErr = fmt.Errorf("cas: crediting collected blob: %w", err)
+				}
+			}
 		}
 		if deleteErr != nil {
 			break
