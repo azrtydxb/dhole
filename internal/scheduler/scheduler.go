@@ -229,6 +229,20 @@ type Config struct {
 	// whose Signed is hardcoded false is not a supply-chain policy, it is a
 	// policy that refuses everything, and one hardcoded true is worse.
 	Provenance Provenances
+	// Queue is the weighted fair queue ready steps are drained through. Nil
+	// dispatches every ready step inline, which is what a test of some other
+	// concern wants and what a fleet must never have: inline dispatch is
+	// arrival order, so one tenant with ten thousand ready steps takes every
+	// engine and everybody else waits (Task 42).
+	Queue *Queue
+	// Budgets is the per-pipeline in-flight cap. Nil means no pipeline has
+	// one, so a single pipeline may take the whole fleet its tenant's share
+	// entitles it to.
+	Budgets Budget
+	// Quotas is the tenant admission check. Nil means this deployment
+	// enforces no tenant limit at all, exactly as a nil Policy means it
+	// enforces no policy. It requires Budgets: see New.
+	Quotas Quotas
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Log is where a tier whose engines disagree about their environment is
@@ -251,6 +265,20 @@ type Scheduler struct {
 	refs  BlobRefs
 	pol   policy.Engine
 	prov  Provenances
+
+	queue   *Queue
+	budgets Budget
+	quotas  Quotas
+
+	// pending is what this plane has put in the queue and not yet drained,
+	// and held is the budget slot each in-flight step is holding. Both are
+	// per-plane and both are fleet resources rather than run position: a
+	// plane that dies forgets them and the bucket ages the slots out, while
+	// where every run had got to is still in the log (ADR 0003).
+	pendingMu sync.Mutex
+	pending   map[string]bool
+	heldMu    sync.Mutex
+	held      map[string]func()
 
 	tier string
 	os   string
@@ -322,6 +350,16 @@ func New(cfg Config) (*Scheduler, error) {
 		return nil, errors.New("scheduler: a blob reference recorder is only " +
 			"used by the cache; passing it without one is a cache that was meant to be wired and was not")
 	}
+	// The number a tenant's concurrency quota is measured against is the
+	// fleet's, and the budgets bucket is the only place that number is kept
+	// fleet-wide. Counted in one plane's memory instead, a limit of sixty-four
+	// becomes sixty-four PER PLANE — a limit that grows with the deployment is
+	// not a limit, and it fails open exactly when there is most in flight.
+	if cfg.Quotas != nil && cfg.Budgets == nil {
+		return nil, errors.New("scheduler: a quota enforcer needs the concurrency budgets; " +
+			"the in-flight count it is measured against is the fleet's, and a count kept in " +
+			"one plane's memory is multiplied by the number of planes")
+	}
 	if cfg.Cache == nil && cfg.Policy == nil && cfg.Revisions != nil {
 		return nil, errors.New("scheduler: a revision store is only used by the cache and by policy; " +
 			"passing one without either is a wiring that was meant to be finished and was not")
@@ -345,6 +383,11 @@ func New(cfg Config) (*Scheduler, error) {
 		now:      cfg.Now,
 		log:      cfg.Log,
 		reported: map[string]string{},
+		queue:    cfg.Queue,
+		budgets:  cfg.Budgets,
+		quotas:   cfg.Quotas,
+		pending:  map[string]bool{},
+		held:     map[string]func(){},
 	}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -443,7 +486,28 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 			served = true
 			continue
 		}
-		if err := s.dispatch(ctx, tenantID, runID, pipeline, step, state); err != nil {
+		if s.queue == nil {
+			if err := s.dispatch(ctx, tenantID, runID, pipeline, step, state); err != nil {
+				return err
+			}
+			continue
+		}
+		// Not dispatched here. What goes out next is decided by SHARE, in the
+		// drain below, because a loop that dispatched what it happened to be
+		// holding is arrival order — and arrival order turns one tenant's
+		// burst into every other tenant's outage (Task 42).
+		if err := s.enqueueReady(ctx, QueueItem{
+			TenantID:   tenantID,
+			RunID:      runID,
+			StepID:     step.GetId(),
+			PipelineID: state.pipelineID,
+			Attempt:    state.attempts[step.GetId()] + 1,
+		}); err != nil {
+			return err
+		}
+	}
+	if s.queue != nil {
+		if err := s.drain(ctx, tenantID); err != nil {
 			return err
 		}
 	}
@@ -872,6 +936,12 @@ func (s *Scheduler) recordOrphan(ctx context.Context, orphan lease.Orphan) (bool
 	}); err != nil {
 		return false, err
 	}
+	// The fourth way a step leaves flight, and the only one no status will
+	// ever report: the engine died. Nothing on the status path can give this
+	// slot back, so a sweeper that did not release it would leave the pipeline
+	// capped for as long as the bucket's max age, for a failure the plane has
+	// already detected and written down.
+	s.releaseHold(orphan.TenantID, orphan.RunID, orphan.StepID)
 	return true, nil
 }
 
@@ -918,7 +988,10 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 	}
 	if _, done := state.terminal[st.GetStepId()]; done {
 		// At-least-once delivery means the same terminal status arrives
-		// twice. The second one changes nothing.
+		// twice. The second one changes nothing — except that the first may
+		// have been another plane's, so the slot is given back here too. The
+		// release is idempotent.
+		s.releaseHold(tenantID, st.GetRunId(), st.GetStepId())
 		return s.Advance(ctx, tenantID, st.GetRunId())
 	}
 
@@ -946,6 +1019,12 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 			return err
 		}
 	}
+	// The step has left flight, whichever way it went. The release is here
+	// rather than under the SUCCEEDED branch above because a slot given back
+	// only on the happy path leaks on every failure and every cancellation,
+	// and a leaked slot wedges its pipeline permanently — at the moment
+	// something else has already gone wrong.
+	s.releaseHold(tenantID, st.GetRunId(), st.GetStepId())
 	return s.Advance(ctx, tenantID, st.GetRunId())
 }
 
@@ -1340,6 +1419,30 @@ func (s *Scheduler) dispatch(
 	}
 
 	attempt := state.attempts[step.GetId()] + 1
+
+	// The tenant's quota and the pipeline's budget, BEFORE the claim. A claim
+	// supersedes the current holder's fence, so taking one for a step that is
+	// then refused would fence out an attempt still running, to dispatch
+	// nothing at all.
+	release, admitted, err := s.admit(ctx, tenantID, runID, state.pipelineID, step, state)
+	if err != nil {
+		return err
+	}
+	if !admitted {
+		// admit has recorded why on the run's log. The step stays ready and is
+		// tried again on the next pass.
+		return nil
+	}
+	// The slot goes back unless this dispatch actually commits. Every early
+	// return below is a step that never went out, and a slot kept for one of
+	// those is a slot leaked for the life of the bucket's max age.
+	committed := false
+	defer func() {
+		if !committed {
+			release()
+		}
+	}()
+
 	token, err := s.leas.Claim(ctx, tenantID, runID, step.GetId(), attempt, s.ttl)
 	if err != nil {
 		return fmt.Errorf("scheduler: claiming %s/%s: %w", runID, step.GetId(), err)
@@ -1443,6 +1546,10 @@ func (s *Scheduler) dispatch(
 	case err != nil:
 		return fmt.Errorf("scheduler: dispatching %s/%s: %w", runID, step.GetId(), err)
 	}
+	// The step is out. Its slot is held until the step leaves flight by ANY
+	// route — succeeded, failed, cancelled, or lost with its engine.
+	s.hold(tenantID, runID, step.GetId(), release)
+	committed = true
 	return nil
 }
 

@@ -343,6 +343,33 @@ type casGate struct {
 	enf   *Enforcer
 }
 
+// deletingCASGate is the gate over a store that can also delete.
+//
+// It exists because cas.GC decides whether it may reclaim anything by asking
+// the store it was given whether it is a cas.Deleter. A single wrapper type
+// would have to answer that question the same way for every inner store, and
+// both answers are wrong: always yes makes a collector delete blob after blob
+// against a store with no Delete, having already dropped their references;
+// always no — which is what a plain wrapper gives — silently turns
+// reclamation into a no-op, so a deployment that enforces a storage quota can
+// never reclaim a byte of it and the disk fills behind a limit that is doing
+// its job. Two types keep the capability exactly as the inner store has it.
+type deletingCASGate struct {
+	*casGate
+	deleter cas.Deleter
+}
+
+// Delete forwards to the inner store. Deleting is not metered: usage is
+// recorded per digest and the same bytes may still be held by another
+// reference, so decrementing here would credit a tenant for storage it has
+// not given back.
+func (g *deletingCASGate) Delete(ctx context.Context, tenantID string, d *dholev1.Digest) error {
+	if tenantID == "" {
+		return fmt.Errorf("tenancy: deleting a blob: %w", runstore.ErrTenantRequired)
+	}
+	return g.deleter.Delete(ctx, tenantID, d)
+}
+
 // GuardCAS wraps a blob store so every Put is charged against the tenant's
 // MaxCASBytes quota.
 //
@@ -372,7 +399,11 @@ func GuardCAS(inner cas.Store, enf *Enforcer) (cas.Store, error) {
 	if enf == nil {
 		return nil, errors.New("tenancy: guarding a blob store needs an enforcer")
 	}
-	return &casGate{inner: inner, enf: enf}, nil
+	gate := &casGate{inner: inner, enf: enf}
+	if deleter, ok := inner.(cas.Deleter); ok {
+		return &deletingCASGate{casGate: gate, deleter: deleter}, nil
+	}
+	return gate, nil
 }
 
 // Put stores bytes, refusing anything that would exceed the tenant's quota.

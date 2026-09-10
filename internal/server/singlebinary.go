@@ -19,6 +19,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/process"
 	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/tenancy"
 )
 
 // infra is everything the control plane sits on. It is assembled by mode and
@@ -50,6 +51,10 @@ type infra struct {
 
 	cas   cas.Store
 	blobs blobstore.Store
+	// quotas is the tenant admission check the guarded CAS and the scheduler
+	// both answer to. One enforcer over one store, so a tenant's storage and
+	// its concurrency are measured against the same limits row.
+	quotas *tenancy.Enforcer
 	// cache is the content-addressed step cache, and refs is the reference
 	// index that keeps the blobs an entry points at from being collected.
 	// Both live in the run store's database, which is what lets a
@@ -167,11 +172,36 @@ func (i *infra) openBlobs(cfg Config) error {
 		// Two stores configured independently is two chances to point half of
 		// a deployment at the wrong one.
 		i.cas = cas.NewOverBlobs(cfg.Blobs)
-		return nil
+		return i.guardBlobs()
 	}
 
 	i.cas = cas.NewFilesystem(casDir(cfg.BlobRoot))
 	i.blobs = blobstore.NewFilesystem(blobDir(cfg.BlobRoot))
+	return i.guardBlobs()
+}
+
+// guardBlobs puts the tenant's storage quota in front of the CAS.
+//
+// It wraps the store BEFORE anything else takes a reference to it — the cache,
+// the collector, the API's artifact routes and the scheduler all hold what
+// openBlobs left behind — because a guard applied to one holder and not the
+// others is a limit with a way round it. MaxCASBytes was enforceable and
+// enforced nowhere: tenancy.GuardCAS had no call site in the tree at all.
+func (i *infra) guardBlobs() error {
+	tenants, err := tenancy.NewStore(i.db, i.dialect)
+	if err != nil {
+		return err
+	}
+	enforcer, err := tenancy.NewEnforcer(tenancy.EnforcerConfig{Store: tenants})
+	if err != nil {
+		return err
+	}
+	i.quotas = enforcer
+	guarded, err := tenancy.GuardCAS(i.cas, enforcer)
+	if err != nil {
+		return err
+	}
+	i.cas = guarded
 	return nil
 }
 
