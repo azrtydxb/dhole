@@ -34,22 +34,21 @@ import (
 // computed against. It is a fixed string rather than a real executor's
 // answer, because a cache key that changed with the machine would make every
 // assertion here a coin toss.
+//
+// It reaches the plan the way it reaches a run: announced by the engines of
+// planTier, on the instances the fleet reports (ADR 0021). A plan that took it
+// from an executor of the API server's own answered a different question from
+// the one the scheduler asks.
 const planEnvIdentity = "sha256:env-under-test"
+
+// planTier is the tier every plan in this file is computed for, and the tier
+// its engines are in. They must be the same string: a plan for a tier with no
+// engines in it finds no identity and reports every step uncacheable.
+const planTier = "untrusted"
 
 // planEngineKind is the executor backend the plan harness says its engines
 // run.
 const planEngineKind = "process"
-
-// planEnv is the environment a plan is computed against: which kind of engine
-// backend the fleet runs, and the digest that goes into every cache key.
-// executor.Executor satisfies the same two methods.
-type planEnv struct {
-	kind     string
-	identity string
-}
-
-func (e planEnv) Kind() string                         { return e.kind }
-func (e planEnv) EnvironmentIdentity() (string, error) { return e.identity, nil }
 
 // planEngineKindOther is a second backend kind, so a fleet in this file can be
 // heterogeneous: a plan asserted against a fleet whose engines are all the
@@ -71,9 +70,11 @@ func readyEngine(caps ...dholev1.Capability) registry.Instance {
 	return registry.Instance{
 		ID: "engine-1", State: registry.StateReady,
 		OS: "linux", Arch: "amd64", Slots: 4,
-		Capabilities:     caps,
-		EngineTypes:      []string{planEngineKind},
-		ProtocolVersions: []uint32{1},
+		Capabilities:        caps,
+		EngineTypes:         []string{planEngineKind},
+		ProtocolVersions:    []uint32{1},
+		Tier:                planTier,
+		EnvironmentIdentity: planEnvIdentity,
 	}
 }
 
@@ -109,7 +110,7 @@ func newPlanHarnessWith(t *testing.T, fleet api.Fleet, plugins api.StepResolver)
 		Cache:        c,
 		Fleet:        fleet,
 		Catalog:      plugins,
-		Environment:  planEnv{kind: planEngineKind, identity: planEnvIdentity},
+		Tier:         planTier,
 		PollInterval: 2 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -492,7 +493,7 @@ func newDispatchHarness(ctx context.Context, t *testing.T) *dispatchHarness {
 	fleet := staticFleet{readyEngine()}
 	sched, err := scheduler.New(scheduler.Config{
 		Store: runs, Outbox: out, Leases: leases, Fleet: fleet,
-		Definitions: defs, Tier: "untrusted", EnvIdentity: planEnvIdentity,
+		Definitions: defs, Tier: planTier,
 	})
 	require.NoError(t, err)
 
@@ -512,7 +513,7 @@ func newDispatchHarness(ctx context.Context, t *testing.T) *dispatchHarness {
 	srv, err := api.NewServer(api.Config{
 		Definitions: defs, Auth: fakeAuth{}, Runs: runs, Advancer: sched,
 		Cache: c, Fleet: fleet,
-		Environment:  planEnv{kind: planEngineKind, identity: planEnvIdentity},
+		Tier:         planTier,
 		PollInterval: 2 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -761,7 +762,7 @@ func TestValidateAndPlanReachEveryCollaboratorWithThePrincipalsTenant(t *testing
 		Auth:        fakeAuth{},
 		Cache:       probingCache{probe: probe},
 		Fleet:       probingFleet{probe: probe, fleet: staticFleet{readyEngine()}},
-		Environment: planEnv{kind: planEngineKind, identity: planEnvIdentity},
+		Tier:        planTier,
 	})
 	require.NoError(t, err)
 	httpSrv := httptest.NewServer(srv.Handler())

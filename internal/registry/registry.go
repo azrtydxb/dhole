@@ -24,6 +24,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"slices"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 )
@@ -101,6 +102,14 @@ type Instance struct {
 	// ProtocolVersions is every wire version it speaks, so the control plane
 	// can pick the highest both sides support.
 	ProtocolVersions []uint32
+	// Tier is the trust tier it runs in, as it advertised it. Work reaches an
+	// engine by being published to its tier's dispatch subject, so this is the
+	// only place the plane can see which engines a dispatch could land on.
+	Tier string
+	// EnvironmentIdentity is the digest of the environment it runs steps in,
+	// empty when it has none. Cache keys are hashed against the TIER's
+	// identity, agreed by its members (ADR 0021) — see TierEnvironmentIdentity.
+	EnvironmentIdentity string
 	// InFlight is what its last heartbeat said it was holding.
 	//
 	// It is kept, and not merely counted, because it is the ONLY answer to
@@ -127,9 +136,12 @@ type Job struct {
 // The lifecycle it implements is registering -> ready -> draining -> gone, and
 // each transition has exactly one trigger:
 //
-//   - Register puts an instance in registering. It is a claim, not proof: the
+//   - Register puts a NEW instance in registering. It is a claim, not proof: the
 //     protocol version is negotiated here, and an engine the plane cannot talk
-//     to never enters the fleet at all.
+//     to never enters the fleet at all. An engine that is already in the fleet
+//     keeps the state it is in — an engine re-announcing what it is, as the
+//     wire contract obliges it to every fifteen seconds, has not stopped being
+//     alive — while everything it advertises is replaced.
 //   - The first Heartbeat promotes registering to ready. Readiness is proof of
 //     liveness under the engine's own hand, which is also the moment the TTL
 //     clock starts being renewed rather than merely set.
@@ -144,10 +156,12 @@ type Job struct {
 // Every method on an implementation is scoped to one tenant, and Instances
 // refuses an empty one.
 type Registry interface {
-	// Register admits an engine to the fleet in state registering, replacing
-	// any earlier registration of the same id — a restarted engine is the
-	// normal case. It refuses an engine whose protocol version this control
-	// plane does not speak.
+	// Register admits an engine to the fleet, replacing the advertisement
+	// under any earlier registration of the same id — a restarted engine, and
+	// the obligatory re-announcement, are both the normal case. A new or gone
+	// engine starts in registering; one already in the fleet keeps its state.
+	// It refuses an engine whose protocol version this control plane does not
+	// speak.
 	Register(ctx context.Context, r *dholev1.EngineRegistration) error
 	// Heartbeat renews an instance's liveness and records what it holds. It
 	// returns ErrNotRegistered for an engine that has aged out or is gone,
@@ -160,4 +174,52 @@ type Registry interface {
 	// It is idempotent, and draining an engine the registry does not hold is
 	// the normal outcome of a stale operator list, not an error.
 	Drain(ctx context.Context, engineID string) error
+}
+
+// TierEnvironmentIdentity is the environment identity every cache key for tier
+// is hashed against, and the identities that stopped it having one.
+//
+// The TIER, not the engine. A tier exists to be a set of interchangeable
+// workers — the plane chooses a tier and the queue chooses which member picks
+// the dispatch up — so an identity that varied per engine would key the cache
+// on something the scheduler does not get to pick, and a step could be recorded
+// under the environment of the engine that happened to run it and then served
+// to a step that will run somewhere else (ADR 0021).
+//
+// Members are therefore expected to agree, and there are three ways they can
+// fail to. All of them return "" and cache nothing:
+//
+//   - nobody is in the tier. A plane whose fleet has not checked in yet has a
+//     cold cache, not a wrong one.
+//   - a member reports no identity. It runs steps in an environment nothing can
+//     name — a host process — and the rest of the tier cannot answer for it.
+//   - members disagree. That is a misconfiguration, usually a half-finished
+//     rollout of two different sandbox images, and the conflicting identities
+//     are returned so the plane can say so rather than silently degrading.
+//
+// Every instance the registry still holds counts, including one that is
+// draining or has not yet proven readiness. Only ready instances take new work,
+// but a registering member is about to and a draining one is still finishing
+// steps whose results get recorded — and an entry recorded under an identity
+// the next dispatch will not run in is exactly the wrong answer this exists to
+// avoid.
+func TierEnvironmentIdentity(instances []Instance, tier string) (identity string, conflict []string) {
+	var seen []string
+	for _, e := range instances {
+		if e.Tier != tier {
+			continue
+		}
+		if !slices.Contains(seen, e.EnvironmentIdentity) {
+			seen = append(seen, e.EnvironmentIdentity)
+		}
+	}
+	switch len(seen) {
+	case 0:
+		return "", nil // nothing in this tier has announced itself
+	case 1:
+		return seen[0], nil // "" when the single answer is "I have none"
+	default:
+		slices.Sort(seen)
+		return "", seen
+	}
 }

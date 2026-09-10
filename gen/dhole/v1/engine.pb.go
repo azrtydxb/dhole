@@ -697,9 +697,23 @@ type EngineRegistration struct {
 	// Executor kinds this engine offers, e.g. "process", "container".
 	EngineTypes []string `protobuf:"bytes,7,rep,name=engine_types,json=engineTypes,proto3" json:"engine_types,omitempty"`
 	// Trust tier this engine runs in; it may only receive work dispatched to it.
-	Tier          string `protobuf:"bytes,8,opt,name=tier,proto3" json:"tier,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Tier string `protobuf:"bytes,8,opt,name=tier,proto3" json:"tier,omitempty"`
+	// Digest of the environment this engine runs steps in — a resolved sandbox
+	// image digest, a VM snapshot id — and the value every cache key produced
+	// for this engine's tier is hashed against.
+	//
+	// The engine reports it because the engine is the only thing that knows it.
+	// The control plane used to read this off its own executor, which on every
+	// real deployment is a host process executor with no stable identity, so
+	// nothing was ever cached anywhere (ADR 0021).
+	//
+	// It must be stable for identical environments, different for different
+	// ones, and ABSENT rather than invented: an engine with nothing reproducible
+	// to name leaves this empty, and its tier caches nothing instead of caching
+	// against a lie.
+	EnvironmentIdentity string `protobuf:"bytes,9,opt,name=environment_identity,json=environmentIdentity,proto3" json:"environment_identity,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *EngineRegistration) Reset() {
@@ -784,6 +798,13 @@ func (x *EngineRegistration) GetEngineTypes() []string {
 func (x *EngineRegistration) GetTier() string {
 	if x != nil {
 		return x.Tier
+	}
+	return ""
+}
+
+func (x *EngineRegistration) GetEnvironmentIdentity() string {
+	if x != nil {
+		return x.EnvironmentIdentity
 	}
 	return ""
 }
@@ -1355,7 +1376,7 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"\x03seq\x18\x03 \x01(\x04R\x03seq\x12\x12\n" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x12(\n" +
 	"\x06stream\x18\x05 \x01(\x0e2\x10.dhole.v1.StreamR\x06stream\x12\x18\n" +
-	"\aattempt\x18\x06 \x01(\rR\aattempt\"\x89\x02\n" +
+	"\aattempt\x18\x06 \x01(\rR\aattempt\"\xbc\x02\n" +
 	"\x12EngineRegistration\x12\x1b\n" +
 	"\tengine_id\x18\x01 \x01(\tR\bengineId\x12+\n" +
 	"\x11protocol_versions\x18\x02 \x03(\rR\x10protocolVersions\x128\n" +
@@ -1364,7 +1385,8 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"\x04arch\x18\x05 \x01(\tR\x04arch\x12\x14\n" +
 	"\x05slots\x18\x06 \x01(\rR\x05slots\x12!\n" +
 	"\fengine_types\x18\a \x03(\tR\vengineTypes\x12\x12\n" +
-	"\x04tier\x18\b \x01(\tR\x04tier\"u\n" +
+	"\x04tier\x18\b \x01(\tR\x04tier\x121\n" +
+	"\x14environment_identity\x18\t \x01(\tR\x13environmentIdentity\"u\n" +
 	"\bInFlight\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x18\n" +

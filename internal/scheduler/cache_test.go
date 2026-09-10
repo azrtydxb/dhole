@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -33,7 +34,41 @@ import (
 // against. It is a constant and not "" on purpose: an empty identity makes
 // cache.Eligible refuse every step, and a cache test over that would pass by
 // never caching anything.
+//
+// It reaches the scheduler the only way it can reach one in production: the
+// engines of the tier announce it, and the plane reads it off the fleet
+// (ADR 0021). It is not configuration, and there is no longer anywhere to
+// inject it.
 const testEnvIdentity = "sha256:env"
+
+// mutableFleet is the engine registry with the membership in the test's hands,
+// so a case can do what a rolling upgrade does: change what the tier's engines
+// say about their environment while runs are going through it.
+type mutableFleet struct {
+	mu        sync.Mutex
+	instances []registry.Instance
+}
+
+func (f *mutableFleet) Instances(context.Context, string) ([]registry.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.instances), nil
+}
+
+func (f *mutableFleet) set(instances ...registry.Instance) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.instances = instances
+}
+
+// engineIn is one ready engine in a tier, naming the environment it runs steps
+// in — or naming none, which is what a host-process engine honestly reports.
+func engineIn(id, tier, identity string) registry.Instance {
+	e := readyEngine(id)
+	e.Tier = tier
+	e.EnvironmentIdentity = identity
+	return e
+}
 
 // countingCache is the REAL cache with a tally. Nothing about the lookup or
 // the record is faked — the SQL, the key encoding and the stored bytes are the
@@ -112,9 +147,18 @@ type cacheHarness struct {
 	leases lease.Manager
 	revs   *mutableRevisions
 	sched  *scheduler.Scheduler
+	fleet  *mutableFleet
 }
 
 func newCacheHarness(ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline) *cacheHarness {
+	t.Helper()
+	return newCacheHarnessWithFleet(ctx, t, pipeline,
+		&mutableFleet{instances: []registry.Instance{engineIn("e1", testTier, testEnvIdentity)}})
+}
+
+func newCacheHarnessWithFleet(
+	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline, fleet *mutableFleet,
+) *cacheHarness {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "run.db")
@@ -151,12 +195,11 @@ func newCacheHarness(ctx context.Context, t *testing.T, pipeline *dholev1.Pipeli
 		Store:       store,
 		Outbox:      ob,
 		Leases:      leases,
-		Fleet:       staticFleet{instances: []registry.Instance{readyEngine("e1")}},
+		Fleet:       fleet,
 		Definitions: staticDefs{pipeline: pipeline},
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: testEnvIdentity,
 		Cache:       entries,
 		Revisions:   revs,
 		BlobRefs:    refs,
@@ -165,7 +208,7 @@ func newCacheHarness(ctx context.Context, t *testing.T, pipeline *dholev1.Pipeli
 
 	return &cacheHarness{
 		store: store, db: db, blobs: blobs, bus: recorder, outbox: ob,
-		cache: entries, leases: leases, revs: revs, sched: sched,
+		cache: entries, leases: leases, revs: revs, sched: sched, fleet: fleet,
 	}
 }
 
@@ -520,7 +563,7 @@ func TestACacheNeedsItsLockfileAndItsReferences(t *testing.T) {
 		return scheduler.Config{
 			Store: h.store, Outbox: h.outbox, Leases: noLeases{},
 			Fleet: staticFleet{}, Definitions: staticDefs{pipeline: chain()},
-			Tier: testTier, EnvIdentity: testEnvIdentity,
+			Tier: testTier,
 		}
 	}
 
@@ -591,4 +634,161 @@ func dispatchOf(t *testing.T, events []runstore.Event, stepID string) scheduler.
 	}
 	t.Fatalf("step %q was never dispatched", stepID)
 	return scheduler.Dispatched{}
+}
+
+// TestTheEnvironmentACacheKeyIsHashedAgainstComesFromTheTiersEngines is the
+// defect ADR 0021 was written for, in the smallest form that shows it.
+//
+// The plane used to take the identity from an executor of its own, which in
+// every shipped configuration was a host process reporting that it has none —
+// so cache.Eligible refused every step, `cache_entries` stayed empty, and two
+// runs of a pure pipeline on a live cluster re-executed everything. Here the
+// identity arrives the only way it can: on the registrations of the engines in
+// the tier this scheduler dispatches to.
+func TestTheEnvironmentACacheKeyIsHashedAgainstComesFromTheTiersEngines(t *testing.T) {
+	ctx := testContext(t)
+	h := newCacheHarness(ctx, t, chain())
+
+	h.runChainForReal(ctx, t, "run-real")
+	lookups, records := h.cache.counts()
+	require.Positive(t, records, "an identity that reached the plane makes the steps cacheable")
+	require.Positive(t, lookups)
+
+	// The entry really is under the key the tier's identity produces: computed
+	// here from the same inputs, independently of anything the scheduler did.
+	key, err := cache.Key(chain().GetSteps()[0], testEnvIdentity, nil,
+		map[string]string{"oci://tool": "sha256:tool-v1"})
+	require.NoError(t, err)
+	outputs, hit, err := h.cache.Lookup(ctx, testTenant, key)
+	require.NoError(t, err)
+	require.True(t, hit, "step a was recorded under the identity its tier's engines announced")
+	require.Equal(t, digestText(statusOf(t, h.events(ctx, t, "run-real"), "a")),
+		outputs[0].GetDigest().GetAlgo()+":"+outputs[0].GetDigest().GetHex())
+
+	// And the next run is served from it.
+	h.seed(ctx, t, "run-cached")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-cached"))
+	require.Empty(t, h.dispatchedSteps(ctx, t, "run-cached"))
+}
+
+// TestALookupAndARecordUseTheSameKey is the sharpest edge in ADR 0021 and the
+// one that would fail silently.
+//
+// The lookup happens while a step is being considered and the record happens
+// when its status comes back — different calls, minutes apart, on either side
+// of an engine running the step. If those two resolved the environment
+// separately, or one of them held a copy from configuration, every step would
+// be recorded under one key and looked up under another: nothing would ever
+// hit, nothing would error, and the only symptom would be a cache that quietly
+// did nothing. Which is exactly the symptom this whole change is about.
+//
+// So: run for real, then ask the cache — through the SAME expression the
+// scheduler uses for a lookup — for what the record path wrote.
+func TestALookupAndARecordUseTheSameKey(t *testing.T) {
+	ctx := testContext(t)
+	h := newCacheHarness(ctx, t, chain())
+	h.runChainForReal(ctx, t, "run-real")
+
+	// Step b's key folds in the digest a produced, so this covers the harder
+	// of the two: a key over resolved inputs, not just over the step.
+	events := h.events(ctx, t, "run-real")
+	inputDigest := statusOf(t, events, "a").GetOutputs()[0].GetDigest()
+	key, err := cache.Key(chain().GetSteps()[1], testEnvIdentity,
+		[]*dholev1.Digest{inputDigest}, map[string]string{"oci://tool": "sha256:tool-v1"})
+	require.NoError(t, err)
+
+	_, hit, err := h.cache.Lookup(ctx, testTenant, key)
+	require.NoError(t, err)
+	require.True(t, hit,
+		"what the record path wrote must be findable at the key the lookup path computes")
+}
+
+// TestATierWhoseEnginesDisagreeAboutTheirEnvironmentCachesNothing: a tier is a
+// set of interchangeable workers and the queue picks which one runs the step,
+// so two engines advertising two different sandbox images mean the plane
+// cannot say what a result was produced in. Recording it anyway would serve
+// one image's output as the other's. This is a rollout in progress, and its
+// cache is off until it finishes.
+func TestATierWhoseEnginesDisagreeAboutTheirEnvironmentCachesNothing(t *testing.T) {
+	ctx := testContext(t)
+	fleet := &mutableFleet{instances: []registry.Instance{
+		engineIn("e1", testTier, "sha256:image-v1"),
+		engineIn("e2", testTier, "sha256:image-v2"),
+	}}
+	h := newCacheHarnessWithFleet(ctx, t, chain(), fleet)
+
+	h.runChainForReal(ctx, t, "run-first")
+	_, records := h.cache.counts()
+	require.Zero(t, records, "a tier that cannot say what its steps ran in records nothing")
+
+	// And the next run does the work again rather than reusing something that
+	// was never written.
+	h.seed(ctx, t, "run-second")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-second"))
+	require.Equal(t, []string{"a"}, h.dispatchedSteps(ctx, t, "run-second"))
+	require.False(t, dispatchOf(t, h.events(ctx, t, "run-second"), "a").Cacheable,
+		"and the run log says why, rather than leaving a slow run unexplained")
+
+	// Finish the rollout, and the tier starts caching.
+	fleet.set(engineIn("e1", testTier, "sha256:image-v2"), engineIn("e2", testTier, "sha256:image-v2"))
+	h.finish(ctx, t, "run-second", "a", "bytes from a")
+	_, afterRollout := h.cache.counts()
+	require.Positive(t, afterRollout, "an agreed tier caches again")
+}
+
+// TestATierWhoseEngineNamesNoEnvironmentCachesNothing is the honest outcome
+// for a host-process tier, and the pre-existing behaviour reached for the
+// right reason: nothing about a host is reproducible, the engine says so, and
+// its tier is cached against nothing rather than against a lie.
+func TestATierWhoseEngineNamesNoEnvironmentCachesNothing(t *testing.T) {
+	ctx := testContext(t)
+	fleet := &mutableFleet{instances: []registry.Instance{engineIn("e1", testTier, "")}}
+	h := newCacheHarnessWithFleet(ctx, t, chain(), fleet)
+
+	h.runChainForReal(ctx, t, "run-first")
+	lookups, records := h.cache.counts()
+	require.Zero(t, records)
+	require.Zero(t, lookups, "there is no key to look anything up by")
+
+	h.seed(ctx, t, "run-second")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-second"))
+	require.Equal(t, []string{"a"}, h.dispatchedSteps(ctx, t, "run-second"))
+	require.Equal(t, "no stable environment identity to hash the step against",
+		dispatchOf(t, h.events(ctx, t, "run-second"), "a").CacheIneligibleReason)
+}
+
+// TestAStepIsNotServedFromAnEntryRecordedInADifferentEnvironment: the identity
+// is in the key, so an engine fleet that moved to a new sandbox image does not
+// answer the new image's questions with the old image's results. This is the
+// property that makes taking the identity from the fleet safe — it is allowed
+// to change, and a change is a miss rather than a wrong hit.
+func TestAStepIsNotServedFromAnEntryRecordedInADifferentEnvironment(t *testing.T) {
+	ctx := testContext(t)
+	fleet := &mutableFleet{instances: []registry.Instance{engineIn("e1", testTier, "sha256:image-v1")}}
+	h := newCacheHarnessWithFleet(ctx, t, chain(), fleet)
+
+	h.runChainForReal(ctx, t, "run-on-v1")
+
+	fleet.set(engineIn("e1", testTier, "sha256:image-v2"))
+	h.seed(ctx, t, "run-on-v2")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-on-v2"))
+	require.Equal(t, []string{"a"}, h.dispatchedSteps(ctx, t, "run-on-v2"),
+		"the recorded entry belongs to an environment this step will not run in")
+}
+
+// TestAnotherTiersEnvironmentIsNotThisTiersEnvironment: engines are matched to
+// a tier by the subject their work is published on, so an engine in another
+// tier has no say in what this one caches against — and, in particular, cannot
+// disable this tier's cache by disagreeing with it.
+func TestAnotherTiersEnvironmentIsNotThisTiersEnvironment(t *testing.T) {
+	ctx := testContext(t)
+	fleet := &mutableFleet{instances: []registry.Instance{
+		engineIn("e1", testTier, testEnvIdentity),
+		engineIn("e2", "some-other-tier", "sha256:something-else"),
+	}}
+	h := newCacheHarnessWithFleet(ctx, t, chain(), fleet)
+
+	h.runChainForReal(ctx, t, "run-first")
+	_, records := h.cache.counts()
+	require.Equal(t, 2, records, "only this tier's engines answer for this tier's environment")
 }

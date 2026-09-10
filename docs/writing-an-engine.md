@@ -38,8 +38,11 @@ The shape of the loop, in any language:
 
 1. Connect to NATS with the credentials the deployment gave you.
 2. Publish an `EngineRegistration` — framed in an `EngineMessage`, not bare —
-   on `engine.registration`, advertising your platform, your capabilities and
-   every protocol version you speak.
+   on `engine.registration`, advertising your platform, your capabilities,
+   every protocol version you speak, and — if you have one —
+   `environment_identity`, the digest of the environment you run steps in.
+   Re-publish it unchanged every fifteen seconds; it is fire-and-forget, so a
+   plane that restarts learns you exist from the next one.
 3. Subscribe to `job.dispatch.<tier>.<caps>` for your tier and for each
    capability set you can satisfy. `<caps>` is a stable hash of the sorted
    capability set, so the bus does the filtering; see "Computing `<caps>`".
@@ -49,6 +52,16 @@ The shape of the loop, in any language:
 5. Heartbeat on `engine.heartbeat.<engine-id>` while you hold work.
 6. Honour `EngineControl` — cancel, drain — and refuse any control message whose
    fence token is not the one you hold.
+
+`environment_identity` is what the control plane hashes the step cache against
+(ADR 0021), and it is the one field the plane cannot work out for itself: on a
+distributed deployment your environment is on a different machine. It must be
+**stable** for identical environments, **different** for different ones, and
+**absent** rather than invented — an image digest or a VM snapshot id, never a
+hostname, a start time or a version string you made up. Leave it empty if you
+have nothing reproducible to name; your tier then caches nothing, which is the
+correct answer. Engines in one tier must agree on it, or the tier caches
+nothing either.
 
 Advertise only what you can honestly enforce. A capability you advertise is one
 the scheduler will rely on; an engine that claims `PRIVILEGED` without being able

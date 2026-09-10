@@ -317,7 +317,11 @@ func (s *Server) Start(ctx context.Context) error {
 		Tier:        DefaultTier,
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
-		EnvIdentity: in.envIdentity,
+		// There is deliberately no environment identity here. It belongs to
+		// the engines, arrives on their registrations, and is agreed per tier
+		// (ADR 0021): a plane reading it off an executor of its own reported
+		// none in every shipped configuration, and cached nothing anywhere.
+		Log: s.log,
 		// The cache, wired to the thing that actually runs steps. It was
 		// built, tested and consulted only by Plan — a dry run — so every real
 		// run executed every step again while Plan truthfully reported which

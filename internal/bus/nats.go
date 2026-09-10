@@ -349,3 +349,25 @@ type jsMessage struct {
 func (m *jsMessage) Data() []byte { return m.msg.Data() }
 func (m *jsMessage) Ack() error   { return m.msg.Ack() }
 func (m *jsMessage) Nak() error   { return m.msg.Nak() }
+
+// Health reports whether this connection can carry a message right now.
+//
+// It exists for the readiness probe. The client reconnects on its own, so a
+// brief disconnection is not a reason to restart anything — but a plane that
+// is not connected accepts runs it cannot dispatch, which presents as a
+// working control plane with a queue that never moves. Readiness is exactly
+// the signal that should say so.
+//
+// IsConnected is false while the client is reconnecting, which is the answer
+// this wants: during that window the plane genuinely cannot publish.
+func (n *NATS) Health() error {
+	switch {
+	case n == nil || n.conn == nil:
+		return errors.New("bus: no connection")
+	case n.conn.IsClosed():
+		return errors.New("bus: connection is closed")
+	case !n.conn.IsConnected():
+		return errors.New("bus: not connected")
+	}
+	return nil
+}

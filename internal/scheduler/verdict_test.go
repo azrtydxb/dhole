@@ -135,7 +135,6 @@ func (h *policyHarness) policyPlaneOverStore(
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 		Policy:      engine,
 		Provenance:  h.prov,
 		Revisions: staticRevisions{lockfile: map[string]string{

@@ -26,9 +26,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -208,11 +210,6 @@ type Config struct {
 	// GOOS/GOARCH vocabulary. Empty means the deployment does not care.
 	OS   string
 	Arch string
-	// EnvIdentity is the digest of the environment steps run in, as the
-	// executor reports it. Empty means the backend has none — a host process
-	// backend, say — and every step is then cached against nothing, which is
-	// to say not cached.
-	EnvIdentity string
 	// Cache is the step cache. Nil disables caching entirely, which is what a
 	// test of some other concern wants and what a deployment must never have:
 	// a scheduler with no cache runs every step of every run again, however
@@ -234,6 +231,9 @@ type Config struct {
 	Provenance Provenances
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
+	// Log is where a tier whose engines disagree about their environment is
+	// reported. Nil means slog.Default().
+	Log *slog.Logger
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -252,12 +252,20 @@ type Scheduler struct {
 	pol   policy.Engine
 	prov  Provenances
 
-	tier        string
-	os          string
-	arch        string
-	envIdentity string
-	ttl         time.Duration
-	now         func() time.Time
+	tier string
+	os   string
+	arch string
+	ttl  time.Duration
+	now  func() time.Time
+	log  *slog.Logger
+
+	// reported is what has already been said about a tier, so a fleet that is
+	// misconfigured or unreachable is reported when it CHANGES rather than on
+	// every cache decision. The identity is resolved on the dispatch path,
+	// which runs for every ready step of every run: a log line per lookup
+	// would bury the one occurrence that mattered.
+	reportedMu sync.Mutex
+	reported   map[string]string
 }
 
 // New validates the configuration and builds a Scheduler.
@@ -320,22 +328,26 @@ func New(cfg Config) (*Scheduler, error) {
 	}
 
 	s := &Scheduler{
-		store:       cfg.Store,
-		out:         cfg.Outbox,
-		leas:        cfg.Leases,
-		fleet:       cfg.Fleet,
-		defs:        cfg.Definitions,
-		cache:       cfg.Cache,
-		revs:        cfg.Revisions,
-		refs:        cfg.BlobRefs,
-		pol:         cfg.Policy,
-		prov:        cfg.Provenance,
-		tier:        cfg.Tier,
-		os:          cfg.OS,
-		arch:        cfg.Arch,
-		envIdentity: cfg.EnvIdentity,
-		ttl:         cfg.LeaseTTL,
-		now:         cfg.Now,
+		store:    cfg.Store,
+		out:      cfg.Outbox,
+		leas:     cfg.Leases,
+		fleet:    cfg.Fleet,
+		defs:     cfg.Definitions,
+		cache:    cfg.Cache,
+		revs:     cfg.Revisions,
+		refs:     cfg.BlobRefs,
+		pol:      cfg.Policy,
+		prov:     cfg.Provenance,
+		tier:     cfg.Tier,
+		os:       cfg.OS,
+		arch:     cfg.Arch,
+		ttl:      cfg.LeaseTTL,
+		now:      cfg.Now,
+		log:      cfg.Log,
+		reported: map[string]string{},
+	}
+	if s.log == nil {
+		s.log = slog.Default()
 	}
 	if s.ttl <= 0 {
 		s.ttl = DefaultLeaseTTL
@@ -462,10 +474,6 @@ func (s *Scheduler) serveFromCache(
 	if s.cache == nil {
 		return false, nil
 	}
-	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), s.envIdentity); !cacheable {
-		return false, nil
-	}
-
 	key, ok, err := s.cacheKey(ctx, tenantID, pipeline, step, state)
 	if err != nil || !ok {
 		return false, err
@@ -612,9 +620,6 @@ func (s *Scheduler) recordCacheEntry(
 			st.GetRunId(), state.revisionID, err)
 	}
 	step := stepByID(pipeline, st.GetStepId())
-	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), s.envIdentity); !cacheable {
-		return nil
-	}
 	key, ok, err := s.cacheKey(ctx, tenantID, pipeline, step, state)
 	if err != nil || !ok {
 		return err
@@ -626,8 +631,19 @@ func (s *Scheduler) recordCacheEntry(
 	return nil
 }
 
-// cacheKey computes one step's key, and reports whether it could be computed
-// at all.
+// cacheKey answers both questions that decide a cache entry — may this step be
+// cached, and under what key — from ONE reading of the tier's environment
+// identity, and it is the only place either is answered.
+//
+// That is the whole reason it is shaped this way. The lookup and the record
+// happen at different moments, in different calls, on different sides of an
+// engine actually running the step; if each resolved the identity for itself,
+// or one of them held a copy from configuration, a step could be looked up
+// under one key and recorded under another and the cache would simply never
+// hit, with nothing anywhere reporting a fault. Both paths call this, so the
+// two keys are the same expression over the same value or they do not exist.
+//
+// It also reports whether the key could be computed at all.
 //
 // It cannot be when an input digest is unknown, and that is answered honestly
 // rather than worked around. A key over a guessed or omitted input either
@@ -643,6 +659,10 @@ func (s *Scheduler) cacheKey(
 	step *dholev1.Step,
 	state *runState,
 ) (*dholev1.Digest, bool, error) {
+	identity := s.tierIdentity(ctx, tenantID)
+	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), identity); !cacheable {
+		return nil, false, nil
+	}
 	inputs, resolved := inputDigests(pipeline, step.GetId(), state)
 	if !resolved {
 		return nil, false, nil
@@ -652,7 +672,7 @@ func (s *Scheduler) cacheKey(
 		return nil, false, fmt.Errorf("scheduler: reading the lockfile of revision %q: %w",
 			state.revisionID, err)
 	}
-	key, err := cache.Key(step, s.envIdentity, inputs, rev.Lockfile)
+	key, err := cache.Key(step, identity, inputs, rev.Lockfile)
 	if err != nil {
 		// Eligible has already agreed the step is cacheable, so a refusal
 		// here is the two disagreeing rather than an ordinary answer. It
@@ -664,6 +684,68 @@ func (s *Scheduler) cacheKey(
 			step.GetId(), err)
 	}
 	return key, true, nil
+}
+
+// tierIdentity is the environment identity every cache key for this
+// scheduler's tier is hashed against, and "" when the tier has none.
+//
+// It comes from the FLEET rather than from configuration, because the plane
+// does not know it. The environment a step runs in belongs to the engine that
+// runs it — on a distributed deployment, on another machine entirely — and the
+// plane used to answer this from an executor of its own, which in every shipped
+// configuration was a host process executor honestly reporting that it has no
+// stable identity. cache.Eligible then refused every step, so nothing was ever
+// cached anywhere and the only test of it injected an identity no deployment
+// could produce (ADR 0021).
+//
+// A registry that cannot be read is a cold cache, not a wrong one: an
+// unanswerable question about the environment is answered "no identity", which
+// is the same refusal an unidentifiable environment gets.
+func (s *Scheduler) tierIdentity(ctx context.Context, tenantID string) string {
+	instances, err := s.fleet.Instances(ctx, tenantID)
+	if err != nil {
+		s.reportTier("unreadable: "+err.Error(),
+			"cannot read the fleet, so nothing is cached for this tier", "error", err)
+		return ""
+	}
+	// The identity is whatever the tier agreed on, and a disagreement is
+	// already an empty one — this does not decide anything, it only says so.
+	// Deciding here as well would be a second copy of the rule, and the copy
+	// that never ran would be the one that was wrong.
+	identity, conflict := registry.TierEnvironmentIdentity(instances, s.tier)
+	if len(conflict) > 0 {
+		// Visible rather than silently degraded: a half-finished rollout of
+		// two sandbox images turns the tier's cache off, and an operator
+		// wondering why their runs got slower has this line to find.
+		s.reportTier("conflict: "+strings.Join(conflict, ","),
+			"engines in this tier disagree about their environment, so nothing is cached for it",
+			"identities", conflict)
+	}
+	if identity == "" {
+		// The steady state of a host-process tier, and also of a plane whose
+		// fleet has not checked in yet. Said once, because "why is nothing
+		// cached" is otherwise a question with no answer anywhere.
+		s.reportTier("identity: none",
+			"no engine in this tier names its environment, so nothing is cached for it")
+		return ""
+	}
+	s.reportTier("identity: "+identity, "")
+	return identity
+}
+
+// reportTier logs msg once per distinct state of the tier. The identity is
+// resolved for every ready step of every run, so an unconditional log line
+// would be the loudest thing in the file and the one time it changed would be
+// invisible in it.
+func (s *Scheduler) reportTier(state, msg string, args ...any) {
+	s.reportedMu.Lock()
+	unchanged := s.reported[s.tier] == state
+	s.reported[s.tier] = state
+	s.reportedMu.Unlock()
+	if unchanged || msg == "" {
+		return
+	}
+	s.log.Warn(msg, append([]any{"tier", s.tier}, args...)...)
 }
 
 // inputDigests collects the digests feeding a step's input ports and says
@@ -1252,7 +1334,8 @@ func (s *Scheduler) dispatch(
 	if err != nil {
 		return fmt.Errorf("scheduler: listing engines for %s: %w", tenantID, err)
 	}
-	if len(Match(req, instances)) == 0 {
+	matched := Match(req, instances)
+	if len(matched) == 0 {
 		return s.recordUnschedulable(ctx, tenantID, runID, step.GetId(), Explain(req, instances), state)
 	}
 
@@ -1291,7 +1374,8 @@ func (s *Scheduler) dispatch(
 		}
 	}
 
-	dispatchMsg, err := s.buildDispatch(tenantID, runID, pipeline, step, attempt, token, fresh)
+	dispatchMsg, err := s.buildDispatch(tenantID, runID, pipeline, step, attempt, token, fresh,
+		dispatchVersion(matched))
 	if err != nil {
 		return err
 	}
@@ -1313,7 +1397,8 @@ func (s *Scheduler) dispatch(
 		}
 		dispatchMsg.Env[IdempotencyKeyEnv] = idempotencyKey
 	}
-	cacheable, reason := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), s.envIdentity)
+	cacheable, reason := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()),
+		s.tierIdentity(ctx, tenantID))
 	payload, err := MarshalDispatched(Dispatched{
 		Attempt:               attempt,
 		Fence:                 token.Fence,
@@ -1381,6 +1466,7 @@ func (s *Scheduler) buildDispatch(
 	attempt uint32,
 	token lease.Token,
 	state *runState,
+	version uint32,
 ) (*dholev1.JobDispatch, error) {
 	// What the step runs travels IN the dispatch: an engine never calls back
 	// to ask. See command.go for what resolves it today and what replaces it.
@@ -1396,11 +1482,42 @@ func (s *Scheduler) buildDispatch(
 		Step:            step,
 		Inputs:          inputsFor(pipeline, step.GetId(), state),
 		OutputPrefix:    fmt.Sprintf("runs/%s/%s/%s/%d", tenantID, runID, step.GetId(), attempt),
-		ProtocolVersion: wire.ProtocolVersion,
+		ProtocolVersion: version,
 		Tenant:          &dholev1.Tenant{Id: tenantID},
 		Command:         command,
 		Env:             env,
 	}, nil
+}
+
+// dispatchVersion is the wire version a dispatch to these engines is written
+// in: the highest version EVERY one of them speaks.
+//
+// It is not this plane's own version, and the difference only becomes visible
+// the first time the plane's version moves. A dispatch goes to a tier's
+// subject and the queue decides which member takes it, so the plane cannot
+// write one at a version negotiated per engine — it has to write one every
+// candidate can read. An engine handed a version it does not speak answers
+// PHASE_FAILED with "unsupported protocol" (docs/wire-contract.md), so getting
+// this wrong does not corrupt anything: it fails every step on every engine
+// one version behind, which is precisely the flag-day upgrade the compatibility
+// window exists to prevent.
+//
+// An engine whose advertised versions cannot be negotiated at all is skipped
+// rather than allowed to drag the dispatch below what this plane can express.
+// It is not in the fleet — Register refuses it — so this is unreachable, and
+// it is written the safe way anyway.
+func dispatchVersion(engines []registry.Instance) uint32 {
+	version := wire.ProtocolVersion
+	for _, e := range engines {
+		agreed, err := wire.Negotiate(e.ProtocolVersions)
+		if err != nil {
+			continue
+		}
+		if agreed < version {
+			version = agreed
+		}
+	}
+	return version
 }
 
 // inputsFor resolves what a step consumes from what its predecessors produced.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
+	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
 
@@ -138,6 +140,12 @@ type registryClient struct {
 	slots       uint32
 	caps        []dholev1.Capability
 	engineTypes []string
+	// envIdentity is the digest of the environment this engine runs steps in,
+	// empty when its executor has none. The plane cannot work this out: on a
+	// distributed deployment the environment is on another machine, and the
+	// plane used to read it off an executor of its own that was always a host
+	// process with no identity — so nothing was ever cached (ADR 0021).
+	envIdentity string
 
 	// nudge asks for a heartbeat now rather than at the next tick. A job that
 	// has just been accepted is already the engine's responsibility, and
@@ -149,7 +157,19 @@ type registryClient struct {
 	inFlight map[string]*dholev1.InFlight
 }
 
-func newRegistryClient(cfg Config) *registryClient {
+func newRegistryClient(cfg Config) (*registryClient, error) {
+	// Absent, never invented. A backend with nothing reproducible to name says
+	// so, and its tier then caches nothing — which is the honest outcome, and
+	// far better than hashing every result of every run against a constant
+	// that does not describe the machine they ran on.
+	identity, err := cfg.Executor.EnvironmentIdentity()
+	switch {
+	case err == nil:
+	case errors.Is(err, executor.ErrNoStableIdentity):
+		identity = ""
+	default:
+		return nil, fmt.Errorf("engine: reading the executor's environment identity: %w", err)
+	}
 	return &registryClient{
 		bus:         cfg.Bus,
 		engineID:    cfg.EngineID,
@@ -157,9 +177,10 @@ func newRegistryClient(cfg Config) *registryClient {
 		slots:       uint32(cfg.Slots), // #nosec G115 -- New rejects a non-positive Slots.
 		caps:        normaliseCaps(cfg.Executor.Capabilities()),
 		engineTypes: []string{cfg.Executor.Kind()},
+		envIdentity: identity,
 		nudge:       make(chan struct{}, 1),
 		inFlight:    map[string]*dholev1.InFlight{},
-	}
+	}, nil
 }
 
 // register announces this engine. The scheduler matches a step's requirements
@@ -177,6 +198,10 @@ func (r *registryClient) register(ctx context.Context) error {
 		Slots:            r.slots,
 		EngineTypes:      r.engineTypes,
 		Tier:             r.tier,
+		// What every cache key for this engine's tier is hashed against. The
+		// engine is the only thing that knows it, so if this is not on the
+		// registration the plane has no honest way to obtain it at all.
+		EnvironmentIdentity: r.envIdentity,
 	}
 	// Framed, never bare: the plane must be able to tell a registration from a
 	// heartbeat by its bytes alone (docs/wire-contract.md, "Message framing").

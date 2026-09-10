@@ -65,6 +65,18 @@ type record struct {
 	Negotiated  uint32   `json:"negotiated_version"`
 	EngineTypes []string `json:"engine_types"`
 	Tier        string   `json:"tier"`
+	// EnvironmentIdentity is the digest of the environment this engine runs
+	// steps in, as it advertised it, and empty when it has none. It is the
+	// value the tier's cache keys are hashed against (ADR 0021), which is why
+	// it is stored per engine and agreed per tier: the plane picks a tier and
+	// the queue picks the engine, so an identity that varied between the
+	// members of one tier would key the cache on a choice the scheduler does
+	// not get to make.
+	//
+	// A record written by a plane before ADR 0021, or by an engine speaking
+	// protocol version 1, has none. That reads as "this tier has no identity",
+	// which disables its cache rather than poisoning it.
+	EnvironmentIdentity string `json:"environment_identity,omitempty"`
 	// InFlight is how many jobs the last heartbeat declared. A draining engine
 	// is gone the moment this reaches zero.
 	InFlight int `json:"in_flight"`
@@ -111,9 +123,31 @@ func New(ctx context.Context, conn *nats.Conn, tenantID string, ttl time.Duratio
 // TTL is the heartbeat deadline instances in this registry are held to.
 func (k *KV) TTL() time.Duration { return k.ttl }
 
-// Register admits an engine in state registering, replacing whatever was there
-// under the same id: a restarted engine re-registering is the normal case, and
-// its new advertisement is the true one.
+// Register takes an engine's advertisement — what it IS — and leaves what it
+// has PROVEN alone.
+//
+// The description is always the new one: capabilities, platform, slots, tier
+// and environment identity all come from this message, because replacing them
+// is the entire purpose of a re-announcement. The lifecycle state does not,
+// and that distinction is the fix for a real outage. The wire contract obliges
+// every engine to re-announce itself every fifteen seconds, and this method
+// used to write StateRegistering unconditionally — so every healthy, idle,
+// working engine was demoted out of the dispatchable fleet three times a
+// minute and stayed there until its next heartbeat, up to five seconds later.
+// scheduler.Match dispatches to ready instances only, so on a warm two-engine
+// fleet the first step of a run was routinely recorded STEP_UNSCHEDULABLE with
+// "no registered engine is ready" before it went anywhere.
+//
+// Readiness is proof of liveness under the engine's own hand, and saying again
+// what you are does not un-prove that you are alive. So:
+//
+//   - nothing there, or a tombstone: registering. Liveness must be proven
+//     again, which is exactly what the tombstone exists to force — a gone
+//     engine walking straight back in as ready is the resurrection Heartbeat
+//     refuses for the same reason.
+//   - ready: stays ready.
+//   - draining: stays draining. An engine that is finishing up and re-announces
+//     itself must not become dispatchable again.
 //
 // The protocol version is negotiated BEFORE anything is written. An engine the
 // plane cannot talk to never becomes a fleet member, so the mismatch surfaces
@@ -133,20 +167,48 @@ func (k *KV) Register(ctx context.Context, r *dholev1.EngineRegistration) error 
 			r.GetEngineId(), r.GetSlots())
 	}
 
-	rec := record{
-		TenantID:         k.tenantID,
-		EngineID:         r.GetEngineId(),
-		State:            StateRegistering,
-		Capabilities:     capabilityNumbers(r.GetCapabilities()),
-		OS:               r.GetOs(),
-		Arch:             r.GetArch(),
-		Slots:            int(r.GetSlots()),
-		ProtocolVersions: slices.Clone(r.GetProtocolVersions()),
-		Negotiated:       negotiated,
-		EngineTypes:      slices.Clone(r.GetEngineTypes()),
-		Tier:             r.GetTier(),
+	return k.modify(ctx, r.GetEngineId(), func(prev record, exists bool) (record, error) {
+		rec := record{
+			TenantID:            k.tenantID,
+			EngineID:            r.GetEngineId(),
+			State:               StateRegistering,
+			Capabilities:        capabilityNumbers(r.GetCapabilities()),
+			OS:                  r.GetOs(),
+			Arch:                r.GetArch(),
+			Slots:               int(r.GetSlots()),
+			ProtocolVersions:    slices.Clone(r.GetProtocolVersions()),
+			Negotiated:          negotiated,
+			EngineTypes:         slices.Clone(r.GetEngineTypes()),
+			Tier:                r.GetTier(),
+			EnvironmentIdentity: r.GetEnvironmentIdentity(),
+		}
+		if exists {
+			rec.State = stateAfterReannouncement(prev.State)
+			// What it holds survives too, for the same reason the state does:
+			// a registration cannot describe in-flight work, and writing zero
+			// would be inventing a fact this message does not carry. The
+			// in-flight list is the ONLY answer to "which engine has this
+			// step?", so blanking it every fifteen seconds left a window in
+			// which a cancellation had nowhere to go.
+			rec.InFlight, rec.Jobs = prev.InFlight, slices.Clone(prev.Jobs)
+		}
+		return rec, nil
+	})
+}
+
+// stateAfterReannouncement is what an engine that says again what it is stands
+// at. A registration changes the description and never the proof.
+func stateAfterReannouncement(prev State) State {
+	switch prev {
+	case StateReady, StateDraining:
+		return prev
+	case StateRegistering, StateGone:
+		return StateRegistering
+	default:
+		// An unrecognised state is not credited with readiness: an instance
+		// this build cannot interpret has proven nothing to it.
+		return StateRegistering
 	}
-	return k.put(ctx, rec)
 }
 
 // Heartbeat renews an instance's lease on being alive and records what it
@@ -161,39 +223,40 @@ func (k *KV) Heartbeat(ctx context.Context, h *dholev1.EngineHeartbeat) error {
 	if h.GetEngineId() == "" {
 		return fmt.Errorf("registry: heartbeat: %w", ErrEngineRequired)
 	}
-	rec, _, err := k.get(ctx, k.tenantID, h.GetEngineId())
-	if err != nil {
-		return err
-	}
-	if rec.State == StateGone {
-		return fmt.Errorf("registry: heartbeat %q: %w", h.GetEngineId(), ErrNotRegistered)
-	}
-
-	rec.InFlight = len(h.GetInFlight())
-	rec.Jobs = make([]job, 0, rec.InFlight)
-	for _, held := range h.GetInFlight() {
-		rec.Jobs = append(rec.Jobs, job{
-			RunID:      held.GetRunId(),
-			StepID:     held.GetStepId(),
-			Attempt:    held.GetAttempt(),
-			FenceToken: held.GetFenceToken(),
-		})
-	}
-	switch rec.State {
-	case StateDraining:
-		// A drain finishes when the last job does, and not before. Nothing
-		// here interrupts the work; the engine's own heartbeat says when it
-		// has let go of everything.
-		if rec.InFlight == 0 {
-			rec.State = StateGone
+	return k.modify(ctx, h.GetEngineId(), func(rec record, exists bool) (record, error) {
+		if !exists {
+			return record{}, fmt.Errorf("registry: %q: %w", h.GetEngineId(), ErrNotRegistered)
 		}
-	case StateRegistering:
-		// Readiness is proof, not a claim: an engine is dispatchable once it
-		// has heartbeaten at least once under its own hand.
-		rec.State = StateReady
-	case StateReady, StateGone:
-	}
-	return k.put(ctx, rec)
+		if rec.State == StateGone {
+			return record{}, fmt.Errorf("registry: heartbeat %q: %w", h.GetEngineId(), ErrNotRegistered)
+		}
+
+		rec.InFlight = len(h.GetInFlight())
+		rec.Jobs = make([]job, 0, rec.InFlight)
+		for _, held := range h.GetInFlight() {
+			rec.Jobs = append(rec.Jobs, job{
+				RunID:      held.GetRunId(),
+				StepID:     held.GetStepId(),
+				Attempt:    held.GetAttempt(),
+				FenceToken: held.GetFenceToken(),
+			})
+		}
+		switch rec.State {
+		case StateDraining:
+			// A drain finishes when the last job does, and not before. Nothing
+			// here interrupts the work; the engine's own heartbeat says when it
+			// has let go of everything.
+			if rec.InFlight == 0 {
+				rec.State = StateGone
+			}
+		case StateRegistering:
+			// Readiness is proof, not a claim: an engine is dispatchable once it
+			// has heartbeaten at least once under its own hand.
+			rec.State = StateReady
+		case StateReady, StateGone:
+		}
+		return rec, nil
+	})
 }
 
 // Instances is the live fleet for one tenant.
@@ -261,18 +324,84 @@ func (k *KV) Drain(ctx context.Context, engineID string) error {
 	if engineID == "" {
 		return nil
 	}
-	rec, _, err := k.get(ctx, k.tenantID, engineID)
+	err := k.modify(ctx, engineID, func(rec record, exists bool) (record, error) {
+		if !exists {
+			return record{}, fmt.Errorf("registry: %q: %w", engineID, ErrNotRegistered)
+		}
+		if rec.State == StateDraining || rec.State == StateGone {
+			return record{}, errNoChange
+		}
+		rec.State = StateDraining
+		return rec, nil
+	})
 	if errors.Is(err, ErrNotRegistered) {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if rec.State == StateDraining || rec.State == StateGone {
+	return err
+}
+
+// errNoChange tells modify that the record is already what it should be, so
+// there is nothing to write. It never escapes this package.
+var errNoChange = errors.New("registry: nothing to write")
+
+// modifyAttempts bounds the compare-and-set retry. A contended key here is two
+// writers on the same engine — its own heartbeat racing its own re-announcement
+// — which resolves in one retry; a loop that never gave up would turn a bucket
+// problem into a hang inside a message handler.
+const modifyAttempts = 5
+
+// modify is the ONLY way a record is written: read, apply fn, compare-and-set.
+//
+// Every path that touches an instance goes through it, so there is no way to
+// update one without also renewing its TTL, and no way to renew one without
+// saying what it is. The compare-and-set is not decoration. An engine publishes
+// a heartbeat and a re-announcement within milliseconds of each other and the
+// plane handles both against the same key: with a blind put the loser of that
+// race silently discarded the winner's work, which is how a registration that
+// updated an engine's capabilities could be undone by a heartbeat computed from
+// the record as it was before.
+func (k *KV) modify(ctx context.Context, engineID string, fn func(prev record, exists bool) (record, error)) error {
+	for attempt := 0; attempt < modifyAttempts; attempt++ {
+		prev, rev, err := k.get(ctx, k.tenantID, engineID)
+		exists := true
+		switch {
+		case errors.Is(err, ErrNotRegistered):
+			prev, rev, exists = record{}, 0, false
+		case err != nil:
+			return err
+		}
+
+		next, err := fn(prev, exists)
+		switch {
+		case errors.Is(err, errNoChange):
+			return nil
+		case err != nil:
+			return err
+		}
+
+		data, err := json.Marshal(next)
+		if err != nil {
+			return fmt.Errorf("registry: encoding %q: %w", next.EngineID, err)
+		}
+		key := instanceKey(next.TenantID, next.EngineID)
+		if exists {
+			_, err = k.kv.Update(ctx, key, data, rev)
+			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
+				continue // somebody else wrote it; re-read and reapply
+			}
+		} else {
+			_, err = k.kv.Create(ctx, key, data)
+			if errors.Is(err, jetstream.ErrKeyExists) {
+				continue // it appeared between the read and the write
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("registry: writing %q: %w", next.EngineID, err)
+		}
 		return nil
 	}
-	rec.State = StateDraining
-	return k.put(ctx, rec)
+	return fmt.Errorf("registry: writing %q: gave up after %d attempts against a concurrent writer",
+		engineID, modifyAttempts)
 }
 
 // get reads one instance. A missing key is ErrNotRegistered: it aged out, and
@@ -293,20 +422,6 @@ func (k *KV) get(ctx context.Context, tenantID, engineID string) (record, uint64
 	return rec, entry.Revision(), nil
 }
 
-// put writes an instance and, in doing so, resets its TTL. Every path that
-// touches an instance goes through here, so there is no way to update one
-// without also renewing it — and no way to renew one without saying what it is.
-func (k *KV) put(ctx context.Context, rec record) error {
-	data, err := json.Marshal(rec)
-	if err != nil {
-		return fmt.Errorf("registry: encoding %q: %w", rec.EngineID, err)
-	}
-	if _, err := k.kv.Put(ctx, instanceKey(rec.TenantID, rec.EngineID), data); err != nil {
-		return fmt.Errorf("registry: writing %q: %w", rec.EngineID, err)
-	}
-	return nil
-}
-
 // instance is the public view of a record.
 func (r record) instance() Instance {
 	caps := make([]dholev1.Capability, 0, len(r.Capabilities))
@@ -318,15 +433,17 @@ func (r record) instance() Instance {
 		jobs = append(jobs, Job(held))
 	}
 	return Instance{
-		ID:               r.EngineID,
-		InFlight:         jobs,
-		State:            r.State,
-		Capabilities:     caps,
-		OS:               r.OS,
-		Arch:             r.Arch,
-		EngineTypes:      slices.Clone(r.EngineTypes),
-		Slots:            r.Slots,
-		ProtocolVersions: slices.Clone(r.ProtocolVersions),
+		ID:                  r.EngineID,
+		InFlight:            jobs,
+		State:               r.State,
+		Capabilities:        caps,
+		OS:                  r.OS,
+		Arch:                r.Arch,
+		EngineTypes:         slices.Clone(r.EngineTypes),
+		Slots:               r.Slots,
+		ProtocolVersions:    slices.Clone(r.ProtocolVersions),
+		Tier:                r.Tier,
+		EnvironmentIdentity: r.EnvironmentIdentity,
 	}
 }
 

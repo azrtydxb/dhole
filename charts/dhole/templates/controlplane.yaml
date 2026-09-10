@@ -70,16 +70,23 @@ spec:
           ports:
             - name: api
               containerPort: {{ .Values.controlPlane.apiPort }}
-          # The API has no unauthenticated call, so a probe cannot ask it a
-          # question. A TCP probe is what is honestly available: it says the
-          # listener is up, and nothing more.
+          # Readiness asks whether the plane can do work: it reaches its run
+          # store and its bus. A TCP probe could only say the listener was up,
+          # so a plane whose database had gone kept passing while failing every
+          # request it was given.
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /readyz
               port: api
             initialDelaySeconds: 3
             periodSeconds: 5
+          # Liveness asks only whether the process is running, and deliberately
+          # touches nothing else. A plane whose database is down must NOT be
+          # killed: restarting does not bring the database back, and a
+          # crash-loop turns one outage into two.
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: api
             initialDelaySeconds: 15
             periodSeconds: 20

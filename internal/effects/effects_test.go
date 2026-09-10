@@ -260,7 +260,6 @@ func newHarness(
 		Tier:        "trusted",
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 		Now:         now,
 	})
 	require.NoError(t, err)

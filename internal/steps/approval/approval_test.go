@@ -331,7 +331,6 @@ func newHarness(ctx context.Context, t *testing.T, open storeOpener) *harness {
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 	})
 	require.NoError(t, err)
 

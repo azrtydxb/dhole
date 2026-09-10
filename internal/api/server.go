@@ -135,9 +135,13 @@ type Config struct {
 	// cancellation stop the work rather than only the bookkeeping. Optional,
 	// with the same rule.
 	Control EngineControl
-	// Environment is where steps would run: the engine kind and the digest
-	// every cache key is computed against. An executor.Executor satisfies it.
-	Environment Environment
+	// Tier is the trust tier steps would be dispatched to, and must match the
+	// scheduler's. It is what a plan resolves the environment identity of:
+	// every cache key is hashed against the identity that tier's engines
+	// announced (ADR 0021), so a plan computed against another tier — or
+	// against this plane's own executor, as it once was — reports hits and
+	// misses the run would not see.
+	Tier string
 	// Catalog resolves the plugin a step names, so Validate can report a
 	// step whose plugin is unpublished or whose declaration disagrees with
 	// it. Optional: without one, Validate checks only the definition.
@@ -179,7 +183,7 @@ type Server struct {
 	drain Drainer
 	// control is the one inbound path to an engine. See control.go.
 	control EngineControl
-	env     Environment
+	tier    string
 	cat     StepResolver
 	// live and archive are the two copies of a step's log: the ephemeral
 	// subject and the durable object. See stream.go for why both exist.
@@ -220,7 +224,7 @@ func NewServer(cfg Config) (*Server, error) {
 		fleet:       cfg.Fleet,
 		drain:       cfg.Drain,
 		control:     cfg.Control,
-		env:         cfg.Environment,
+		tier:        cfg.Tier,
 		cat:         cfg.Catalog,
 		live:        cfg.LiveLogs,
 		archive:     cfg.LogArchive,

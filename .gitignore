@@ -10,3 +10,5 @@ node_modules/
 /dhole
 *.test
 /seed
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep

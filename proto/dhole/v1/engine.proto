@@ -127,6 +127,20 @@ message EngineRegistration {
   repeated string engine_types = 7;
   // Trust tier this engine runs in; it may only receive work dispatched to it.
   string tier = 8;
+  // Digest of the environment this engine runs steps in — a resolved sandbox
+  // image digest, a VM snapshot id — and the value every cache key produced
+  // for this engine's tier is hashed against.
+  //
+  // The engine reports it because the engine is the only thing that knows it.
+  // The control plane used to read this off its own executor, which on every
+  // real deployment is a host process executor with no stable identity, so
+  // nothing was ever cached anywhere (ADR 0021).
+  //
+  // It must be stable for identical environments, different for different
+  // ones, and ABSENT rather than invented: an engine with nothing reproducible
+  // to name leaves this empty, and its tier caches nothing instead of caching
+  // against a lie.
+  string environment_identity = 9;
 }
 
 // InFlight is one job an engine is currently running.

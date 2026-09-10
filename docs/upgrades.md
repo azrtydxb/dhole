@@ -11,7 +11,7 @@ That is the whole policy. The rest of this page is what it obliges.
 `internal/wire` holds two constants and one function:
 
 ```go
-const ProtocolVersion uint32 = 1  // what this build of the control plane speaks
+const ProtocolVersion uint32 = 2  // what this build of the control plane speaks
 const SupportedWindow uint32 = 1  // how many versions back it accepts
 ```
 
@@ -56,6 +56,11 @@ The order in practice:
    on the older version until they are replaced.
 2. Roll the engines. Each restart renegotiates upward on its own.
 3. Only once every engine is at N may the next release drop N-1.
+
+While a tier holds engines at both versions, the plane writes every dispatch to
+that tier at the OLDER one: the queue decides which member takes a dispatch, so
+it must be readable by all of them. A tier finishes moving to N when its last
+N-1 engine does.
 
 Two control-plane processes may share a database — that is what lets two of them
 drain the same outbox backlog — but they must **not** share a `--deployment-id`

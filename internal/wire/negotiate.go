@@ -7,7 +7,12 @@ package wire
 import "fmt"
 
 // ProtocolVersion is the version this build of the control plane speaks.
-const ProtocolVersion uint32 = 1
+//
+// Version 2 added EngineRegistration.environment_identity (ADR 0021). An
+// engine speaking version 1 registers without one, which is accepted — the
+// window below is what makes a fleet upgrade gradually — and its tier caches
+// nothing until it is upgraded.
+const ProtocolVersion uint32 = 2
 
 // SupportedWindow is how many versions back the control plane accepts. One
 // means "current and previous"; widening it is a deliberate decision, because

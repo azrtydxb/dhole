@@ -241,3 +241,21 @@ func TestAFilesystemStoreWarnsThatNothingWillBeReadable(t *testing.T) {
 		t.Errorf("an s3 deployment is warned about a problem it does not have:\n%s", shared)
 	}
 }
+
+// A TCP probe cannot tell a working control plane from one whose database has
+// gone: both answer a connection. The two probes ask different questions on
+// purpose — readiness whether the plane can work, liveness only whether the
+// process is alive — and conflating them makes a dependency outage into a
+// crash-loop.
+func TestTheProbesAskTheControlPlaneAQuestion(t *testing.T) {
+	out := render(t)
+
+	if strings.Contains(out, "tcpSocket") {
+		t.Errorf("a probe still only checks the socket:\n%s", out)
+	}
+	for _, path := range []string{"path: /readyz", "path: /healthz"} {
+		if !strings.Contains(out, path) {
+			t.Errorf("no probe uses %s:\n%s", path, out)
+		}
+	}
+}

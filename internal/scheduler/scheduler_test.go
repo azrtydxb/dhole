@@ -18,6 +18,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/wire"
 )
 
 const (
@@ -163,6 +164,12 @@ func readyEngine(id string) registry.Instance {
 		Arch:             "amd64",
 		Slots:            4,
 		ProtocolVersions: []uint32{1},
+		// The tier and the environment it names are not decoration: the
+		// scheduler hashes cache keys against the identity the engines of the
+		// tier it dispatches to announced, so an instance that named neither
+		// would make every step in every test uncacheable (ADR 0021).
+		Tier:                testTier,
+		EnvironmentIdentity: testEnvIdentity,
 	}
 }
 
@@ -236,7 +243,6 @@ func newHarnessWithLeaseTTL(
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 		LeaseTTL:    ttl,
 	})
 	require.NoError(t, err)
@@ -307,7 +313,6 @@ func (h *harness) secondPlane(ctx context.Context, t *testing.T) *scheduler.Sche
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 	})
 	require.NoError(t, err)
 	return sched
@@ -328,7 +333,6 @@ func (h *harness) planeWithLeases(
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 	})
 	require.NoError(t, err)
 	return sched
@@ -798,4 +802,39 @@ func TestAnOrphanedAtMostOnceStepIsNotSilentlyRepeated(t *testing.T) {
 		"an at-most-once step whose engine died must not be dispatched again on its own")
 	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAwaitingReplay, "a"),
 		"and the run must say so, because nothing will move until a person acts")
+}
+
+// TestADispatchIsWrittenAtTheHighestVersionEveryMatchedEngineSpeaks is what
+// makes bumping the wire version a rolling upgrade rather than a flag day.
+//
+// A dispatch goes to a TIER's subject and the queue decides which member takes
+// it, so the plane cannot address one at a version negotiated per engine — it
+// has to write one every candidate can read. It used to stamp its own maximum
+// on every dispatch, which was invisible while there had only ever been one
+// version: the moment the plane moved to version 2, every engine still on
+// version 1 answered "unsupported protocol" to every step it was handed,
+// having been admitted to the fleet precisely because the plane accepts
+// engines one version behind.
+func TestADispatchIsWrittenAtTheHighestVersionEveryMatchedEngineSpeaks(t *testing.T) {
+	ctx := testContext(t)
+
+	current := readyEngine("e-current")
+	current.ProtocolVersions = []uint32{wire.ProtocolVersion}
+	behind := readyEngine("e-behind")
+	behind.ProtocolVersions = []uint32{wire.ProtocolVersion - 1}
+
+	t.Run("a fleet on this version is dispatched at this version", func(t *testing.T) {
+		h := newHarness(ctx, t, current)
+		require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+		require.Equal(t, []string{"a"}, h.drain(ctx, t))
+		require.Equal(t, wire.ProtocolVersion, h.bus.dispatches(t)[0].GetProtocolVersion())
+	})
+
+	t.Run("one engine a version behind holds the whole tier back", func(t *testing.T) {
+		h := newHarness(ctx, t, current, behind)
+		require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+		require.Equal(t, []string{"a"}, h.drain(ctx, t))
+		require.Equal(t, wire.ProtocolVersion-1, h.bus.dispatches(t)[0].GetProtocolVersion(),
+			"the queue may hand this to the older engine, so it must be readable by it")
+	})
 }

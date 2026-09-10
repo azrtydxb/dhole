@@ -32,20 +32,6 @@ type CacheReader interface {
 	Lookup(ctx context.Context, tenantID string, key *dholev1.Digest) ([]*dholev1.OutputRef, bool, error)
 }
 
-// Environment is the digest of the environment steps run in, which every
-// cache key is folded over. executor.Executor satisfies it.
-//
-// It deliberately does NOT say which kind of engine takes a step. That is the
-// matched instance's own advertisement (registry.Instance.EngineTypes), and
-// this plane's locally configured backend is a different answer on any fleet
-// whose engines are not all alike.
-type Environment interface {
-	// EnvironmentIdentity is the digest of the environment steps run in. A
-	// backend with no reproducible environment returns an empty string, and
-	// nothing is then cacheable.
-	EnvironmentIdentity() (string, error)
-}
-
 // StepResolver is the catalog, narrowed to the two questions the API asks of
 // it: what does this step resolve to, and what does this plugin declare.
 // catalog.Store satisfies it.
@@ -85,9 +71,10 @@ func (s *Server) Plan(
 	case s.fleet == nil:
 		return nil, connect.NewError(connect.CodeUnimplemented,
 			errors.New("api: this server was built without an engine registry"))
-	case s.env == nil:
+	case s.tier == "":
 		return nil, connect.NewError(connect.CodeUnimplemented,
-			errors.New("api: this server was built without an execution environment"))
+			errors.New("api: this server was built without a dispatch tier, and a plan "+
+				"cannot say what an unknown tier would cache"))
 	}
 
 	pipeline, revisionID, err := s.pinned(ctx, p.TenantID, req.Msg.GetPipelineId(), req.Msg.GetRevisionId())
@@ -112,10 +99,15 @@ func (s *Server) Plan(
 		return nil, connect.NewError(connect.CodeInternal,
 			fmt.Errorf("api: reading the engine fleet: %w", err))
 	}
-	// An environment that cannot name itself is not an error: it means the
-	// backend has no reproducible identity, which cache.Eligible then reports
-	// per step in its own words.
-	envIdentity, _ := s.env.EnvironmentIdentity()
+	// The identity comes from the same place the scheduler takes it from: the
+	// tier these steps would be dispatched to, as its engines announced it
+	// (ADR 0021). A plan computed against this plane's own executor answered a
+	// different question from the one the run would ask — and on a distributed
+	// plane, which has no executor at all, it answered none.
+	//
+	// A tier with no agreed identity is not an error: cache.Eligible then
+	// reports it per step, in its own words, exactly as a run would find it.
+	envIdentity, _ := registry.TierEnvironmentIdentity(engines, s.tier)
 
 	steps := make([]*dholev1.PlannedStep, 0, len(pipeline.GetSteps()))
 	byID := stepsByID(pipeline)

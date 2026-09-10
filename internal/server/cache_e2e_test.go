@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -10,34 +11,47 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/nats-io/nats.go"
+
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/executor/process"
+	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/server"
+	"github.com/azrtydxb/dhole/internal/wire"
 )
 
-// stableEnv is the process executor with one honest change: it names the
-// environment its steps run in.
+// containerLikeEnv is the process executor with one honest change: it names
+// the environment its steps run in, as a container or Kubernetes backend does
+// by resolving its sandbox image to a digest.
 //
-// Without it this whole file would pass for the wrong reason. process.Executor
-// reports ErrNoStableIdentity — correctly, because a host process runs against
-// whatever the host carries — and cache.Eligible then refuses EVERY step for
-// want of an identity to hash against. A test written over that backend would
-// find nothing cacheable, dispatch everything twice, and be satisfied by a
-// cache that was never consulted at all.
+// It is a stand-in for a backend this suite cannot start, and it is NOT a way
+// of injecting an identity into the control plane. The plane no longer has
+// anywhere to inject one: this executor belongs to the ENGINE, the engine
+// announces the identity on its registration, and the scheduler reads it back
+// off the tier's fleet (ADR 0021). Everything between those two points is the
+// production path, including the bus.
+//
+// That distinction is the whole reason this file was rewritten. The identity
+// used to be read off an executor the control plane held, which no deployment
+// ever had — a distributed plane has no executor at all and the single binary
+// has a host process one, which correctly reports it has nothing stable to
+// name — so nothing was ever cached anywhere while this suite passed.
 //
 // The identity is a constant because this test IS the reproducible
 // environment: both runs are the same process, the same binaries and the same
 // /bin/sh. That is exactly the promise a container digest or a VM snapshot id
 // makes for a real backend.
-type stableEnv struct{ *process.Executor }
+type containerLikeEnv struct{ *process.Executor }
 
-func (stableEnv) EnvironmentIdentity() (string, error) { return "sha256:test-environment-v1", nil }
+func (containerLikeEnv) EnvironmentIdentity() (string, error) {
+	return "sha256:test-environment-v1", nil
+}
 
 // startCachingServer is startEmbedded over a caller-owned directory and an
-// executor with a stable environment identity, so several runs share ONE store
+// engine backend that names its environment, so several runs share ONE store
 // and one cache.
 func startCachingServer(ctx context.Context, t *testing.T, dir string) *server.Server {
 	t.Helper()
@@ -48,7 +62,7 @@ func startCachingServer(ctx context.Context, t *testing.T, dir string) *server.S
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
-		Executor: stableEnv{process.New()},
+		Executor: containerLikeEnv{process.New()},
 	})
 	require.NoError(t, err)
 	require.NoError(t, srv.Start(ctx))
@@ -267,4 +281,122 @@ func outputDigest(t *testing.T, events []runstore.Event, stepID, port string) st
 	}
 	t.Fatalf("step %q reported no output on port %q", stepID, port)
 	return ""
+}
+
+// TestTheDefaultDeploymentCachesNothingAndSaysWhy is the configuration this
+// binary ships with: no executor named, so the hosted engine runs steps as
+// host processes, and a host process runs against whatever the host happens to
+// carry.
+//
+// It is here because the previous version of this file could not have been
+// written. Every test of the cache injected an identity into the plane, so
+// there was no case at all for the configuration every deployment actually
+// had — the one where nothing is cacheable — and no case that would have
+// noticed if the identity stopped arriving. This is the negative half of
+// TestSecondRunIsServedFromTheCache, and it must keep failing to cache for the
+// reason it states.
+func TestTheDefaultDeploymentCachesNothingAndSaysWhy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	srv := startEmbedded(ctx, t)
+	warmTheFleet(ctx, t, srv)
+	watcher := watchDispatches(ctx, t, srv)
+
+	first, err := srv.Submit(ctx, tenantID, loadPipeline(t))
+	require.NoError(t, err)
+	firstEvents := awaitRunCompleted(ctx, t, srv, first)
+	require.Equal(t, "no stable environment identity to hash the step against",
+		dispatchedPayload(t, firstEvents, "a").CacheIneligibleReason,
+		"a host process engine names no environment, and the run log says so")
+
+	second, err := srv.Submit(ctx, tenantID, loadPipeline(t))
+	require.NoError(t, err)
+	awaitRunCompleted(ctx, t, srv, second)
+	require.Equal(t, []string{"a", "b"}, watcher.stepsDispatchedFor(second),
+		"nothing was recorded to reuse, so the second run does the work again")
+}
+
+// TestATierWhoseEnginesDisagreeAboutTheirEnvironmentStopsCaching is the
+// misconfiguration ADR 0021 chose to make visible rather than tolerate: a tier
+// is a set of interchangeable workers, and two of them advertising two
+// different environments mean the plane cannot say what a result was produced
+// in. Half a rollout turns the tier's cache off until it finishes.
+//
+// The second engine is a registration published on the bus, exactly as an
+// engine announces itself — no type in this file pretends to be one.
+func TestATierWhoseEnginesDisagreeAboutTheirEnvironmentStopsCaching(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	srv := startCachingServer(ctx, t, t.TempDir())
+	warmTheFleet(ctx, t, srv)
+	watcher := watchDispatches(ctx, t, srv)
+
+	first, err := srv.Submit(ctx, tenantID, loadPipeline(t))
+	require.NoError(t, err)
+	awaitRunCompleted(ctx, t, srv, first)
+	require.Equal(t, []string{"a", "b"}, watcher.stepsDispatchedFor(first))
+
+	// A second engine joins the tier, running a different image. It never runs
+	// anything — it does not have to. The plane cannot know which of the two
+	// the queue would hand the next step to.
+	announceEngine(ctx, t, srv, "rolled-out-engine", "sha256:test-environment-v2")
+
+	second, err := srv.Submit(ctx, tenantID, loadPipeline(t))
+	require.NoError(t, err)
+	secondEvents := awaitRunCompleted(ctx, t, srv, second)
+
+	require.Equal(t, []string{"a", "b"}, watcher.stepsDispatchedFor(second),
+		"the tier cannot say what its steps run in, so nothing may be served from the cache")
+	require.False(t, dispatchedPayload(t, secondEvents, "a").Cacheable)
+	require.Equal(t, "no stable environment identity to hash the step against",
+		dispatchedPayload(t, secondEvents, "a").CacheIneligibleReason)
+}
+
+// announceEngine publishes one engine registration and waits until the plane
+// has it, which is what makes the assertion after it about a fleet the plane
+// can see rather than about a message in flight.
+//
+// It sends what an engine sends: a framed EngineMessage on engine.registration
+// (docs/wire-contract.md). Nothing here reaches into the registry.
+func announceEngine(ctx context.Context, t *testing.T, srv *server.Server, engineID, identity string) {
+	t.Helper()
+	conn, err := bus.Connect(ctx, srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+
+	reg := &dholev1.EngineRegistration{
+		EngineId:            engineID,
+		ProtocolVersions:    []uint32{wire.ProtocolVersion},
+		Os:                  runtime.GOOS,
+		Arch:                runtime.GOARCH,
+		Slots:               1,
+		EngineTypes:         []string{"process"},
+		Tier:                server.DefaultTier,
+		EnvironmentIdentity: identity,
+	}
+	require.NoError(t, conn.Publish(ctx, bus.SubjectEngineRegistration(), wire.FrameRegistration(reg)))
+
+	// Read back through the registry the plane itself writes, over the same
+	// bucket. The TTL matches the server's on purpose: binding a KV bucket
+	// with a different one would reconfigure the bucket the plane is using.
+	raw, err := nats.Connect(srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(raw.Close)
+	fleet, err := registry.New(ctx, raw, tenantID, 30*time.Second)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		engines, err := fleet.Instances(ctx, tenantID)
+		if err != nil {
+			return false
+		}
+		for _, e := range engines {
+			if e.ID == engineID && e.EnvironmentIdentity == identity {
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second, 50*time.Millisecond, "the plane never saw the second engine register")
 }

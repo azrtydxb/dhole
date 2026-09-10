@@ -63,9 +63,6 @@ type infra struct {
 	// engineBus and exec exist only when this process hosts an engine.
 	engineBus *bus.NATS
 	exec      executor.Executor
-	// envIdentity is the executor's environment digest, empty when it has
-	// none — which is what makes a host-process step non-cacheable.
-	envIdentity string
 
 	// closers run in reverse order on teardown.
 	closers []func()
@@ -258,20 +255,14 @@ func (i *infra) openEngineSide(ctx context.Context, cfg Config) error {
 	// decides whether ANYTHING is cacheable, and a process executor honestly
 	// reports it has none — so a deployment whose steps run somewhere
 	// reproducible has to be able to say so by supplying that backend.
+	//
+	// Nothing here reads that identity. The hosted engine announces it on its
+	// registration exactly as an engine in another datacentre does, and the
+	// scheduler takes it from the tier's fleet (ADR 0021) — one path, whether
+	// or not the engine happens to share this process.
 	i.exec = cfg.Executor
 	if i.exec == nil {
 		i.exec = process.New()
-	}
-	identity, err := i.exec.EnvironmentIdentity()
-	switch {
-	case err == nil:
-		i.envIdentity = identity
-	case errors.Is(err, executor.ErrNoStableIdentity):
-		// Honest: a host process runs against whatever the host carries, so
-		// its steps are cached against nothing rather than against a lie.
-		i.envIdentity = ""
-	default:
-		return fmt.Errorf("server: reading the executor's environment identity: %w", err)
 	}
 	return nil
 }

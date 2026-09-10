@@ -286,7 +286,6 @@ func newPolicyHarness(ctx context.Context, t *testing.T, opts policyOptions) *po
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 		Policy:      engine,
 		Provenance:  opts.provenance,
 		Revisions: staticRevisions{lockfile: map[string]string{

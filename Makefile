@@ -22,7 +22,7 @@ GO_DIRS     := $(shell find . -name '*.go' -not -path './web/*' -exec dirname {}
 DHOLE_TEST_KUBECONFIG     ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
 
-.PHONY: check web-check web-e2e test test-race test-integration conformance build clean
+.PHONY: check web-check web-build web-e2e test test-race test-integration conformance build clean
 .PHONY: acceptance acceptance-ci acceptance-automation acceptance-agent
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
@@ -140,8 +140,37 @@ conformance:
 	fi
 	go run ./conformance/cmd/dhole-conformance $(CONFORMANCE_FLAGS) $(ENGINE)
 
+## web-build: build the GUI and stage it for embedding into the control plane.
+##
+## The plane serves the app from its own binary and its own origin. Every call
+## the GUI makes — Connect RPCs and two long-lived SSE streams — is a
+## cross-origin request when the app is hosted elsewhere, so a separately
+## served GUI does not work until someone sets controlPlane.allowedOrigins and
+## fails silently in the browser until they work out that is why.
+##
+## It SKIPS when web/node_modules is absent, like web-check, so a Go-only
+## checkout still builds: the result is a plane with no GUI, which is a
+## perfectly good plane (ADR 0013 — the GUI is one API client among several).
+web-build:
+	@if [ ! -d web/node_modules ]; then \
+		echo "web-build: skipped (web/node_modules absent; run npm ci in web/)"; \
+		exit 0; \
+	fi
+	cd web && npm run build
+	rm -rf internal/webui/dist
+	mkdir -p internal/webui/dist
+	cp -R web/dist/. internal/webui/dist/
+	# Restored because the rm above takes it with the stale build, and a fresh
+	# checkout needs the directory to exist or `go:embed all:dist` cannot
+	# compile — which would make a Go-only checkout unbuildable.
+	cp internal/webui/gitkeep.txt internal/webui/dist/.gitkeep
+	@echo "web-build: staged web/dist into internal/webui/dist"
+
 ## build: the single binary, stamped with its version and commit.
-build:
+##
+## Depends on web-build so a release binary carries the GUI. The dependency is
+## one-way and skippable: no npm, no GUI, still a binary.
+build: web-build
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/$(BINARY)
 
 clean:

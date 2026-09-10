@@ -152,7 +152,6 @@ func (h *harness) planeOverStore(
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 	})
 	require.NoError(t, err)
 	return sched

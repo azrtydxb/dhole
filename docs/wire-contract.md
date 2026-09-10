@@ -190,8 +190,51 @@ An engine that receives a version it does not speak must reply with
 must not drop the message: silence is indistinguishable from a dead engine, and
 the step would hang until its lease expired.
 
+A dispatch is addressed to a TIER, not to an engine — the work queue decides
+which member takes it — so the control plane writes one at the highest version
+**every** engine that could take it speaks, which is not necessarily its own.
+One engine a version behind holds its tier at that version until it is
+upgraded. That is what makes the window usable: a plane that stamped its own
+maximum on every dispatch would fail every step on every engine it had just
+admitted for being one version behind.
+
 Within a major version, schema changes are additive only. Fields are never
 renumbered, never removed, and never change meaning.
+
+## Environment identity
+
+`EngineRegistration.environment_identity` is the digest of the environment the
+engine runs steps in: a resolved sandbox image digest, a VM snapshot id.
+Everything the step cache is keyed on comes from the pipeline except this, and
+this is the one thing the control plane cannot see for itself — on a
+distributed deployment the environment is on another machine entirely, and a
+plane that answered the question from its own configuration answered it wrong
+in every deployment anyone runs (ADR 0021).
+
+Three obligations, and they are the whole contract:
+
+- **Stable** for identical environments. Two engines running the same image
+  report the same string, on every restart, in any order.
+- **Different** for different environments. Anything a step's result could
+  depend on which is not already in the cache key must change it. An image
+  digest satisfies this; an image TAG does not.
+- **Absent** rather than invented. An engine with nothing reproducible to name
+  — a host process engine, which runs against whatever the host happens to
+  carry — leaves the field empty. It must never substitute a hostname, a
+  start-up timestamp, a version string or a constant.
+
+The plane hashes cache keys against the identity of the **tier**, agreed by its
+members. A tier caches nothing at all when its engines disagree, when any
+member reports none, or when no member has registered yet. Disagreement is a
+misconfiguration — usually a half-finished rollout of two different sandbox
+images — and the plane logs it rather than degrading quietly. It is not an
+error and nothing is refused: the tier simply runs every step for real until it
+agrees again.
+
+An engine that omits the field is treated as having none, which turns its
+tier's cache off rather than poisoning it. That is what makes the field
+additive: an engine written against version 1 registers without one, works, and
+does not cache.
 
 ## Trace context
 
@@ -267,6 +310,14 @@ becomes visible again.
 An engine that registers once and never again works perfectly until the first
 time the plane restarts, and is then invisible until the engine itself is
 restarted — with nothing anywhere reporting a fault.
+
+A re-announcement updates what an engine IS and never what it has PROVEN. An
+engine that is already ready stays ready across it, and one that is draining
+stays draining; only an engine the plane does not hold, or holds as gone, has
+to prove liveness with a heartbeat again. A plane that reset the lifecycle on
+every re-announcement dropped every healthy engine out of the dispatchable
+fleet three times a minute, which showed up as steps recorded unschedulable
+against a warm idle fleet.
 
 ## Control
 

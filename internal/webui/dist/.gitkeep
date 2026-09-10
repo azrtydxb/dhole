@@ -1,0 +1,3 @@
+The built web app is copied here by `make web-build` and embedded into the
+control plane binary. Nothing else belongs in this directory, and its contents
+are not committed: a build artefact in git is a build artefact that goes stale.

@@ -15,7 +15,9 @@ import (
 	"github.com/azrtydxb/dhole/internal/api"
 	"github.com/azrtydxb/dhole/internal/catalog"
 	"github.com/azrtydxb/dhole/internal/defstore"
+	"github.com/azrtydxb/dhole/internal/health"
 	"github.com/azrtydxb/dhole/internal/identity"
+	"github.com/azrtydxb/dhole/internal/webui"
 )
 
 // DefaultAPIAddr is where a plane that was not told otherwise serves its
@@ -138,13 +140,12 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		LogArchive: s.infra.blobs,
 		OS:         runtime.GOOS,
 		Arch:       runtime.GOARCH,
-	}
-	// Assigned only when there is one. A nil executor.Executor stored in the
-	// interface field would be a non-nil interface holding nil, and Plan's
-	// "this server was built without an execution environment" check — which
-	// exists so a plan cannot silently lie — would never fire.
-	if s.infra.exec != nil {
-		cfg.Environment = s.infra.exec
+		// The tier the scheduler dispatches to, because that is whose engines
+		// a plan has to ask about the environment. This used to be the plane's
+		// own executor, which a distributed plane does not have — so Plan
+		// answered "this server was built without an execution environment"
+		// on every deployment that is not the single binary (ADR 0021).
+		Tier: DefaultTier,
 	}
 
 	apiSrv, err := api.NewServer(cfg)
@@ -163,7 +164,7 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 	}()
 
 	httpSrv := &http.Server{
-		Handler:           allowOrigins(apiSrv.Handler(), s.cfg.APIAllowedOrigins),
+		Handler:           allowOrigins(s.rootHandler(apiSrv.Handler()), s.cfg.APIAllowedOrigins),
 		ReadHeaderTimeout: apiReadHeaderTimeout,
 		BaseContext:       func(net.Listener) context.Context { return runCtx },
 	}
@@ -279,4 +280,79 @@ func allowOrigins(next http.Handler, origins []string) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rootHandler puts the probes and the GUI on the same listener as the API.
+//
+// One port, deliberately. The GUI speaks Connect and holds two SSE streams
+// open, and every one of those is a cross-origin request when the app is
+// served from anywhere else — so a separately hosted GUI does not work at all
+// until someone names its origin, and fails silently in a browser until they
+// work out that is why. Same origin, no CORS, one ingress.
+//
+// The API keeps every path it owns. Connect mounts its services under
+// /dhole.<package>. and the SSE endpoints under /v1/, so those two prefixes go
+// to the API and everything else falls through to the app — which is what lets
+// a deep link like /runs/run_123 open the run it names.
+func (s *Server) rootHandler(api http.Handler) http.Handler {
+	mux := http.NewServeMux()
+
+	// The probes first, because they must answer whether or not there is a
+	// GUI in this build and whatever the API is doing.
+	health.Handler(mux, map[string]health.Check{
+		// The run log is the plane's memory; without it nothing can be
+		// recorded, planned or served, so a plane that cannot reach it is not
+		// ready by any definition.
+		"store": func(ctx context.Context) error {
+			if s.infra == nil || s.infra.db == nil {
+				return errors.New("no run store")
+			}
+			return s.infra.db.PingContext(ctx)
+		},
+		// And the bus, because a plane that cannot reach it accepts runs it
+		// can never dispatch — which looks like a working plane and a stuck
+		// queue.
+		"bus": func(_ context.Context) error {
+			if s.infra == nil || s.infra.plane == nil {
+				return errors.New("no bus connection")
+			}
+			return s.infra.plane.Health()
+		},
+	})
+
+	if app, ok := webui.Handler(); ok {
+		mux.Handle("/", app)
+	} else {
+		// No GUI in this build, which is a supported way to build it. The API
+		// still owns its own paths above; this only decides what an unknown
+		// path gets, and "there is no app here" beats the API's own 404.
+		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "this control plane was built without the web app", http.StatusNotFound)
+		})
+	}
+
+	// The API is chosen by PREFIX, ahead of the mux, rather than registered on
+	// it. A ServeMux pattern only matches a prefix when it ends in "/", so
+	// "/dhole." would have been an exact match on that literal path and every
+	// Connect POST would have fallen through to the app — which answered 405,
+	// because an app serves GET. Being explicit about the two prefixes the API
+	// owns is both shorter than enumerating generated route constants and
+	// harder to get subtly wrong.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAPIPath(r.URL.Path) {
+			api.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// isAPIPath reports whether the API owns this path.
+//
+// Connect mounts every service under /<proto package>., and the SSE endpoints
+// the run view holds open live under /v1/. Both are the contract's, and a new
+// prefix added to either must be added here — which is what
+// TestMountingTheProbesLeavesEveryAPIPathServed exists to catch.
+func isAPIPath(path string) bool {
+	return strings.HasPrefix(path, "/dhole.") || strings.HasPrefix(path, "/v1/")
 }

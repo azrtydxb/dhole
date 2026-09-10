@@ -134,9 +134,13 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Slots <= 0 {
 		cfg.Slots = 1
 	}
+	registry, err := newRegistryClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Agent{
 		cfg:      cfg,
-		registry: newRegistryClient(cfg),
+		registry: registry,
 		slots:    make(chan struct{}, cfg.Slots),
 		jobs:     newRunning(),
 	}, nil

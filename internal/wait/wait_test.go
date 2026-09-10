@@ -517,7 +517,6 @@ func newPlane(ctx context.Context, t *testing.T, store runstore.Store, url, tena
 		Tier:        testTier,
 		OS:          "linux",
 		Arch:        "amd64",
-		EnvIdentity: "sha256:env",
 	})
 	require.NoError(t, err)
 

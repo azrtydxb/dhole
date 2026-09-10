@@ -18,6 +18,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/engine"
+	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/process"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
@@ -611,4 +612,70 @@ func (f *failTerminalStatus) refused() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.refusal
+}
+
+// identifiedExecutor is the process executor that names its environment, as a
+// container backend does by resolving its image to a digest. It stands in for
+// a backend this test cannot start.
+type identifiedExecutor struct{ *process.Executor }
+
+func (identifiedExecutor) EnvironmentIdentity() (string, error) {
+	return "sha256:image-under-test", nil
+}
+
+// TestAnEngineAnnouncesTheEnvironmentItRunsStepsIn is the engine's half of
+// ADR 0021. The control plane cannot see the environment a step runs in — on a
+// distributed deployment it is on another machine — so if it is not on the
+// registration there is no honest way for the plane to obtain it at all, and
+// nothing anywhere gets cached.
+func TestAnEngineAnnouncesTheEnvironmentItRunsStepsIn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	registrations := h.registrations(ctx, t)
+
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-identified",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: identifiedExecutor{process.New()},
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	reg := receive(ctx, t, registrations, "registration")
+	require.Equal(t, "sha256:image-under-test", reg.GetEnvironmentIdentity())
+}
+
+// TestAnEngineWithNoStableEnvironmentAnnouncesNone: absent, never invented. A
+// host process runs against whatever the host carries, and an engine that
+// hashed its results against a made-up constant would have them served to a
+// later run on a machine carrying something else — which is the one wrong
+// answer a cache must never give. Its tier caches nothing instead.
+func TestAnEngineWithNoStableEnvironmentAnnouncesNone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// The premise: the backend really does refuse to name an environment.
+	_, err := process.New().EnvironmentIdentity()
+	require.ErrorIs(t, err, executor.ErrNoStableIdentity)
+
+	h := newHarness(t)
+	registrations := h.registrations(ctx, t)
+
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-anonymous",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: process.New(),
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	reg := receive(ctx, t, registrations, "registration")
+	require.Empty(t, reg.GetEnvironmentIdentity(),
+		"an engine with nothing reproducible to name says nothing rather than something")
 }

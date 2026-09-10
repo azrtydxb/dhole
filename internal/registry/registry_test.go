@@ -13,6 +13,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/wire"
 )
 
 // tenantA and tenantB scope every instance in this file. There is no unscoped
@@ -69,15 +70,26 @@ func registryOn(ctx context.Context, t *testing.T, url, tenantID string, ttl tim
 func registration(engineID string, caps ...dholev1.Capability) *dholev1.EngineRegistration {
 	return &dholev1.EngineRegistration{
 		EngineId:         engineID,
-		ProtocolVersions: []uint32{1},
+		ProtocolVersions: []uint32{wire.ProtocolVersion},
 		Capabilities:     caps,
 		Os:               "linux",
 		Arch:             "amd64",
 		Slots:            4,
 		EngineTypes:      []string{"process"},
-		Tier:             "trusted",
+		Tier:             testTier,
+		// What the tier's cache keys are hashed against (ADR 0021). Written
+		// here rather than in the one test about it, because it has to survive
+		// every round trip through the bucket, not just that one.
+		EnvironmentIdentity: testEnvIdentity,
 	}
 }
+
+// testTier and testEnvIdentity are the tier every registration in this file is
+// in and the environment it names.
+const (
+	testTier        = "trusted"
+	testEnvIdentity = "sha256:sandbox-v1"
+)
 
 func heartbeat(engineID string, inFlight ...*dholev1.InFlight) *dholev1.EngineHeartbeat {
 	return &dholev1.EngineHeartbeat{EngineId: engineID, InFlight: inFlight}
@@ -224,8 +236,8 @@ func TestSchedulerRoutesOnlyToInstancesSatisfyingResolvedRequirements(t *testing
 
 	// Too new: an engine from a future build the plane cannot be talked down
 	// to. It is refused rather than deferred to.
-	tooNew := registration("engine-v2", dholev1.Capability_CAPABILITY_NETWORK)
-	tooNew.ProtocolVersions = []uint32{2}
+	tooNew := registration("engine-ahead", dholev1.Capability_CAPABILITY_NETWORK)
+	tooNew.ProtocolVersions = []uint32{wire.ProtocolVersion + 1}
 	require.ErrorContains(t, reg.Register(ctx, tooNew), "unsupported protocol")
 
 	// Right version, wrong capabilities.
@@ -241,7 +253,7 @@ func TestSchedulerRoutesOnlyToInstancesSatisfyingResolvedRequirements(t *testing
 	// Everything satisfied, on a build one version behind and on the current
 	// one: both speak a version the plane accepts.
 	behind := registration("engine-behind", dholev1.Capability_CAPABILITY_NETWORK)
-	behind.ProtocolVersions = []uint32{1}
+	behind.ProtocolVersions = []uint32{wire.ProtocolVersion - 1}
 	require.NoError(t, reg.Register(ctx, behind))
 	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-behind")))
 
@@ -267,7 +279,7 @@ func TestSchedulerRoutesOnlyToInstancesSatisfyingResolvedRequirements(t *testing
 	// instance may be sent is downstream of knowing what it speaks.
 	behindInstance, ok := instanceByID(t, instances, "engine-behind")
 	require.True(t, ok)
-	require.Equal(t, []uint32{1}, behindInstance.ProtocolVersions)
+	require.Equal(t, []uint32{wire.ProtocolVersion - 1}, behindInstance.ProtocolVersions)
 	require.Equal(t, 4, behindInstance.Slots)
 }
 
@@ -459,4 +471,231 @@ func TestRegistryKeepsTheEngineTypesAnEngineAdvertises(t *testing.T) {
 	require.Equal(t, []string{"container", "process"}, instances[0].EngineTypes,
 		"the engine types survive the write and the read, or nothing downstream can "+
 			"tell a container engine from a process one")
+}
+
+// TestAnEngineThatReannouncesItselfStaysDispatchable is a real outage, in one
+// test.
+//
+// The wire contract obliges every engine to publish its registration again
+// every fifteen seconds, and Register used to write StateRegistering over
+// whatever was there. scheduler.Match dispatches to ready instances only, so
+// every healthy engine dropped out of the dispatchable fleet three times a
+// minute and stayed out until its next heartbeat, up to five seconds later —
+// which showed up on a live cluster as the first step of every run being
+// recorded STEP_UNSCHEDULABLE, "no registered engine is ready", against a warm
+// idle fleet of two engines.
+//
+// Saying again what you are does not un-prove that you are alive.
+func TestAnEngineThatReannouncesItselfStaysDispatchable(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1")))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	ready, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, registry.StateReady, ready.State, "a heartbeat is what proves readiness")
+
+	// The obligatory re-announcement, unchanged, exactly as the agent sends it.
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+
+	instances, err = reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	after, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, registry.StateReady, after.State,
+		"an engine that says again what it is has not stopped being alive")
+	require.NotEmpty(t, scheduler.Match(executor.Requirements{OS: "linux", Arch: "amd64"}, instances),
+		"and it is still somewhere a step can be dispatched")
+}
+
+// TestAReannouncementReplacesWhatAnEngineAdvertises is the other half of the
+// same rule: the STATE survives a re-announcement and the DESCRIPTION does
+// not. Preserving the description would make a re-announcement pointless —
+// changing what an engine advertises is the whole reason the wire contract
+// obliges it to send one.
+func TestAReannouncementReplacesWhatAnEngineAdvertises(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1")))
+
+	upgraded := registration("engine-1", dholev1.Capability_CAPABILITY_NETWORK)
+	upgraded.Slots = 9
+	upgraded.EnvironmentIdentity = "sha256:sandbox-v2"
+	require.NoError(t, reg.Register(ctx, upgraded))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	after, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, registry.StateReady, after.State)
+	require.Equal(t, 9, after.Slots)
+	require.Equal(t, []dholev1.Capability{dholev1.Capability_CAPABILITY_NETWORK}, after.Capabilities)
+	require.Equal(t, "sha256:sandbox-v2", after.EnvironmentIdentity)
+}
+
+// TestADrainingEngineThatReannouncesItselfDoesNotBecomeDispatchableAgain: a
+// drain is a decision the plane made about an engine, and the engine repeating
+// what it is cannot overturn it. If it could, every rolling upgrade would hand
+// new work to the engine it was trying to empty, fifteen seconds after
+// draining it.
+func TestADrainingEngineThatReannouncesItselfDoesNotBecomeDispatchableAgain(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1", job("run-1", "step-1"))))
+	require.NoError(t, reg.Drain(ctx, "engine-1"))
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	after, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, registry.StateDraining, after.State)
+	require.Empty(t, scheduler.Match(executor.Requirements{OS: "linux", Arch: "amd64"}, instances),
+		"a draining engine takes no new work, however often it announces itself")
+}
+
+// TestAnEngineThatWasGoneMustProveItsLivenessAgainBeforeItIsDispatchedTo: the
+// tombstone exists so a dead engine cannot walk back into the fleet, and a
+// registration is a claim rather than proof. Re-announcing therefore starts it
+// at registering, and only a heartbeat — under the engine's own hand — makes
+// it dispatchable.
+func TestAnEngineThatWasGoneMustProveItsLivenessAgainBeforeItIsDispatchedTo(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	// Registered, ready, drained, and then the heartbeat holding nothing that
+	// completes the drain: gone.
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1", job("run-1", "step-1"))))
+	require.NoError(t, reg.Drain(ctx, "engine-1"))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1")))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	_, ok := instanceByID(t, instances, "engine-1")
+	require.False(t, ok, "a gone instance is not in the fleet")
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	instances, err = reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	back, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, registry.StateRegistering, back.State,
+		"a tombstone may not resurrect straight into ready")
+	require.Empty(t, scheduler.Match(executor.Requirements{OS: "linux", Arch: "amd64"}, instances))
+
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1")))
+	instances, err = reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	proven, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, registry.StateReady, proven.State)
+}
+
+// TestAReannouncementKeepsWhatTheLastHeartbeatSaidTheEngineHolds: a
+// registration cannot describe in-flight work, so writing zero would be
+// inventing a fact the message does not carry. The in-flight list is the only
+// answer to "which engine holds this step", and blanking it every fifteen
+// seconds left a window in which a cancellation had nowhere to go.
+func TestAReannouncementKeepsWhatTheLastHeartbeatSaidTheEngineHolds(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1", job("run-1", "step-1"))))
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	after, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Len(t, after.InFlight, 1)
+	require.Equal(t, "step-1", after.InFlight[0].StepID)
+}
+
+// TestAnEnginesEnvironmentIdentityReachesTheFleetItAnnouncedItTo is the whole
+// point of the new field: the plane cannot see the environment an engine runs
+// steps in, so it has to arrive on the registration and survive the round trip
+// through the bucket (ADR 0021).
+func TestAnEnginesEnvironmentIdentityReachesTheFleetItAnnouncedItTo(t *testing.T) {
+	ctx := testContext(t)
+	reg, _ := newRegistry(ctx, t, tenantA, liveTTL)
+
+	require.NoError(t, reg.Register(ctx, registration("engine-1")))
+	require.NoError(t, reg.Heartbeat(ctx, heartbeat("engine-1")))
+
+	instances, err := reg.Instances(ctx, tenantA)
+	require.NoError(t, err)
+	one, ok := instanceByID(t, instances, "engine-1")
+	require.True(t, ok)
+	require.Equal(t, testEnvIdentity, one.EnvironmentIdentity)
+	require.Equal(t, testTier, one.Tier)
+}
+
+// TestATierTakesTheIdentityItsEnginesAgreeOn covers the four answers
+// TierEnvironmentIdentity can give, because three of them are refusals and a
+// refusal that came back as an identity would key the cache on a lie.
+func TestATierTakesTheIdentityItsEnginesAgreeOn(t *testing.T) {
+	engine := func(id, tier, identity string) registry.Instance {
+		return registry.Instance{
+			ID: id, State: registry.StateReady, Tier: tier, EnvironmentIdentity: identity,
+		}
+	}
+
+	t.Run("engines that agree name the tier's environment", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
+			engine("e1", "trusted", "sha256:a"),
+			engine("e2", "trusted", "sha256:a"),
+			// Another tier's disagreement is not this tier's problem.
+			engine("e3", "untrusted", "sha256:b"),
+		}, "trusted")
+		require.Equal(t, "sha256:a", identity)
+		require.Empty(t, conflict)
+	})
+
+	t.Run("engines that disagree leave the tier with no identity", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
+			engine("e1", "trusted", "sha256:a"),
+			engine("e2", "trusted", "sha256:b"),
+		}, "trusted")
+		require.Empty(t, identity,
+			"a half-finished rollout of two images caches nothing rather than caching wrongly")
+		require.Equal(t, []string{"sha256:a", "sha256:b"}, conflict,
+			"and the conflicting identities are reported, so the plane can say what is wrong")
+	})
+
+	t.Run("one engine naming no environment leaves the tier with none", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
+			engine("e1", "trusted", "sha256:a"),
+			engine("e2", "trusted", ""),
+		}, "trusted")
+		require.Empty(t, identity,
+			"the queue could hand the step to the engine that cannot name where it ran it")
+		require.Equal(t, []string{"", "sha256:a"}, conflict)
+	})
+
+	t.Run("a tier of host processes has no identity and no conflict", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
+			engine("e1", "trusted", ""),
+			engine("e2", "trusted", ""),
+		}, "trusted")
+		require.Empty(t, identity)
+		require.Empty(t, conflict, "agreeing that there is nothing to name is not a disagreement")
+	})
+
+	t.Run("a tier nothing has registered in has no identity", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity(nil, "trusted")
+		require.Empty(t, identity, "a plane whose fleet has not checked in has a cold cache")
+		require.Empty(t, conflict)
+	})
 }
