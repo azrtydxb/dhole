@@ -528,8 +528,26 @@ func (s *Server) beat(ctx context.Context, beat *dholev1.EngineHeartbeat) {
 	// real whether or not we can schedule to it.
 	s.renewHeld(ctx, beat)
 	if err := s.fleet.Heartbeat(ctx, beat); err != nil && ctx.Err() == nil {
-		s.log.Error("engine heartbeat refused", "engine", beat.GetEngineId(), "error", err)
+		logHeartbeatRefusal(s.log, beat.GetEngineId(), err)
 	}
+}
+
+// logHeartbeatRefusal reports a refused heartbeat at the level it deserves.
+//
+// An unregistered engine is routine and self-healing: a plane that restarted
+// has no record of the engines still running against it, and the wire contract
+// obliges each of them to announce itself again — which they do, on their next
+// registration interval. Logging it at ERROR made every plane restart produce
+// a burst of errors describing a system that was recovering correctly, which
+// is how a log stops being read.
+//
+// Everything else is a real refusal and stays an error.
+func logHeartbeatRefusal(log *slog.Logger, engineID string, err error) {
+	if errors.Is(err, registry.ErrNotRegistered) {
+		log.Info("engine must announce itself again", "engine", engineID)
+		return
+	}
+	log.Error("engine heartbeat refused", "engine", engineID, "error", err)
 }
 
 // renewHeld extends the lease behind every job an engine says it is holding.

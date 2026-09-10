@@ -38,6 +38,22 @@ func renderErr(t *testing.T, args ...string) (string, error) {
 	return string(out), err
 }
 
+// renderNotes returns the chart's NOTES.txt as an operator sees it.
+//
+// `helm template` does not render notes, so a mistake in NOTES.txt is invisible
+// to every other test in this file. A dry-run install does render them, which
+// is both how the text is asserted and how the template itself is type-checked.
+func renderNotes(t *testing.T, args ...string) string {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not on PATH: the chart cannot be rendered here")
+	}
+	out, err := exec.Command("helm",
+		append([]string{"install", "dhole", "./dhole", "--dry-run"}, args...)...).CombinedOutput()
+	require.NoError(t, err, "helm install --dry-run failed: %s", out)
+	return string(out)
+}
+
 // TestJetStreamSizeIsInNATSUnitsNotKubernetesOnes pins the translation.
 //
 // NATS parses only the FINAL character of a size as its unit, so the
@@ -194,5 +210,34 @@ func TestS3CredentialsComeFromASecretRatherThanTheManifest(t *testing.T) {
 func TestChoosingS3WithoutABucketIsRefusedAtInstall(t *testing.T) {
 	if _, err := renderErr(t, "--set", "objectStore.kind=s3"); err == nil {
 		t.Fatal("the chart rendered an s3 object store with no bucket")
+	}
+}
+
+// A fresh install can write a pipeline and run nothing: a revision may not be
+// approved by its author, and the bootstrap credential is the only principal
+// there is. That is the correct rule and a dead end without instructions, so
+// the chart has to say how to get out of it.
+func TestTheNotesSayHowToEscapeTheBootstrapDeadlock(t *testing.T) {
+	out := renderNotes(t)
+
+	for _, want := range []string{"approved by its author", "token issue", "--subject reviewer"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the notes never mention %q, so an operator cannot approve anything:\n%s", want, out)
+		}
+	}
+}
+
+// The unshared-store warning is the one that matters most, because its symptom
+// — every step succeeds, nothing it produced is readable — points nowhere near
+// its cause.
+func TestAFilesystemStoreWarnsThatNothingWillBeReadable(t *testing.T) {
+	out := renderNotes(t)
+	if !strings.Contains(out, "objectStore.kind=s3") {
+		t.Errorf("a filesystem object store is not warned about:\n%s", out)
+	}
+
+	shared := renderNotes(t, "--set", "objectStore.kind=s3", "--set", "objectStore.s3.bucket=b")
+	if strings.Contains(shared, "every process keeps its own object") {
+		t.Errorf("an s3 deployment is warned about a problem it does not have:\n%s", shared)
 	}
 }

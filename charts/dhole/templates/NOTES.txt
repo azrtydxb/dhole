@@ -13,16 +13,35 @@ Reach the contract:
   export DHOLE_TOKEN=<the token from the log above>
   dhole pipeline validate --file pipeline.yaml
 
+A revision may not be approved by its author, and the bootstrap credential is
+the only one a fresh install has — so it can write a pipeline and nothing can
+run it until a second principal exists. Mint one against the plane's own
+database, which is what the bootstrap credential is for:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "dhole.fullname" . }} -- \
+    /ko-app/dhole token issue --subject reviewer --store-dsn "$DSN"
+
+where $DSN is the value in the {{ include "dhole.storeSecretName" . }} Secret. The
+image has no shell, so this runs the binary directly rather than through one.
+
 Engines, one Deployment per tier:
 {{- range .Values.engines }}
   - {{ .name }} (tier {{ .tier }}, {{ .replicas | default 1 }} replica(s), {{ .slots | default 1 }} slot(s))
 {{- end }}
 
-{{- if not .Values.controlPlane.persistence.enabled }}
+{{- $store := .Values.objectStore | default dict }}
+{{- if ne ($store.kind | default "filesystem") "s3" }}
 
-WARNING: controlPlane.persistence is off, so the content-addressed store and the
-blob store live in an emptyDir and are discarded when the pod moves. Cached
-results and run artifacts do not survive a reschedule.
+WARNING: objectStore.kind is not s3, so every process keeps its own object
+store. An engine writes a step's log and outputs to its own pod's disk, and the
+control plane looks for them on its own and does not find them. Nothing errors:
+every step succeeds and everything it produced is unreachable. Set
+objectStore.kind=s3 for any deployment whose engines are not in the control
+plane's own pod.
+{{- else if not .Values.controlPlane.persistence.enabled }}
+
+WARNING: controlPlane.persistence is off. The object store is s3, so artifacts
+and logs are safe, but the plane's own state directory is an emptyDir.
 {{- end }}
 {{- if and (not .Values.postgres.external) .Values.postgres.enabled }}
 
