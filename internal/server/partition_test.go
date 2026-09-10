@@ -625,6 +625,10 @@ func TestAPlaneAdvancesOnlyTheRunsItOwns(t *testing.T) {
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BusURL:   busServer.URL(),
 		BlobRoot: filepath.Join(dir, "state"),
+		// An ephemeral port: the default is the well-known 7777, and a test
+		// that takes it fails whenever anything else on the machine holds it —
+		// a port-forward to a real cluster, or a second test binary.
+		APIAddr: "127.0.0.1:0",
 		// Named, not derived: the spare below has to join the SAME deployment,
 		// and a derived id would be this plane's state directory.
 		DeploymentID: "deployment-under-test",

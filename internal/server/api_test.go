@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -353,4 +354,32 @@ func TestTheEditingHeadSurvivesAPlaneRestart(t *testing.T) {
 	})
 	require.Error(t, err, "the restarted plane accepted an edit against a superseded base")
 	require.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+}
+
+// TestNoTestBindsTheWellKnownAPIPort guards a fragility that cost a confusing
+// failure: a server test that omits APIAddr takes the default 7777, and then
+// fails with "address already in use" whenever anything else on the machine
+// holds that port — a port-forward to a real cluster, say. The failure names
+// the port and not the omission, so it reads as an environment problem.
+func TestNoTestBindsTheWellKnownAPIPort(t *testing.T) {
+	entries, err := filepath.Glob("*_test.go")
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, name := range entries {
+		src, err := os.ReadFile(name)
+		require.NoError(t, err)
+		text := string(src)
+
+		// Each server.Config in a test must choose its own port. Counting is
+		// enough: a Config without an APIAddr beside it is the mistake.
+		configs := strings.Count(text, "server.Config{")
+		addrs := strings.Count(text, `APIAddr: "127.0.0.1:0"`) +
+			strings.Count(text, `APIAddr:  "127.0.0.1:0"`) +
+			strings.Count(text, "NoAPI:")
+		require.GreaterOrEqual(t, addrs, configs,
+			"%s builds %d server.Config values but only %d ask for an ephemeral port "+
+				"(or no API): one of them will bind %s and fail when that port is taken",
+			name, configs, addrs, server.DefaultAPIAddr)
+	}
 }

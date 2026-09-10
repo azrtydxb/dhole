@@ -10,11 +10,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/bus"
@@ -62,8 +64,18 @@ func run() error {
 	blobDir := envOr("DHOLE_BLOB_DIR", filepath.Join(stateDir, "blobs"))
 	casDir := envOr("DHOLE_CAS_DIR", filepath.Join(stateDir, "cas"))
 
-	conn, err := bus.Connect(ctx, busURL)
-	if err != nil {
+	// An engine and its bus start together, so the first dial routinely fails.
+	// Exiting there hands the fleet to Kubernetes' restart backoff, which grows
+	// to five minutes — an engine absent for minutes after every bus restart.
+	var conn *bus.NATS
+	if err := connectWithRetry(ctx, func(ctx context.Context) error {
+		c, err := bus.Connect(ctx, busURL)
+		if err != nil {
+			return err
+		}
+		conn = c
+		return nil
+	}, busDialBackoff); err != nil {
 		return err
 	}
 	defer conn.Close()
@@ -107,4 +119,36 @@ func positiveEnv(name string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be a positive integer, got %q", name, raw)
 	}
 	return v, nil
+}
+
+// busDialBackoff is how long to wait between dials while the bus comes up.
+// Short, because the common case is a bus that is seconds away, and bounded
+// only by the context so a shutdown is never delayed by a retry.
+const busDialBackoff = 2 * time.Second
+
+// connectWithRetry keeps dialling until it succeeds or ctx ends.
+//
+// It reports the context's error rather than the last dial's when it gives up,
+// because "the engine was told to stop" and "the bus never came back" are
+// different operational stories and the log has to tell them apart.
+func connectWithRetry(ctx context.Context, dial func(context.Context) error, backoff time.Duration) error {
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := dial(ctx)
+		if err == nil {
+			return nil
+		}
+		slog.Warn("bus is not reachable yet; retrying",
+			"attempt", attempt, "backoff", backoff, "error", err)
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

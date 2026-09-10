@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"sync"
@@ -47,13 +48,29 @@ import (
 // reshape the plane's queue.
 const DispatchStream = "DISPATCH"
 
-// subscribeRetry is how long Run keeps trying to bind its consumers. An engine
-// may well start before the control plane has created the stream, and exiting
-// on that would make start-up ordering load-bearing.
-const (
-	subscribeRetry   = 500 * time.Millisecond
-	subscribeTimeout = 60 * time.Second
-)
+// subscribeRetry is how long Run waits between attempts to bind its consumers.
+//
+// There is deliberately no deadline. An engine may start before the control
+// plane has created the stream, and this retry exists so start-up ordering is
+// not load-bearing — but it used to give up after a minute, which made the
+// ordering load-bearing again for any plane slower than that. On a real
+// cluster a crash-looping bus took ninety seconds, and the engine then sat
+// registered, heartbeating and reported `ready` with no consumer: every step
+// dispatched to its tier waited out a lease and was re-dispatched, forever.
+//
+// Retrying without end is the safe direction. The work queue holds the
+// dispatches meanwhile, so an engine that binds late still does the work, and
+// an engine that never binds says so on every attempt instead of going quiet.
+const subscribeRetry = 500 * time.Millisecond
+
+// bindTimeout bounds ONE subscribe round trip — not the retrying above. The
+// bus confirms a subscription with a round trip and refuses a context that
+// could wait forever, while an engine's own context has no deadline because an
+// engine runs until it is stopped.
+const bindTimeout = 60 * time.Second
+
+// complainEvery is how often an engine repeats that it still cannot bind.
+const complainEvery = 30 * time.Second
 
 // releaseTimeout bounds sandbox teardown. It runs on a context detached from
 // the job's, because a cancelled job still has to leave nothing behind.
@@ -79,6 +96,11 @@ type Config struct {
 	CAS cas.Store
 	// Slots is how many jobs this engine runs at once.
 	Slots int
+
+	// SubscribeBackoff is how long to wait between attempts to bind a dispatch
+	// consumer. Zero means subscribeRetry; a test sets it small so it can
+	// exercise many attempts without waiting for them.
+	SubscribeBackoff time.Duration
 }
 
 // Agent is one running engine.
@@ -188,9 +210,13 @@ func (a *Agent) Run(ctx context.Context) error {
 // the set pulls from the same consumer, and exactly one of them gets each
 // message.
 func (a *Agent) subscribe(ctx context.Context, hash, subject string) (bus.Subscription, error) {
-	deadline := time.Now().Add(subscribeTimeout)
+	backoff := a.cfg.SubscribeBackoff
+	if backoff <= 0 {
+		backoff = subscribeRetry
+	}
 	consumer := "engines-" + a.cfg.Tier + "-" + hash
-	for {
+	var lastComplaint time.Time
+	for attempt := 1; ; attempt++ {
 		sub, err := a.cfg.Bus.SubscribePull(ctx, DispatchStream, consumer, subject)
 		if err == nil {
 			return sub, nil
@@ -198,13 +224,19 @@ func (a *Agent) subscribe(ctx context.Context, hash, subject string) (bus.Subscr
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("engine: subscribe %q: %w", subject, err)
+		// Said once immediately, then occasionally. An engine that cannot bind
+		// takes no work, so silence is wrong — but a line every backoff for as
+		// long as the engine runs is its own outage, and the operator stops
+		// reading before the useful line arrives.
+		if attempt == 1 || time.Since(lastComplaint) >= complainEvery {
+			slog.Warn("cannot bind the dispatch consumer yet; retrying",
+				"subject", subject, "consumer", consumer, "attempt", attempt, "error", err)
+			lastComplaint = time.Now()
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(subscribeRetry):
+		case <-time.After(backoff):
 		}
 	}
 }

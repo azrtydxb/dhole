@@ -21,7 +21,13 @@ data:
     {{- if .Values.nats.jetstream.enabled }}
     jetstream {
       store_dir: "/data"
-      max_file_store: {{ .Values.nats.jetstream.storageSize | quote }}
+      {{- /*
+        NATS reads only the FINAL character of a size as its unit, so a
+        Kubernetes quantity like "10Gi" is parsed as the number "10G" with unit
+        "i" and rejected. The chart takes the Kubernetes spelling because that
+        is what every other size in these values is, and translates here.
+      */}}
+      max_file_store: {{ .Values.nats.jetstream.storageSize | toString | replace "Ki" "K" | replace "Mi" "M" | replace "Gi" "G" | replace "Ti" "T" | quote }}
     }
     {{- end }}
 ---

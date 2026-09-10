@@ -1,0 +1,79 @@
+// Package charts_test renders the Helm chart and asserts the things a
+// rendered manifest can be wrong about while `helm lint` stays happy.
+//
+// helm lint checks that a chart is well-formed YAML with the fields Kubernetes
+// wants. It cannot know that NATS reads a size differently from Kubernetes, so
+// a chart that lints, templates and applies can still crash-loop on first
+// boot — which is exactly what happened.
+package charts_test
+
+import (
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// render runs `helm template` and returns the manifest, skipping when helm is
+// not installed rather than pretending the chart was checked.
+func render(t *testing.T, args ...string) string {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not on PATH: the chart cannot be rendered here")
+	}
+	out, err := exec.Command("helm", append([]string{"template", "dhole", "./dhole"}, args...)...).CombinedOutput()
+	require.NoError(t, err, "helm template failed: %s", out)
+	return string(out)
+}
+
+// TestJetStreamSizeIsInNATSUnitsNotKubernetesOnes pins the translation.
+//
+// NATS parses only the FINAL character of a size as its unit, so the
+// Kubernetes spelling "10Gi" is read as the number "10G" with unit "i" and
+// refused: `max_file_store strconv.ParseInt: parsing "10G": invalid syntax`.
+// The values file keeps the Kubernetes spelling because every other size in it
+// is a Kubernetes quantity; the template is what translates.
+func TestJetStreamSizeIsInNATSUnitsNotKubernetesOnes(t *testing.T) {
+	manifest := render(t, "--set", "nats.jetstream.storageSize=10Gi")
+
+	require.Contains(t, manifest, `max_file_store: "10G"`,
+		"a Kubernetes quantity reached the NATS config, which refuses it at start-up")
+	require.NotContains(t, manifest, `max_file_store: "10Gi"`)
+
+	// The other Kubernetes suffixes translate too, or the same crash returns
+	// for whoever picks a different unit.
+	for value, want := range map[string]string{
+		"512Mi": `max_file_store: "512M"`,
+		"1Ti":   `max_file_store: "1T"`,
+		"2048":  `max_file_store: "2048"`,
+	} {
+		require.Contains(t, render(t, "--set", "nats.jetstream.storageSize="+value), want,
+			"storageSize %s did not translate", value)
+	}
+}
+
+// TestEveryImageReferenceCarriesItsRegistry catches a chart that renders a
+// reference the cluster cannot pull because the registry was dropped — the
+// failure mode is ImagePullBackOff on a private registry, which looks like an
+// infrastructure problem rather than a template one.
+func TestEveryImageReferenceCarriesItsRegistry(t *testing.T) {
+	manifest := render(t, "--set", "image.registry=registry.example",
+		"--set", "image.repository=acme/dhole", "--set", "image.tag=v9")
+
+	var found int
+	for _, line := range strings.Split(manifest, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "image:") {
+			continue
+		}
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+		if ref == "" || strings.Contains(ref, "postgres:") || strings.Contains(ref, "nats:") {
+			continue // the chart's own dependencies, pulled from the default registry
+		}
+		found++
+		require.Contains(t, ref, "registry.example",
+			"a Dhole image reference lost its registry: %s", ref)
+	}
+	require.Positive(t, found, "no Dhole image references were rendered at all")
+}

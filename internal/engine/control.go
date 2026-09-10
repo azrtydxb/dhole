@@ -78,7 +78,7 @@ func (a *Agent) watchControl(ctx context.Context) (func(), error) {
 	// confirms a subscription with a round trip and refuses a context that
 	// could wait forever, while the agent's own context has no deadline
 	// because an engine runs until it is stopped.
-	bind, cancel := context.WithTimeout(ctx, subscribeTimeout)
+	bind, cancel := context.WithTimeout(ctx, bindTimeout)
 	defer cancel()
 	return a.cfg.Bus.SubscribeEphemeral(bind, bus.SubjectEngineControl(a.cfg.EngineID),
 		func(raw []byte) {
