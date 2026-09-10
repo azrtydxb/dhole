@@ -345,6 +345,24 @@ The subject is a deployment's to move: an engine that is told a different one
 uses that instead. Dhole's engine reads `DHOLE_SECRET_SUBJECT` and falls back to
 `secret.redeem`.
 
+### The plane redeems here too
+
+The control plane is not an exception to any of the above. `builtin:llm` runs on
+the plane and needs a model API key; a model configuration therefore names a
+secret (`api_key_secret` in the step's config) rather than carrying a value, and
+the plane mints a handle for it and redeems it on this same subject, as a
+principal of the tenant whose step is running (ADR 0024).
+
+Two consequences bind an implementation:
+
+- **The endpoint serves before anything advances a run.** The plane's own first
+  model call redeems here, so a plane that began advancing runs before the
+  broker was answering would fail the first `builtin:llm` step of every fresh
+  process, intermittently, with a refusal that by design names nothing.
+- **Redeemed per call, never cached.** A provider's key rotates without
+  restarting the plane, and a run that takes an hour does not hold a value for
+  an hour.
+
 ## Port layout on disk
 
 A step declares ports; this is where their bytes are, and it is the same on

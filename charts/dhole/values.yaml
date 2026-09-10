@@ -42,6 +42,19 @@ controlPlane:
     enabled: false
     size: 20Gi
     storageClass: ""
+  # The credentials the control plane redeems for its OWN model calls — the
+  # API key a `builtin:llm` step names in its `api_key_secret` (ADR 0024).
+  #
+  # The VALUE is never here. Each entry names an existing Kubernetes Secret to
+  # read it from, because a key in this file is a key in the rendered manifest,
+  # in every GitOps repository and in every `kubectl describe` a support ticket
+  # asks for. The plane holds no value at rest either: it mints a handle
+  # through its own broker per call and spends it.
+  #
+  # - name: ANTHROPIC_API_KEY      # what a step's `api_key_secret` names
+  #   existingSecret: anthropic    # the Secret holding the value
+  #   key: apiKey                  # the key within it (default "apiKey")
+  modelSecrets: []
   nodeSelector: {}
   tolerations: []
   affinity: {}

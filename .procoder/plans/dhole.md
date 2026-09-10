@@ -391,19 +391,41 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
-- [ ] **What the plane still does not host, after the dispatcher landed.** Three
-      things left of the original five; (d) and (e) are closed below.
+- [ ] **What the plane still does not host, after the dispatcher landed.** Two
+      things left of the original five; (b), (d) and (e) are closed below.
       (a) `internal/steps/agent` has no `builtin:agent` — the action space, the
       taint check and the per-action approval are still library-only, because
       an agent step needs an invoker for the actions it may take and nothing
       supplies one.
-      (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
-      a model client holds an API key and nothing in this system leases the
-      PLANE a secret. A step on a plane with no factory fails with that reason.
       (c) A `builtin:loop` body is one builtin reference in `config.body`, not
       a nested pipeline: the definition format has no syntax for a subgraph and
       no run can contain another, so a body that dispatches to engines needs
       nested runs.
+- [x] **(b) Nothing leased the PLANE a secret, so `builtin:llm` had no key.**
+      `server.Config.Models` was a factory a deployment had to construct with an
+      API key in hand, and the CLI passed none — so every `builtin:llm` step
+      failed with that named reason. Closed by ADR 0024: the plane redeems its
+      own secrets through the broker it already serves. A model configuration
+      NAMES a secret (`api_key_secret` in the step's config); the plane resolves
+      it at CALL time through `internal/secrets` (`Source`, `MapSource`,
+      `PlaneResolver`), as a principal of the tenant whose step is running, and
+      hands the value to the factory as `server.ModelRequest.APIKey` — which is
+      why `ModelFactory` now takes that struct instead of two strings. The
+      broker's rules are unchanged: single use, an issuer-enforced expiry, a
+      refusal naming neither handle nor value. Redeemed per call and never
+      cached, so a provider key rotates without a restart and an hour-long run
+      holds no value for an hour. `server.DefaultModels` builds anthropic and
+      openai clients from the redeemed key and REFUSES to fall back to the
+      provider libraries' `os.Getenv` default — the ambient credential is the
+      trap this design exists to avoid. `dhole serve --model-secret
+      NAME=ENVVAR` supplies the values (never on argv), and the chart's
+      `controlPlane.modelSecrets` reads each from an existing Kubernetes
+      Secret. START-UP ORDERING is now a rule with a test: the broker serves
+      BEFORE the advance loop, the builtin workers and the hosted engine, or
+      the first LLM step of a fresh plane races its own credential
+      (`internal/server/startup_order_test.go`). A plane with no factory, or one
+      naming a secret it cannot resolve, still fails the step with a named
+      reason — never a nil dereference and never a silent skip. No migration.
 - [x] **(d) An operator could not create a trigger through the contract.**
       Triggers were declared on `server.Config` and read from a YAML file by
       `--triggers`, so creating one needed a shell on the control plane's host

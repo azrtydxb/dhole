@@ -15,6 +15,7 @@ import (
 
 	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/obs"
+	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/server"
 	"github.com/azrtydxb/dhole/internal/version"
 )
@@ -30,7 +31,7 @@ import (
 func serveCmd(o *options) *cobra.Command {
 	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr, triggerFile string
 	var otlpInsecure, noAPI bool
-	var apiOrigins []string
+	var apiOrigins, modelSecrets []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "run the control plane",
@@ -84,6 +85,14 @@ func serveCmd(o *options) *cobra.Command {
 				return err
 			}
 
+			// The credentials this plane redeems for its own model calls.
+			// It holds them the way it holds nothing else: as values behind
+			// its own broker, minted and spent per call (ADR 0024).
+			modelSource, err := loadModelSecrets(modelSecrets)
+			if err != nil {
+				return err
+			}
+
 			srv, err := server.New(server.Config{
 				Mode:     server.Mode(mode),
 				StoreDSN: storeDSN,
@@ -96,6 +105,11 @@ func serveCmd(o *options) *cobra.Command {
 				DeploymentID: deploymentID,
 
 				Triggers: triggers,
+
+				// The providers this binary knows how to talk to. It holds no
+				// key: the plane redeems one per call and hands it in.
+				Models:       server.DefaultModels,
+				SecretSource: modelSource,
 
 				APIAddr:           apiAddr,
 				NoAPI:             noAPI,
@@ -164,6 +178,9 @@ func serveCmd(o *options) *cobra.Command {
 		"serve no API at all; the CLI and the web client then have nothing to talk to")
 	flags.StringArrayVar(&apiOrigins, "api-allowed-origin", nil,
 		"browser origin allowed to make cross-origin API calls; repeatable, and none by default")
+	flags.StringArrayVar(&modelSecrets, "model-secret", nil,
+		"NAME=ENVVAR: a secret a `builtin:llm` step's `api_key_secret` may name, and the "+
+			"environment variable its value is read from; repeatable, and none by default")
 	flags.StringVar(&triggerFile, "triggers", os.Getenv("DHOLE_TRIGGERS"),
 		"YAML file declaring the cron schedules and webhook endpoints this plane runs")
 	return cmd
@@ -219,4 +236,44 @@ func versionCmd(o *options) *cobra.Command {
 			return err
 		},
 	}
+}
+
+// loadModelSecrets builds the source this plane redeems its OWN secrets from —
+// today, the credential a `builtin:llm` step's model configuration names.
+//
+// Each spec is `NAME=ENVVAR`: the secret's name as a step refers to it, and the
+// environment variable its value is read from. The value is never an argument,
+// because arguments are in the process table and readable by anything on the
+// box; a name is not a credential.
+//
+// An unset variable is an ERROR here rather than an empty value. A plane that
+// started with a credential it could not read fails its first model call
+// instead — minutes or days later, with a refusal that by design names nothing
+// (docs/wire-contract.md, "Secrets").
+//
+// Nothing is scoped per tenant yet: `dhole serve` serves DefaultTenant, so that
+// is who these belong to. ADR 0024 leaves the room for more, and the resolution
+// carries the tenant already.
+func loadModelSecrets(specs []string) (secrets.Source, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	source := secrets.NewMapSource()
+	for _, spec := range specs {
+		name, variable, ok := strings.Cut(spec, "=")
+		name, variable = strings.TrimSpace(name), strings.TrimSpace(variable)
+		if !ok || name == "" || variable == "" {
+			return nil, fmt.Errorf(
+				"--model-secret %q: expected NAME=ENVVAR, the secret's name and the "+
+					"environment variable holding its value", spec)
+		}
+		value := os.Getenv(variable)
+		if value == "" {
+			return nil, fmt.Errorf(
+				"--model-secret %q: %s is unset or empty, so this plane would start with a "+
+					"credential it cannot read", spec, variable)
+		}
+		source.Set(server.DefaultTenant, name, value)
+	}
+	return source, nil
 }
