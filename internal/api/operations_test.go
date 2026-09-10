@@ -677,6 +677,11 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 			return nil
 		}
 		return stream.Err()
+	case "PublishPlugin":
+		_, err := h.client.PublishPlugin(ctx, connect.NewRequest(&dholev1.PublishPluginRequest{
+			Plugin: &dholev1.Plugin{Namespace: "acme", Name: "build", Version: "1.0.0"},
+		}))
+		return err
 	case "DecideApproval":
 		_, err := h.client.DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
 			RunId: "run-x", StepId: "approve", Approved: true,
