@@ -103,12 +103,43 @@ func (l *Local) CreateUser(ctx context.Context, tenantID, subject, password stri
 // IssueToken mints a service token for p, valid for ttl, and returns it. The
 // returned string is the only copy that will ever exist: the store keeps its
 // hash, so a token cannot be recovered from a database, only replaced.
+//
+// Issuing a token also ESTABLISHES the principal it is issued to, and that is
+// not bookkeeping. A token authenticates every API call the moment it is
+// minted, but the subject it resolves to lived only in `tokens`, and every
+// part of the system that asks "is this a principal of this tenant" reads
+// `principals` — so a token minted by the supported path (`dhole token
+// issue`) sailed through authentication and was then refused by
+// approval.Decide with "is not a principal of tenant". One credential, two
+// answers about who its holder is. The fix belongs here, at the mint, because
+// this is where a subject first becomes someone this control plane will
+// answer for.
+//
+// An existing principal is left untouched: see Store.EnsurePrincipal for why
+// a token must never overwrite a password.
 func (l *Local) IssueToken(ctx context.Context, p Principal, ttl time.Duration) (string, error) {
 	if p.TenantID == "" {
 		return "", ErrTenantRequired
 	}
 	if p.Subject == "" {
 		return "", errors.New("subject required")
+	}
+	kind := p.Kind
+	if kind == "" {
+		// A token with no stated kind is a machine credential; that is what
+		// tokens are for, and a blank kind stored verbatim would be a value
+		// no reader of the column knows.
+		kind = PrincipalService
+	}
+	if err := l.store.EnsurePrincipal(ctx, StoredPrincipal{
+		TenantID: p.TenantID,
+		Subject:  p.Subject,
+		Kind:     kind,
+		// No credential: this principal authenticates by token, and an
+		// argon2id hash of nothing would be a password of nothing.
+		CredentialHash: "",
+	}); err != nil {
+		return "", err
 	}
 	secret, err := newTokenSecret()
 	if err != nil {
@@ -330,6 +361,24 @@ func (s *SQLStore) PutPrincipal(ctx context.Context, p StoredPrincipal) error {
 			kind = excluded.kind, credential_hash = excluded.credential_hash`
 	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q), p.TenantID, p.Subject, string(p.Kind), p.CredentialHash); err != nil {
 		return fmt.Errorf("put principal: %w", err)
+	}
+	return nil
+}
+
+// EnsurePrincipal records a principal only if the tenant has none with that
+// subject. It is ONE statement rather than a read followed by a write: two
+// planes issuing a token to the same new subject at the same moment would
+// both find no row, and the second write of a read-then-write would replace
+// the first principal — including a credential hash it never saw.
+func (s *SQLStore) EnsurePrincipal(ctx context.Context, p StoredPrincipal) error {
+	if p.TenantID == "" {
+		return ErrTenantRequired
+	}
+	const q = `INSERT INTO principals (tenant_id, subject, kind, credential_hash)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (tenant_id, subject) DO NOTHING`
+	if _, err := s.db.ExecContext(ctx, s.dialect.Rebind(q), p.TenantID, p.Subject, string(p.Kind), p.CredentialHash); err != nil {
+		return fmt.Errorf("ensure principal: %w", err)
 	}
 	return nil
 }

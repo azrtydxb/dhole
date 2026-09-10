@@ -677,6 +677,11 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 			return nil
 		}
 		return stream.Err()
+	case "DecideApproval":
+		_, err := h.client.DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
+			RunId: "run-x", StepId: "approve", Approved: true,
+		}))
+		return err
 	case "UpdatePresence":
 		_, err := h.client.UpdatePresence(ctx, connect.NewRequest(&dholev1.UpdatePresenceRequest{
 			PipelineId: "pipe-1", SessionId: "tab-1",

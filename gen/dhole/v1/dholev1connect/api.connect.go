@@ -70,6 +70,9 @@ const (
 	// PipelineServiceWatchRunProcedure is the fully-qualified name of the PipelineService's WatchRun
 	// RPC.
 	PipelineServiceWatchRunProcedure = "/dhole.v1.PipelineService/WatchRun"
+	// PipelineServiceDecideApprovalProcedure is the fully-qualified name of the PipelineService's
+	// DecideApproval RPC.
+	PipelineServiceDecideApprovalProcedure = "/dhole.v1.PipelineService/DecideApproval"
 	// PipelineServiceCancelRunProcedure is the fully-qualified name of the PipelineService's CancelRun
 	// RPC.
 	PipelineServiceCancelRunProcedure = "/dhole.v1.PipelineService/CancelRun"
@@ -213,6 +216,12 @@ type PipelineServiceClient interface {
 	StartRun(context.Context, *connect.Request[v1.StartRunRequest]) (*connect.Response[v1.StartRunResponse], error)
 	// WatchRun streams a run's event log.
 	WatchRun(context.Context, *connect.Request[v1.WatchRunRequest]) (*connect.ServerStreamForClient[v1.WatchRunResponse], error)
+	// DecideApproval answers an approval gate a run is waiting at, as the
+	// authenticated principal. Without it a human gate was decidable only
+	// through the Go API, in-process — so the GUI, the CLI and an agent could
+	// start a run they could not release, which is the ADR 0013 failure in its
+	// purest form.
+	DecideApproval(context.Context, *connect.Request[v1.DecideApprovalRequest]) (*connect.Response[v1.DecideApprovalResponse], error)
 	// CancelRun stops a run and tells every engine holding one of its steps to
 	// stop too.
 	CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error)
@@ -295,6 +304,12 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("WatchRun")),
 			connect.WithClientOptions(opts...),
 		),
+		decideApproval: connect.NewClient[v1.DecideApprovalRequest, v1.DecideApprovalResponse](
+			httpClient,
+			baseURL+PipelineServiceDecideApprovalProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("DecideApproval")),
+			connect.WithClientOptions(opts...),
+		),
 		cancelRun: connect.NewClient[v1.CancelRunRequest, v1.CancelRunResponse](
 			httpClient,
 			baseURL+PipelineServiceCancelRunProcedure,
@@ -328,6 +343,7 @@ type pipelineServiceClient struct {
 	approveRevision *connect.Client[v1.ApproveRevisionRequest, v1.ApproveRevisionResponse]
 	startRun        *connect.Client[v1.StartRunRequest, v1.StartRunResponse]
 	watchRun        *connect.Client[v1.WatchRunRequest, v1.WatchRunResponse]
+	decideApproval  *connect.Client[v1.DecideApprovalRequest, v1.DecideApprovalResponse]
 	cancelRun       *connect.Client[v1.CancelRunRequest, v1.CancelRunResponse]
 	watchPresence   *connect.Client[v1.WatchPresenceRequest, v1.WatchPresenceResponse]
 	updatePresence  *connect.Client[v1.UpdatePresenceRequest, v1.UpdatePresenceResponse]
@@ -383,6 +399,11 @@ func (c *pipelineServiceClient) WatchRun(ctx context.Context, req *connect.Reque
 	return c.watchRun.CallServerStream(ctx, req)
 }
 
+// DecideApproval calls dhole.v1.PipelineService.DecideApproval.
+func (c *pipelineServiceClient) DecideApproval(ctx context.Context, req *connect.Request[v1.DecideApprovalRequest]) (*connect.Response[v1.DecideApprovalResponse], error) {
+	return c.decideApproval.CallUnary(ctx, req)
+}
+
 // CancelRun calls dhole.v1.PipelineService.CancelRun.
 func (c *pipelineServiceClient) CancelRun(ctx context.Context, req *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error) {
 	return c.cancelRun.CallUnary(ctx, req)
@@ -426,6 +447,12 @@ type PipelineServiceHandler interface {
 	StartRun(context.Context, *connect.Request[v1.StartRunRequest]) (*connect.Response[v1.StartRunResponse], error)
 	// WatchRun streams a run's event log.
 	WatchRun(context.Context, *connect.Request[v1.WatchRunRequest], *connect.ServerStream[v1.WatchRunResponse]) error
+	// DecideApproval answers an approval gate a run is waiting at, as the
+	// authenticated principal. Without it a human gate was decidable only
+	// through the Go API, in-process — so the GUI, the CLI and an agent could
+	// start a run they could not release, which is the ADR 0013 failure in its
+	// purest form.
+	DecideApproval(context.Context, *connect.Request[v1.DecideApprovalRequest]) (*connect.Response[v1.DecideApprovalResponse], error)
 	// CancelRun stops a run and tells every engine holding one of its steps to
 	// stop too.
 	CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error)
@@ -504,6 +531,12 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("WatchRun")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServiceDecideApprovalHandler := connect.NewUnaryHandler(
+		PipelineServiceDecideApprovalProcedure,
+		svc.DecideApproval,
+		connect.WithSchema(pipelineServiceMethods.ByName("DecideApproval")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pipelineServiceCancelRunHandler := connect.NewUnaryHandler(
 		PipelineServiceCancelRunProcedure,
 		svc.CancelRun,
@@ -544,6 +577,8 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceStartRunHandler.ServeHTTP(w, r)
 		case PipelineServiceWatchRunProcedure:
 			pipelineServiceWatchRunHandler.ServeHTTP(w, r)
+		case PipelineServiceDecideApprovalProcedure:
+			pipelineServiceDecideApprovalHandler.ServeHTTP(w, r)
 		case PipelineServiceCancelRunProcedure:
 			pipelineServiceCancelRunHandler.ServeHTTP(w, r)
 		case PipelineServiceWatchPresenceProcedure:
@@ -597,6 +632,10 @@ func (UnimplementedPipelineServiceHandler) StartRun(context.Context, *connect.Re
 
 func (UnimplementedPipelineServiceHandler) WatchRun(context.Context, *connect.Request[v1.WatchRunRequest], *connect.ServerStream[v1.WatchRunResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.WatchRun is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) DecideApproval(context.Context, *connect.Request[v1.DecideApprovalRequest]) (*connect.Response[v1.DecideApprovalResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dhole.v1.PipelineService.DecideApproval is not implemented"))
 }
 
 func (UnimplementedPipelineServiceHandler) CancelRun(context.Context, *connect.Request[v1.CancelRunRequest]) (*connect.Response[v1.CancelRunResponse], error) {

@@ -52,7 +52,12 @@ decide what may be cached and what may be retried.
   0020 terminal_once (bugfix: a run's terminal event is unique, so two racing
   advances cannot both close it), 0021 step_verdict_once (bugfix: the same
   race one level down — a step's STEP_AWAITING_REPLAY and STEP_POLICY_DENIED
-  are unique per step, so two racing advances cannot both record it). A task
+  are unique per step, so two racing advances cannot both record it),
+  0022 token_subjects_are_principals (bugfix: a token issued by the supported
+  path made its subject authenticate but not exist — `IssueToken` wrote
+  `tokens`, every "is this a principal of this tenant" check reads
+  `principals` — so the holder was refused by `approval.Decide`; the backfill
+  keeps a deployment's tokens in flight working). A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -376,14 +381,27 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       is not. The gate was ignored and the wait skipped entirely. Both gated
       pipelines work around it by arming behind a five-second predecessor. A
       step type that arms the timer inside the dispatch transaction closes it.
-- [ ] **There is no approval RPC**, so "an approval gate decided through the
+- [x] **There is no approval RPC**, so "an approval gate decided through the
       API" cannot be met as written. The run is created, approved and started
       through the real contract, and the gate is then decided by the principal
       that contract authenticated — through the Go API, not the wire.
-- [ ] **A credential's identity and an approver's identity live in different
+      `PipelineService.DecideApproval` closes it: the approver is the
+      credential's subject and never a request field, `dhole run approve
+      <run-id> <step-id>` is its CLI surface, and
+      `internal/server/approval_api_test.go` decides a gate over a real HTTP
+      connection to a plane started by `server.New`/`Start` and asserts the run
+      is released. `acceptance/acceptance_test.go` still decides through the Go
+      API; moving it onto the RPC needs a live Postgres and is left to whoever
+      owns that file.
+- [x] **A credential's identity and an approver's identity live in different
       tables.** A token issued to a subject authenticates every API call and is
       then refused by `approval.Decide` as "not a principal of tenant":
       `IssueToken` writes `tokens`, `PrincipalCredential` reads `principals`.
+      `IssueToken` now establishes the principal at the mint, through a new
+      `Store.EnsurePrincipal` that inserts and never replaces — an upsert there
+      would wipe the password of a person who is also issued a token — and
+      migration 0022 backfills the subjects of tokens already in flight, so an
+      existing deployment does not have to reissue them.
 - [ ] **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
       filter on engine type, so a capability is the only lever — the pipeline
       asks for NETWORK to reach a pod. A step's placement on the process engine

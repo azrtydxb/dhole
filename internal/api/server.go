@@ -115,6 +115,10 @@ type Config struct {
 	Auth identity.Provider
 	// Runs is the run event log WatchRun follows and StartRun appends to.
 	Runs runstore.Store
+	// Approvers is the principal table an approval gate's decider is
+	// verified against. Optional: without one, DecideApproval says so rather
+	// than recording an approval by nobody in particular.
+	Approvers Approvers
 	// Advancer is handed each new run. Optional: without one, a run is
 	// recorded and waits for whatever else advances it.
 	Advancer Advancer
@@ -173,14 +177,16 @@ type Config struct {
 
 // Server implements PipelineService.
 type Server struct {
-	defs  defstore.Store
-	auth  identity.Provider
-	runs  runstore.Store
-	adv   Advancer
-	heads Heads
-	cache CacheReader
-	fleet Fleet
-	drain Drainer
+	defs defstore.Store
+	auth identity.Provider
+	runs runstore.Store
+	// approvers verifies the decider of an approval gate. See approval.go.
+	approvers Approvers
+	adv       Advancer
+	heads     Heads
+	cache     CacheReader
+	fleet     Fleet
+	drain     Drainer
 	// control is the one inbound path to an engine. See control.go.
 	control EngineControl
 	tier    string
@@ -218,6 +224,7 @@ func NewServer(cfg Config) (*Server, error) {
 		defs:        cfg.Definitions,
 		auth:        cfg.Auth,
 		runs:        cfg.Runs,
+		approvers:   cfg.Approvers,
 		adv:         cfg.Advancer,
 		heads:       cfg.Heads,
 		cache:       cfg.Cache,

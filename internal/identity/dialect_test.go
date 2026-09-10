@@ -2,6 +2,7 @@ package identity_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,6 +119,37 @@ func identityStoreContract(t *testing.T, store identity.Store) {
 		got, err := store.PrincipalCredential(ctx, tenant, "ada")
 		require.NoError(t, err)
 		require.Equal(t, "new", got.CredentialHash)
+	})
+
+	t.Run("EnsurePrincipalCreatesOneAndThenLeavesItAlone", func(t *testing.T) {
+		ctx := context.Background()
+		tenant := uniqueTenant(t)
+
+		// The mint's own write: a subject a token was issued to becomes a
+		// principal of the tenant, because everything that asks whether a
+		// caller is one reads this table and not `tokens`.
+		require.NoError(t, store.EnsurePrincipal(ctx, identity.StoredPrincipal{
+			TenantID: tenant, Subject: "runner", Kind: identity.PrincipalService,
+		}))
+		got, err := store.PrincipalCredential(ctx, tenant, "runner")
+		require.NoError(t, err)
+		require.Equal(t, identity.PrincipalService, got.Kind)
+
+		// And a second one must NOT be an upsert. If the ON CONFLICT clause
+		// updated instead of doing nothing, issuing a token to a person would
+		// wipe the password they log in with.
+		require.NoError(t, store.PutPrincipal(ctx, identity.StoredPrincipal{
+			TenantID: tenant, Subject: "runner",
+			Kind: identity.PrincipalUser, CredentialHash: "$argon2id$theirs",
+		}))
+		require.NoError(t, store.EnsurePrincipal(ctx, identity.StoredPrincipal{
+			TenantID: tenant, Subject: "runner", Kind: identity.PrincipalService,
+		}))
+		got, err = store.PrincipalCredential(ctx, tenant, "runner")
+		require.NoError(t, err)
+		require.Equal(t, "$argon2id$theirs", got.CredentialHash,
+			"ensuring a principal overwrote the credential of one that existed")
+		require.Equal(t, identity.PrincipalUser, got.Kind)
 	})
 
 	t.Run("AnUnknownPrincipalIsNotFound", func(t *testing.T) {
@@ -293,4 +325,72 @@ func localProviderContract(t *testing.T, store identity.Store) {
 		_, err = local.Authenticate(ctx, string(forged))
 		require.ErrorIs(t, err, identity.ErrUnauthenticated)
 	})
+}
+
+// TestSQLiteBackfillsPrincipalsForTokensAlreadyIssued and its Postgres twin
+// hold migration 0022 to both dialects.
+//
+// IssueToken establishes the principal from now on, which does nothing for a
+// deployment whose tokens were minted before it did. Those tokens are in
+// people's hands and in CI configuration: their holders must not have to
+// reissue them to be recognised as approvers, and "your token works for
+// everything except the thing you are trying to do" is the hardest possible
+// failure to diagnose from outside.
+func TestSQLiteBackfillsPrincipalsForTokensAlreadyIssued(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.db")
+	backfillContract(t, runstore.DialectSQLite, func() *sql.DB {
+		db, err := runstore.OpenSQLite(path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	})
+}
+
+func TestPostgresBackfillsPrincipalsForTokensAlreadyIssued(t *testing.T) {
+	dsn := os.Getenv("DHOLE_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("DHOLE_TEST_POSTGRES_DSN not set: this test needs a live Postgres")
+	}
+	backfillContract(t, runstore.DialectPostgres, func() *sql.DB {
+		db, err := runstore.OpenPostgres(context.Background(), dsn)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	})
+}
+
+// backfillContract writes the row a pre-fix deployment has — a token whose
+// subject is in no `principals` — and then does what a restart does: opens the
+// database again, which re-runs every migration.
+func backfillContract(t *testing.T, dialect runstore.Dialect, open func() *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	tenant := uniqueTenant(t)
+
+	db := open()
+	store := identity.NewSQLStoreWithDialect(db, dialect)
+
+	// Written through SQL rather than through PutToken, because PutToken is
+	// not what a pre-fix deployment used: this is the row IssueToken left
+	// behind when it wrote `tokens` and nothing else.
+	_, err := db.ExecContext(ctx, dialect.Rebind(
+		`INSERT INTO tokens (tenant_id, subject, token_hash, scopes, expires_at)
+		 VALUES (?, ?, ?, ?, ?)`),
+		tenant, "legacy-runner", "0000000000000000000000000000000000000000000000000000000000000000",
+		"[]", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	require.NoError(t, err)
+
+	_, err = store.PrincipalCredential(ctx, tenant, "legacy-runner")
+	require.ErrorIs(t, err, identity.ErrNotFound,
+		"the fixture is wrong: this test needs a token whose subject is not yet a principal")
+
+	// The plane restarts.
+	open()
+
+	got, err := store.PrincipalCredential(ctx, tenant, "legacy-runner")
+	require.NoError(t, err,
+		"a token issued before the fix still resolves to nobody the approval subsystem knows")
+	require.Equal(t, identity.PrincipalService, got.Kind)
+	require.Empty(t, got.CredentialHash,
+		"the backfill invented a credential for a principal that authenticates by token")
 }

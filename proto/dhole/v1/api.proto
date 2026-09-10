@@ -289,6 +289,34 @@ message WatchRunResponse {
   int64 at_unix_nano = 7;
 }
 
+// DecideApprovalRequest answers one approval gate of one run.
+//
+// It carries no approver. The approver is the principal the credential
+// authenticated, exactly as ApproveRevision's is — and the two are different
+// acts that are easy to confuse: ApproveRevision promotes a DEFINITION to
+// active before anything runs, while this decides a gate a RUN is sitting at.
+// A run can only be released by someone this control plane authenticated, and
+// an approver a caller could type is an approver a caller could forge.
+message DecideApprovalRequest {
+  string run_id = 1;
+  // The step whose gate is being decided. A run may hold more than one.
+  string step_id = 2;
+  // Approve, releasing the run; or deny, which fails it. A denial is a
+  // decision rather than a pause: a run that stopped for no stated reason is
+  // the worst possible record of one.
+  bool approved = 3;
+}
+
+// DecideApprovalResponse is the decision as it was recorded, including the
+// approver the credential resolved to — which is what the caller could not
+// have chosen and therefore the one field worth reading back.
+message DecideApprovalResponse {
+  string run_id = 1;
+  string step_id = 2;
+  string approver = 3;
+  bool approved = 4;
+}
+
 // GetPluginRequest asks the catalog what one published plugin declares.
 message GetPluginRequest {
   // "namespace/name@version". A version is mandatory: dispatch resolves to an
@@ -520,6 +548,12 @@ service PipelineService {
   rpc StartRun(StartRunRequest) returns (StartRunResponse);
   // WatchRun streams a run's event log.
   rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse);
+  // DecideApproval answers an approval gate a run is waiting at, as the
+  // authenticated principal. Without it a human gate was decidable only
+  // through the Go API, in-process — so the GUI, the CLI and an agent could
+  // start a run they could not release, which is the ADR 0013 failure in its
+  // purest form.
+  rpc DecideApproval(DecideApprovalRequest) returns (DecideApprovalResponse);
   // CancelRun stops a run and tells every engine holding one of its steps to
   // stop too.
   rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
