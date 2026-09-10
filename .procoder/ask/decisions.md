@@ -268,10 +268,19 @@ is a product-scope call rather than an implementation one.
 
 Two further facts worth having before deciding:
 
-- It cannot be verified here. Firecracker needs `/dev/kvm` on Linux; this machine is
-  macOS and the k3s cluster is arm64 without nested virt exposed. Every test would
-  skip, which is the shape of "written and never run" that has produced most of the
-  defects found this week.
+- ~~It cannot be verified here.~~ **CORRECTED 2026-09-10, after testing rather than
+  assuming.** I wrote that the k3s cluster was "arm64 without nested virt exposed".
+  That was an assumption I had not checked, and it is wrong: `/dev/kvm` is present
+  on the kw nodes, KubeVirt v1.8.4 is installed, and a Fedora 42 aarch64 guest boots
+  there under `<domain type='kvm'>` — hardware acceleration, not TCG emulation. All
+  eight nodes advertise `devices.kubevirt.io/kvm`.
+
+  So a VM executor CAN be exercised on real hardware: a privileged pod with
+  `/dev/kvm` runs Firecracker or QEMU directly, which is what
+  `DHOLE_TEST_FIRECRACKER_BIN` would point at. What remains true is that this
+  MacBook cannot run it, so it would be a cluster-only test like the Kubernetes and
+  containerd executor contracts already are.
+
 - The interface is ready for it. The executor contract now has four backends
   (process, kubernetes, containerd, pool) and `Sandbox.EnvironmentIdentity` moved to
   the sandbox, so a VM backend has somewhere honest to report a snapshot digest.

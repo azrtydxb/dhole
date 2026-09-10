@@ -1,0 +1,46 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  name: fedora-arm64
+  namespace: vmtest
+spec:
+  # arm64 has no BIOS: a guest boots through UEFI or not at all. secureBoot is
+  # off because it needs SMM, which the arm64 virt machine type does not have.
+  architecture: arm64
+  domain:
+    firmware:
+      bootloader:
+        efi:
+          secureBoot: false
+    cpu:
+      cores: 2
+    resources:
+      requests:
+        memory: 2Gi
+    devices:
+      disks:
+        - name: root
+          disk:
+            bus: virtio
+        - name: cloudinit
+          disk:
+            bus: virtio
+      interfaces:
+        - name: default
+          masquerade: {}
+      rng: {}
+  networks:
+    - name: default
+      pod: {}
+  volumes:
+    - name: root
+      containerDisk:
+        image: quay.io/containerdisks/fedora:42
+    - name: cloudinit
+      cloudInitNoCloud:
+        userData: |
+          #cloud-config
+          password: dhole
+          chpasswd: { expire: False }
+          runcmd:
+            - [ sh, -c, "echo DHOLE_VM_BOOTED > /dev/console" ]
