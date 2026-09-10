@@ -391,42 +391,53 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
-- [ ] **What the plane still does not host, after the dispatcher landed.** Three
-      things left of the original five; (d) and (e) are closed below.
-      (a) DONE. `internal/steps/agent` had no `builtin:agent` — the action
-      space, the taint check and the per-action approval were library-only,
-      because an agent step needs an invoker for the actions it may take and
-      nothing supplied one. Closed by ADR 0025 and
+- [ ] **What the plane still does not host, after the dispatcher landed.** ONE
+      clause left of the original five. (a) is closed by ADR 0025 and
       `internal/steps/agent/contract.go` + `internal/server/agent.go`: an agent
       acts ONLY through Dhole's own public API, as a principal of its tenant,
-      and its action space is the contract — `start_run`, `read_run`,
-      `decide_approval`, `apply_operation`, and nothing else. The invoker is a
-      Connect client over the plane's OWN loopback listener carrying a token
-      minted for the agent's subject (kind `agent`, 15 minutes), NOT a direct
-      call into `api.Server`: ADR 0013's point is that there is no privileged
-      path, and an in-process shortcut would be the one caller that missed
-      every interceptor. Taint follows the CREDENTIAL as well as the value —
-      `policy.Input` gained `principal_kind` and `principal_untrusted`
-      (additive, so the CEL contract holds), threaded through
-      `taint.Dispatch`, so a rule can refuse an at-most-once effect to an agent
-      while allowing it to a person. Every action is audited under the agent's
-      own subject in `policy_audit` and recorded in the run log as
-      `AGENT_ACTION`, refusals included. An agent CANNOT run a command: no
-      branch of the invoker executes one and
-      `TestAnAgentStepHasNoPathToExecutingACommand` asserts the package cannot
-      even reach `internal/executor`. NOT built: a parked agent is not resumed
-      after a person decides its gate — re-entering the model's loop at the
-      call it stopped on needs more than this task, so the step fails with the
-      gate's own reason and the run stops readably rather than hanging. No
-      migration was needed. Tested through `server.New`/`Start` alone in
-      `internal/server/agent_e2e_test.go`.
-      (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
-      a model client holds an API key and nothing in this system leases the
-      PLANE a secret. A step on a plane with no factory fails with that reason.
+      with an action space of `start_run`, `read_run`, `decide_approval` and
+      `apply_operation` and nothing else. The invoker is a Connect client over
+      the plane's OWN loopback listener carrying a token minted for the agent's
+      subject, NOT a direct call into `api.Server` — ADR 0013's point is that
+      there is no privileged path, and an in-process shortcut would be the one
+      caller that missed every interceptor added later. Taint follows the
+      CREDENTIAL as well as the value, so a CEL rule can refuse an at-most-once
+      effect to an agent while allowing it to a person. An agent cannot run a
+      command, and `TestAnAgentStepHasNoPathToExecutingACommand` asserts the
+      package cannot even reach `internal/executor`. (b), (d) and (e) are
+      closed in their own entries below. What remains:
       (c) A `builtin:loop` body is one builtin reference in `config.body`, not
-      a nested pipeline: the definition format has no syntax for a subgraph and
-      no run can contain another, so a body that dispatches to engines needs
-      nested runs.
+      a nested pipeline. ADR 0022 decides it is spliced into the SAME run
+      through the generator machinery rather than becoming a nested run.
+      NOT closed by (a): a parked agent is not resumed after a person decides
+      its gate — re-entering the model's loop at the call it stopped on needs
+      its own task, so the step fails with the gate's own reason and the run
+      stops readably rather than hanging.
+- [x] **(b) Nothing leased the PLANE a secret, so `builtin:llm` had no key.**
+      `server.Config.Models` was a factory a deployment had to construct with an
+      API key in hand, and the CLI passed none — so every `builtin:llm` step
+      failed with that named reason. Closed by ADR 0024: the plane redeems its
+      own secrets through the broker it already serves. A model configuration
+      NAMES a secret (`api_key_secret` in the step's config); the plane resolves
+      it at CALL time through `internal/secrets` (`Source`, `MapSource`,
+      `PlaneResolver`), as a principal of the tenant whose step is running, and
+      hands the value to the factory as `server.ModelRequest.APIKey` — which is
+      why `ModelFactory` now takes that struct instead of two strings. The
+      broker's rules are unchanged: single use, an issuer-enforced expiry, a
+      refusal naming neither handle nor value. Redeemed per call and never
+      cached, so a provider key rotates without a restart and an hour-long run
+      holds no value for an hour. `server.DefaultModels` builds anthropic and
+      openai clients from the redeemed key and REFUSES to fall back to the
+      provider libraries' `os.Getenv` default — the ambient credential is the
+      trap this design exists to avoid. `dhole serve --model-secret
+      NAME=ENVVAR` supplies the values (never on argv), and the chart's
+      `controlPlane.modelSecrets` reads each from an existing Kubernetes
+      Secret. START-UP ORDERING is now a rule with a test: the broker serves
+      BEFORE the advance loop, the builtin workers and the hosted engine, or
+      the first LLM step of a fresh plane races its own credential
+      (`internal/server/startup_order_test.go`). A plane with no factory, or one
+      naming a secret it cannot resolve, still fails the step with a named
+      reason — never a nil dereference and never a silent skip. No migration.
 - [x] **(d) An operator could not create a trigger through the contract.**
       Triggers were declared on `server.Config` and read from a YAML file by
       `--triggers`, so creating one needed a shell on the control plane's host

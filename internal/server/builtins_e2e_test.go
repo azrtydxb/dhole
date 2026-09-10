@@ -770,7 +770,7 @@ func (m *scriptedModel) next() string {
 
 // factory is what a deployment gives server.Config.Models.
 func (m *scriptedModel) factory() server.ModelFactory {
-	return func(context.Context, string, string) (provider.LanguageModel, error) {
+	return func(context.Context, server.ModelRequest) (provider.LanguageModel, error) {
 		return m, nil
 	}
 }

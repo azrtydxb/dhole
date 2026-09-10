@@ -203,10 +203,24 @@ type Config struct {
 	// means this plane calls no model: such a step fails with that reason
 	// rather than silently doing nothing.
 	//
-	// It is supplied rather than built here because a model client holds an
-	// API key and nothing in this system hands the control plane one — see
-	// ModelFactory.
+	// It is supplied rather than built here because a deployment may reach its
+	// models through a gateway or a runtime this package has never heard of.
+	// It is NOT where a credential lives: the plane redeems that itself, per
+	// call, and hands it to the factory (ADR 0024). See ModelFactory and
+	// SecretSource.
 	Models ModelFactory
+	// SecretSource is where this plane's OWN secrets come from — the values
+	// behind the handles it mints for itself, such as the API key a
+	// `builtin:llm` step's model configuration names.
+	//
+	// Nil means the plane can resolve none, and a step naming one fails with
+	// that reason. Whatever is supplied here is read at CALL time and never
+	// cached, so a key that rotates is picked up without a restart.
+	//
+	// Where a distributed deployment keeps those values — an external secret
+	// manager behind the broker — is deliberately left open by ADR 0024 and
+	// is what this interface exists to make replaceable.
+	SecretSource secrets.Source
 	// LeaseTTL is how long a step's lease lives before its holder is presumed
 	// dead and the step is swept back. Zero means scheduler.DefaultLeaseTTL.
 	//
@@ -274,6 +288,28 @@ type Server struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	stopSub []func()
+
+	// startupOrder is the order serve brought subsystems up in, because one of
+	// those orderings is a RULE and not a preference: the broker answers
+	// redemptions before anything can advance a run, or the first
+	// `builtin:llm` step of a fresh plane races its own credential (ADR 0024).
+	// An ordering that only exists as the order of statements in a function is
+	// an ordering the next edit reverses silently, so it is recorded and
+	// asserted. Guarded by mu, which serve runs under.
+	startupOrder []string
+}
+
+// started records that one subsystem is up. See startupOrder.
+func (s *Server) started(what string) {
+	s.startupOrder = append(s.startupOrder, what)
+}
+
+// startupSequence is what serve brought up, in order. It is read by the test
+// that holds ADR 0024's start-up ordering rule.
+func (s *Server) startupSequence() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string{}, s.startupOrder...)
 }
 
 // New validates cfg. It opens nothing: a Server that has not been started
@@ -381,6 +417,18 @@ func (s *Server) Start(ctx context.Context) error {
 	out := outbox.New(in.store, in.plane, s.cfg.DeploymentID, outbox.WithErrorHandler(func(err error) {
 		s.log.Error("outbox drain failed", "error", err)
 	}))
+	// The broker BEFORE the step types that redeem through it. It holds
+	// handles in memory and nothing else — a table of live handles in the run
+	// database would be the secret at rest that SecretRef exists to avoid.
+	s.broker = secrets.NewBroker()
+	// And the plane's own way to a value: mint a handle, redeem it over the
+	// endpoint this process serves, hold the value for one call. The round
+	// trip is the point (ADR 0024) — it makes the plane's credentials subject
+	// to the same single use, the same issuer-enforced expiry and the same
+	// refusal as an engine's, instead of being the one exception.
+	planeSecrets := secrets.NewPlaneResolver(
+		s.broker, s.cfg.SecretSource, in.plane, bus.SubjectSecretRedeem())
+
 	// The step types the plane hosts itself, BEFORE the scheduler, because the
 	// scheduler has to be given them: a `builtin:` reference offered to an
 	// engine is a reference no engine can resolve, and for the whole of Tasks
@@ -390,7 +438,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// exactly as one dispatched to an engine is, or a plane that dies mid-step
 	// leaves a run in flight that no sweeper can see and no engine will ever
 	// report on.
-	built, err := newBuiltins(in, s.cfg.Models, nil, leases, s.leaseTTL(), s.log)
+	built, err := newBuiltins(in, s.cfg.Models, planeSecrets, nil, leases, s.leaseTTL(), s.log)
 	if err != nil {
 		in.close()
 		return err
@@ -487,7 +535,6 @@ func (s *Server) Start(ctx context.Context) error {
 	// contract that accepts triggers and runs none.
 	s.setTriggerStore(trigger.NewStore(in.db, in.dialect))
 
-	s.broker = secrets.NewBroker()
 	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
 	s.builtins, s.timers = built, wait.NewTimers(in.store)
 
@@ -511,6 +558,25 @@ func (s *Server) Start(ctx context.Context) error {
 // serve starts everything that runs until Stop. startCtx bounds the
 // subscriptions being established; runCtx is what the goroutines live on.
 func (s *Server) serve(startCtx, runCtx context.Context) error {
+	s.startupOrder = nil
+
+	// FIRST, and it is a rule rather than a preference.
+	//
+	// Two things need this endpoint before they do anything. An engine
+	// advertises CAPABILITY_SECRETS on the strength of having a redemption
+	// endpoint, so a plane that admitted one before it could answer would fail
+	// the first step that raced it (docs/wire-contract.md, "Secrets"). And the
+	// plane itself now redeems through this same endpoint: a `builtin:llm`
+	// step taken by the advance loop before the broker was serving would fail
+	// on a race, which is the first LLM step of every fresh plane (ADR 0024).
+	// Asserted by TestTheBrokerServesBeforeAnythingThatRedeemsFromIt.
+	stopSecrets, err := secrets.Serve(startCtx, s.infra.plane, s.broker, bus.SubjectSecretRedeem())
+	if err != nil {
+		return err
+	}
+	s.stopSub = append(s.stopSub, stopSecrets)
+	s.started("secret redemption")
+
 	if err := s.consumeRegistrations(startCtx, runCtx); err != nil {
 		return err
 	}
@@ -530,6 +596,7 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	// loop that reached for the lock would deadlock against the shutdown it
 	// is supposed to notice.
 	s.spawn(func() { s.advanceLoop(runCtx, s.infra.store, s.sched) })
+	s.started("advancing runs")
 	s.spawn(func() { s.sweepLoop(runCtx, s.sched) })
 	s.spawn(func() { s.renewLoop(runCtx) })
 	s.spawn(func() { s.timerLoop(runCtx, s.timers, s.sched) })
@@ -541,16 +608,7 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	for range builtinWorkers {
 		s.spawn(func() { built.work(runCtx) })
 	}
-
-	// Before any engine: an engine advertises CAPABILITY_SECRETS on the
-	// strength of having a redemption endpoint, and a plane that admitted such
-	// an engine before it could answer would fail the first step that raced it
-	// (docs/wire-contract.md, "Secrets").
-	stopSecrets, err := secrets.Serve(startCtx, s.infra.plane, s.broker, bus.SubjectSecretRedeem())
-	if err != nil {
-		return err
-	}
-	s.stopSub = append(s.stopSub, stopSecrets)
+	s.started("builtin step types")
 
 	// Last, and only in embedded mode: the engine starts once the plane can
 	// already hear it. A registration is a fire-and-forget message on a core
@@ -560,6 +618,7 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 		if err := s.startEngine(runCtx); err != nil {
 			return err
 		}
+		s.started("the hosted engine")
 	}
 
 	// The triggers BEFORE the contract, because a webhook trigger is served

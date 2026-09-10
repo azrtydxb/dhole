@@ -243,7 +243,7 @@ func (m *agentModel) script(turns ...*provider.Response) {
 }
 
 func (m *agentModel) factory() server.ModelFactory {
-	return func(context.Context, string, string) (provider.LanguageModel, error) {
+	return func(context.Context, server.ModelRequest) (provider.LanguageModel, error) {
 		return m, nil
 	}
 }

@@ -68,7 +68,20 @@ func (b *builtins) runAgent(
 	if prompt == "" {
 		return nil, errors.New("an agent step needs a `prompt` in its config")
 	}
-	model, err := b.models(ctx, cfg["provider"], cfg["model"])
+	// The same credential path a plain model step takes (ADR 0024): the step
+	// names a secret, the plane redeems it through its own broker at call
+	// time, and nothing here holds a value longer than the call. An agent step
+	// is not an exception to that any more than the plane is.
+	apiKey, err := b.credential(ctx, job.tenantID, cfg["api_key_secret"])
+	if err != nil {
+		return nil, err
+	}
+	model, err := b.models(ctx, ModelRequest{
+		TenantID: job.tenantID,
+		Provider: cfg["provider"],
+		Model:    cfg["model"],
+		APIKey:   apiKey,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("resolving model %q of provider %q: %w",
 			cfg["model"], cfg["provider"], err)

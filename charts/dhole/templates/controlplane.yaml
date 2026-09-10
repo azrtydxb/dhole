@@ -58,6 +58,9 @@ spec:
             {{- if .Values.controlPlane.otlpInsecure }}
             - --otlp-insecure
             {{- end }}
+            {{- range .Values.controlPlane.modelSecrets }}
+            - --model-secret={{ .name }}=DHOLE_MODEL_SECRET_{{ .name }}
+            {{- end }}
           env:
             - name: DHOLE_BUS_URL
               value: {{ include "dhole.busURL" . | quote }}
@@ -67,6 +70,20 @@ spec:
                   name: {{ include "dhole.storeSecretName" . }}
                   key: dsn
             {{- include "dhole.objectStoreEnv" . | nindent 12 }}
+            {{- /* A model credential the plane redeems for itself. It arrives
+                   from a Secret and never from the values file: a key in a
+                   rendered manifest is a key in every `helm get manifest` and
+                   every GitOps repository. */}}
+            {{- range .Values.controlPlane.modelSecrets }}
+            {{- if not .existingSecret }}
+            {{- fail (printf "controlPlane.modelSecrets: %s names no existingSecret, so the plane would start with a credential it cannot read" .name) }}
+            {{- end }}
+            - name: DHOLE_MODEL_SECRET_{{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .key | default "apiKey" }}
+            {{- end }}
           ports:
             - name: api
               containerPort: {{ .Values.controlPlane.apiPort }}

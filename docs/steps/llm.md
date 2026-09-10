@@ -46,6 +46,30 @@ that point often parses. A truncated answer that looks complete is the worst
 outcome available here, so a ceiling breach fails the step and closes the run
 rather than trimming and carrying on.
 
+## Where the credential comes from
+
+A model configuration **names** a secret and never carries one. A step's config
+carries `api_key_secret`, and the control plane resolves that name at CALL time
+through its own broker — the same single-use handle, the same issuer-enforced
+expiry and the same refusal an engine's `SecretRef` gets (ADR 0024,
+`docs/wire-contract.md` under "Secrets"). There is exactly one way a credential
+reaches a running thing in Dhole, and the plane is not an exception to it.
+
+Three consequences:
+
+- **This package never sees a key.** It is handed a constructed model, which is
+  the primary reason no key can leak from it; the redaction in `record.go` is
+  the second net, not the first.
+- **Redeemed per call, never cached.** A provider's key rotates without
+  restarting the plane, and a run that takes an hour holds no value for an hour.
+- **An unresolvable credential fails the step by NAME.** Never an empty key
+  handed to a provider, which comes back as an authentication failure naming no
+  secret at all.
+
+A deployment supplies the values: `dhole serve --model-secret NAME=ENVVAR`, or
+the chart's `controlPlane.modelSecrets`, each reading from a Kubernetes Secret.
+A plane given none fails a step that names one, with that reason.
+
 ## Recording prompts
 
 Recorded calls carry the prompt, the response, token counts, latency and the
