@@ -126,9 +126,15 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// measured against one limits row. Without it StartRun enforced
 		// max_runs_per_day nowhere and wrote no RUN_STARTED row to bill from.
 		Quotas: s.quotasLocked(),
-		Cache:  s.infra.cache,
-		Fleet:  s.fleet,
-		Drain:  s.fleet,
+		// The GUARDED content-addressed store, which is the one openBlobs
+		// left behind: the bytes of a file a definition carries are charged
+		// against the tenant's max_cas_bytes like every other stored byte, so
+		// an oversized definition is refused by the limit that already exists
+		// rather than by a ceiling invented for files (ADR 0023).
+		Files: s.infra.cas,
+		Cache: s.infra.cache,
+		Fleet: s.fleet,
+		Drain: s.fleet,
 		// The plane's own bus connection, so a cancel travels the same way
 		// every dispatch does. An API reaching engines over a connection of
 		// its own would be a second control plane.

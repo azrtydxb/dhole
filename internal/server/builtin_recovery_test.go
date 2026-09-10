@@ -128,7 +128,7 @@ type blockingModel struct {
 }
 
 func (m *blockingModel) factory() server.ModelFactory {
-	return func(context.Context, string, string) (provider.LanguageModel, error) {
+	return func(context.Context, server.ModelRequest) (provider.LanguageModel, error) {
 		return m, nil
 	}
 }
@@ -188,7 +188,7 @@ type slowModel struct {
 }
 
 func (m *slowModel) factory() server.ModelFactory {
-	return func(context.Context, string, string) (provider.LanguageModel, error) {
+	return func(context.Context, server.ModelRequest) (provider.LanguageModel, error) {
 		return m, nil
 	}
 }

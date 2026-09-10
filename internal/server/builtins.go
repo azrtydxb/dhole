@@ -59,6 +59,10 @@ const (
 	BuiltinLLM = BuiltinScheme + "llm"
 	// BuiltinLoop repeats another builtin step type up to a hard ceiling.
 	BuiltinLoop = BuiltinScheme + "loop"
+	// BuiltinAgent gives a model a bounded loop over Dhole's OWN contract:
+	// start a run, read a run, decide an approval gate, apply an operation to
+	// a pipeline, and nothing else (ADR 0025). See agent.go.
+	BuiltinAgent = BuiltinScheme + "agent"
 )
 
 // builtinWorkers is how many builtin steps run at once.
@@ -85,16 +89,48 @@ const minRenewInterval = 100 * time.Millisecond
 // thing here that can carry a person's data, so they expire.
 const llmRetention = 24 * time.Hour
 
+// ModelRequest is one resolution of a model client: which model, for whose
+// step, with which credential.
+//
+// The credential is REDEEMED, not configured. A model configuration names a
+// secret by reference and the plane resolves it at call time through its own
+// broker (ADR 0024), so the value in this struct is live for the duration of
+// one call and is gone with the client built from it. A factory that squirrels
+// it away has reintroduced the credential at rest that the reference exists to
+// avoid.
+//
+// APIKey is empty when the step named no secret, which is the honest state for
+// a model that needs none — a local runtime, a gateway that authenticates by
+// network position, a test double.
+type ModelRequest struct {
+	// TenantID is the tenant whose step is running. It is here so that a
+	// deployment can hand out different clients to different tenants; nothing
+	// requires that yet, and a factory that dropped it would have to be
+	// redesigned the day one does.
+	TenantID string
+	Provider string
+	Model    string
+	APIKey   string
+}
+
 // ModelFactory resolves the provider and model a `builtin:llm` step names.
 //
 // It is a function on Config rather than a provider registry inside this
-// package for one reason: a model client holds an API key, and there is no
-// path in this system today by which a control plane obtains one — engines
-// never receive secret values (ADR 0010) and nothing yet leases them to the
-// plane either. So the deployment that HAS a key constructs the client and
-// hands it in, and a plane with no factory refuses `builtin:llm` steps with
-// that named reason rather than pretending to run them.
-type ModelFactory func(ctx context.Context, providerName, modelID string) (provider.LanguageModel, error)
+// package because a deployment may reach its models through a gateway, a proxy
+// or a runtime nobody here has heard of. What it no longer has to solve is the
+// credential: the plane redeems that itself and passes it in (ADR 0024), so a
+// factory is a constructor rather than a place a key lives. A plane with no
+// factory refuses `builtin:llm` steps with that named reason rather than
+// pretending to run them.
+type ModelFactory func(ctx context.Context, req ModelRequest) (provider.LanguageModel, error)
+
+// secretResolver is the plane's own way to a secret value. It is an interface
+// rather than *secrets.PlaneResolver so that this dispatcher can be assembled
+// without a bus in a test, and so that the ONE thing it is allowed to do —
+// exchange a name for a value, for one call — is the whole of what it can do.
+type secretResolver interface {
+	Resolve(ctx context.Context, tenantID, name string) (string, error)
+}
 
 // builtins is the plane's own dispatcher for the step types it hosts.
 //
@@ -111,7 +147,18 @@ type builtins struct {
 	// resume advances the run a gate has just opened. It is the scheduler.
 	resume approval.Resumer
 	models ModelFactory
-	calls  *llm.Recorder
+	// secrets is how a model call gets its credential: named in the step's
+	// config, redeemed from the plane's own broker at CALL time, held for the
+	// length of that call and no longer (ADR 0024). Nil means this plane can
+	// resolve none, and a step that names one fails saying so.
+	secrets secretResolver
+	calls   *llm.Recorder
+	// tokens mints the short-lived credential an agent step acts under, and
+	// apiBase is where it presents it. See agent.go: an agent is an ordinary
+	// authenticated client of this plane's own listener, so it needs both a
+	// token of its own and the address every other client uses.
+	tokens  *identity.Local
+	apiBase func() string
 	// leases is what makes a builtin step recoverable. A step this plane runs
 	// is leased exactly as a step dispatched to an engine is, because the
 	// sweeper that recovers a dead holder knows nothing else: before this, a
@@ -236,6 +283,8 @@ func (b *builtins) execute(ctx context.Context, job builtinJob) (lease.Token, er
 		return b.attempt(ctx, job, b.callModel)
 	case BuiltinLoop:
 		return b.attempt(ctx, job, b.iterate)
+	case BuiltinAgent:
+		return b.attempt(ctx, job, b.runAgent)
 	default:
 		return lease.Token{}, fmt.Errorf("no step type is registered for %q", ref)
 	}
@@ -458,7 +507,24 @@ func (b *builtins) answer(
 		}
 		maxTokens = n
 	}
-	model, err := b.models(ctx, cfg["provider"], cfg["model"])
+	// The credential, redeemed for THIS call. It is resolved here rather than
+	// at start-up on purpose: a value the plane held for the lifetime of the
+	// deployment is the secret at rest that SecretRef exists to avoid, and a
+	// run that takes an hour must not hold a key for an hour (ADR 0024). The
+	// cost is one local request against an in-memory broker per call.
+	apiKey, err := b.credential(ctx, job.tenantID, cfg["api_key_secret"])
+	if err != nil {
+		return nil, err
+	}
+	model, err := b.models(ctx, ModelRequest{
+		// The STEP's tenant, both to the resolver above and to the factory, so
+		// that per-tenant model credentials are expressible the day a
+		// deployment wants them.
+		TenantID: job.tenantID,
+		Provider: cfg["provider"],
+		Model:    cfg["model"],
+		APIKey:   apiKey,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("resolving model %q of provider %q: %w",
 			cfg["model"], cfg["provider"], err)
@@ -479,6 +545,26 @@ func (b *builtins) answer(
 		return nil, err
 	}
 	return step.Run(ctx, job.runID, stepID, prompt)
+}
+
+// credential redeems the secret a model configuration names, or returns
+// nothing at all when it names none.
+//
+// The error names the SECRET and never the value: it is on its way to a
+// JobStatus, which is durable and archived. An unresolvable credential fails
+// the step here rather than being passed to a provider as an empty string,
+// which comes back as an authentication failure naming no secret at all.
+func (b *builtins) credential(ctx context.Context, tenantID, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	if b.secrets == nil {
+		return "", fmt.Errorf(
+			"this control plane can redeem no secrets, so it cannot resolve the credential named %q; "+
+				"see server.Config.SecretSource", name)
+	}
+	return b.secrets.Resolve(ctx, tenantID, name)
 }
 
 // iterate is `builtin:loop`: another builtin step type repeated up to a hard
@@ -719,20 +805,23 @@ func (s *Server) Approve(
 // own: a step type writing to a second copy of the run log would be a
 // different system from the one the scheduler is advancing.
 func newBuiltins(
-	in *infra, models ModelFactory, resume approval.Resumer,
+	in *infra, models ModelFactory, plane secretResolver, resume approval.Resumer,
 	leases lease.Manager, ttl time.Duration, log *slog.Logger,
 ) (*builtins, error) {
 	calls, err := llm.NewRecorder(in.db, in.dialect, llmRetention)
 	if err != nil {
 		return nil, err
 	}
+	principals := identity.NewSQLStoreWithDialect(in.db, in.dialect)
 	return &builtins{
 		log:       log,
 		store:     in.store,
 		cas:       in.cas,
-		approvers: identity.NewSQLStoreWithDialect(in.db, in.dialect),
+		approvers: principals,
+		tokens:    identity.NewLocal(principals),
 		resume:    resume,
 		models:    models,
+		secrets:   plane,
 		calls:     calls,
 		leases:    leases,
 		ttl:       ttl,

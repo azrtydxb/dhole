@@ -307,6 +307,12 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
             // pipeline written before the field existed carries, and a number
             // this canvas invented would be a limit nobody chose.
             timeoutSeconds: 0,
+            // Nor a file: a step reads a file the DEFINITION carries by
+            // binding a port to it (ADR 0023), and a new step has no port a
+            // binding could name yet. Attaching one is `push-file` followed by
+            // a set_file operation, which is a deliberate act and not a
+            // default this canvas invents.
+            fileInputs: [],
             inputs: [...kind.inputs],
             outputs: [...kind.outputs],
           },

@@ -345,6 +345,24 @@ The subject is a deployment's to move: an engine that is told a different one
 uses that instead. Dhole's engine reads `DHOLE_SECRET_SUBJECT` and falls back to
 `secret.redeem`.
 
+### The plane redeems here too
+
+The control plane is not an exception to any of the above. `builtin:llm` runs on
+the plane and needs a model API key; a model configuration therefore names a
+secret (`api_key_secret` in the step's config) rather than carrying a value, and
+the plane mints a handle for it and redeems it on this same subject, as a
+principal of the tenant whose step is running (ADR 0024).
+
+Two consequences bind an implementation:
+
+- **The endpoint serves before anything advances a run.** The plane's own first
+  model call redeems here, so a plane that began advancing runs before the
+  broker was answering would fail the first `builtin:llm` step of every fresh
+  process, intermittently, with a refusal that by design names nothing.
+- **Redeemed per call, never cached.** A provider's key rotates without
+  restarting the plane, and a run that takes an hour does not hold a value for
+  an hour.
+
 ## Port layout on disk
 
 A step declares ports; this is where their bytes are, and it is the same on
@@ -374,6 +392,14 @@ An engine writes nothing else into either directory: what a step can read is
 exactly what it declared (ADR 0001). An output port with no file at
 `outputs/<port>` when the command exits is a FAILED step naming the port, never
 a success with an empty artifact.
+
+An input port's bytes come either from an edge — a predecessor's output — or
+from a FILE THE DEFINITION CARRIES (ADR 0023), and **an engine cannot tell the
+two apart, on purpose**. Both arrive as a `JobDispatch.inputs[]` entry naming a
+port and a digest, and both are fetched from the content-addressed store the
+same way. There is nothing for an engine to implement here: a definition file
+is an input like any other, which is exactly what makes it land in the cache
+key and keeps ADR 0001 intact.
 
 ## The object store
 

@@ -41,10 +41,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/identity"
 	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/taint"
@@ -132,6 +134,11 @@ type Options struct {
 	Store   runstore.Store
 	// TenantID scopes everything. There is no unscoped agent.
 	TenantID string
+	// Subject is the PRINCIPAL this agent acts as (ADR 0025). It is the
+	// subject its credential was minted for, and it is what the policy trail
+	// and the run log record every action under — so "what did it do" is
+	// answerable without trusting the agent's own account of itself.
+	Subject string
 	// Inputs are the structured values the agent itself is acting on — the
 	// webhook body it was asked to triage. They are what makes every
 	// invocation it attempts tainted or not.
@@ -164,6 +171,8 @@ type Step struct {
 	invoker      Invoker
 	gate         Gate
 	tenantID     string
+	subject      string
+	store        runstore.Store
 	tier         string
 	inputs       map[string]*structpb.Value
 	capabilities []dholev1.Capability
@@ -217,6 +226,8 @@ func New(cfg Config, opts Options) (*Step, error) {
 		invoker:      opts.Invoker,
 		gate:         opts.Gate,
 		tenantID:     opts.TenantID,
+		subject:      opts.Subject,
+		store:        opts.Store,
 		tier:         opts.Tier,
 		inputs:       opts.Inputs,
 		capabilities: opts.EngineCapabilities,
@@ -262,15 +273,89 @@ func (s *Step) Invoke(ctx context.Context, inv Invocation) (json.RawMessage, err
 	// 2. The taint, before anything effectful. This is the check that makes a
 	// webhook body unable to become a deploy.
 	if err := s.checkTaint(ctx, inv, action); err != nil {
+		s.record(ctx, inv, false, err)
 		return nil, err
 	}
 
 	// 3. The approval gate. Routed to, not reported after.
 	if needsApproval(action) {
-		return nil, s.requestApproval(ctx, inv)
+		err := s.requestApproval(ctx, inv)
+		s.record(ctx, inv, false, err)
+		return nil, err
 	}
 
+	// The action is recorded BEFORE it is taken, and the record says it was
+	// allowed rather than that it succeeded. An action recorded only after it
+	// returned would leave nothing behind for a call that hung, was cancelled
+	// or crashed the plane — which is exactly the call somebody investigating
+	// an agent wants to see.
+	s.record(ctx, inv, true, nil)
 	return s.invoker.Invoke(ctx, inv)
+}
+
+// EventAction is the run-log event one attempted agent action writes. The
+// value is stored verbatim and is therefore a persistence contract.
+const EventAction runstore.EventType = "AGENT_ACTION"
+
+// ActionRecord is EventAction's payload: who asked, for what, and whether it
+// was allowed to happen.
+//
+// It is in the RUN LOG rather than only in policy_audit because the two answer
+// different questions. The policy row says what a rule decided; this says what
+// the agent asked for, in the one place a run's state lives (ADR 0003), so
+// whoever is reading a stuck or surprising run sees the agent's attempts
+// beside everything else that happened.
+type ActionRecord struct {
+	// Subject is the agent's own principal, never a name it supplied.
+	Subject string `json:"subject"`
+	Action  string `json:"action"`
+	Allowed bool   `json:"allowed"`
+	// Reason is why a refused action did not happen, and empty otherwise.
+	Reason string `json:"reason,omitempty"`
+}
+
+// record appends one attempted action to the run log.
+//
+// A failure to record is LOGGED NOWHERE and does not fail the action, which is
+// a deliberate and uncomfortable choice: this event is evidence, and an
+// evidence write that could refuse an otherwise-permitted action would make a
+// full disk into an outage. The decisions that must not happen unrecorded are
+// the policy ones, and those already fail closed in internal/policy.
+func (s *Step) record(ctx context.Context, inv Invocation, allowed bool, cause error) {
+	if s.store == nil {
+		return
+	}
+	record := ActionRecord{Subject: s.subject, Action: inv.Action, Allowed: allowed}
+	if cause != nil {
+		record.Reason = cause.Error()
+	}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	_ = s.store.Append(ctx, s.tenantID, runstore.Event{
+		RunID: inv.RunID,
+		// The AGENT's step, not the action's: the action is not a step of
+		// this run and never will be — an agent that wants something run
+		// starts a run of its own (ADR 0025).
+		StepID:  inv.StepID,
+		Type:    EventAction,
+		Payload: payload,
+		At:      time.Now().UTC(),
+	})
+}
+
+// principalSubject is what the policy trail records this agent's action under.
+//
+// It names the AGENT and the action together, because policy_audit has one
+// subject column and both facts have to survive into it: a row saying only
+// `start_run` was refused does not say by whom, and a row saying only
+// `agent:triage` does not say what it tried.
+func (s *Step) principalSubject(action string) string {
+	if s.subject == "" {
+		return action
+	}
+	return s.subject + ":" + action
 }
 
 // checkTaint asks internal/taint whether untrusted data may reach this action,
@@ -287,9 +372,17 @@ func (s *Step) checkTaint(ctx context.Context, inv Invocation, action *dholev1.S
 	}
 
 	decision, err := s.taint.Check(ctx, taint.Dispatch{
-		TenantID:           s.tenantID,
-		Tier:               s.tier,
-		Subject:            inv.Action,
+		TenantID: s.tenantID,
+		Tier:     s.tier,
+		Subject:  s.principalSubject(inv.Action),
+		// The credential's own untrustworthiness, alongside the data's
+		// (ADR 0025). An agent holds an untrusted token whether or not what
+		// it read carries a mark, so a rule can refuse an at-most-once effect
+		// or an unsigned plugin to an agent while allowing it to a person —
+		// and a check that looked only at the inputs would let an agent that
+		// had read nothing do anything at all.
+		PrincipalKind:      string(identity.PrincipalAgent),
+		PrincipalUntrusted: true,
 		EffectClass:        action.GetEffectClass(),
 		EngineCapabilities: s.capabilities,
 		Inputs:             inputs,
@@ -450,10 +543,20 @@ func (s *Step) Run(
 // never approves — an approval is a person's act, and a hook that could say
 // yes would be an agent approving itself.
 func (s *Step) approve(ctx context.Context, runID, stepID, action string) error {
+	inv := Invocation{RunID: runID, StepID: stepID, Action: action}
 	if err := s.actions.Check(action); err != nil {
+		s.record(ctx, inv, false, err)
 		return err
 	}
-	return s.requestApproval(ctx, Invocation{RunID: runID, StepID: stepID, Action: action})
+	err := s.requestApproval(ctx, inv)
+	// Recorded HERE as well as in Invoke, and it is not a duplicate: the SDK's
+	// own approval hook stops an at-most-once call BEFORE Execute, so an
+	// at-most-once action asked for through the model's loop never reaches
+	// Invoke at all. Without this the run log held the gate event and no
+	// record of which agent asked for what — which is the question the gate
+	// exists to put to a person.
+	s.record(ctx, inv, false, err)
+	return err
 }
 
 // guard carries the first refusal out of the SDK's loop.

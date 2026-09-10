@@ -149,6 +149,14 @@ type Config struct {
 	// RUN_STARTED row for the ledger to bill from — which is what every
 	// deployment did until it was passed one.
 	Quotas Quotas
+	// Files is the content-addressed store the files a definition carries
+	// live in (ADR 0023). Optional: without one, PutDefinitionFile refuses
+	// rather than answering with a digest whose bytes nothing holds.
+	//
+	// Pass the QUOTA-GUARDED store (tenancy.GuardCAS), not the raw one: an
+	// upload is charged against the tenant's max_cas_bytes, which is the only
+	// ceiling on how large a definition may become.
+	Files FileStore
 	// Heads tracks the editing head per pipeline. Defaults to MemoryHeads,
 	// which is a check within this process only: a deployment running more
 	// than one control plane MUST pass defstore.NewHeads.
@@ -227,6 +235,7 @@ type Server struct {
 	adv       Advancer
 	quotas    Quotas
 	heads     Heads
+	files     FileStore
 	cache     CacheReader
 	fleet     Fleet
 	drain     Drainer
@@ -278,6 +287,7 @@ func NewServer(cfg Config) (*Server, error) {
 		adv:         cfg.Advancer,
 		quotas:      cfg.Quotas,
 		heads:       cfg.Heads,
+		files:       cfg.Files,
 		cache:       cfg.Cache,
 		fleet:       cfg.Fleet,
 		drain:       cfg.Drain,
@@ -376,6 +386,13 @@ func (s *Server) CreatePipeline(
 	}
 	definition.Id = pipelineID
 	definition.Tenant = &dholev1.Tenant{Id: p.TenantID}
+
+	// Before the first revision exists: a definition that carries a file
+	// nobody uploaded, or a step bound to a file the definition does not
+	// carry, is refused here rather than on an engine minutes into a run.
+	if err := s.checkDefinitionFiles(ctx, p.TenantID, definition); err != nil {
+		return nil, err
+	}
 
 	rev, err := s.defs.Save(ctx, p.TenantID, definition, p.Subject)
 	if err != nil {
@@ -491,6 +508,14 @@ func (s *Server) ApplyOperation(
 				pipelineID, applyTo, err))
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	// The RESULT is checked rather than the operation: a set_file naming
+	// bytes nobody uploaded and a remove that orphans a binding are the same
+	// fault seen from two ends, and checking what is about to be stored
+	// catches both without this needing a case per operation kind.
+	if err := s.checkDefinitionFiles(ctx, p.TenantID, next); err != nil {
+		return nil, err
 	}
 
 	rev, err := s.defs.Save(ctx, p.TenantID, next, p.Subject)

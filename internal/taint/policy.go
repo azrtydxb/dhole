@@ -179,6 +179,8 @@ func (c *Checker) Check(ctx context.Context, d Dispatch) (policy.Decision, error
 		Tainted:            len(named) > 0,
 		TaintSources:       named,
 		EngineCapabilities: d.EngineCapabilities,
+		PrincipalKind:      d.PrincipalKind,
+		PrincipalUntrusted: d.PrincipalUntrusted,
 	})
 	if err != nil {
 		return policy.Decision{Rule: decision.Rule, Reason: decision.Reason}, err

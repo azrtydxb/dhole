@@ -223,6 +223,18 @@ func inputDigests(
 	pipeline *dholev1.Pipeline, step *dholev1.Step, known map[string]map[string]*dholev1.Digest,
 ) ([]*dholev1.Digest, bool) {
 	var inputs []*dholev1.Digest
+	// The files the definition carries come first, and they are always known:
+	// a revision pins their bytes, so nothing has to run to resolve them.
+	files, err := dag.FileInputs(pipeline, step)
+	if err != nil {
+		// A binding that names no file leaves the key short of an input, and a
+		// short key collides with the same step reading nothing. Validate
+		// reports this as a diagnostic; here it simply means no key.
+		return nil, false
+	}
+	for _, f := range files {
+		inputs = append(inputs, f.GetDigest())
+	}
 	for _, e := range pipeline.GetEdges() {
 		if e.GetToStep() != step.GetId() {
 			continue

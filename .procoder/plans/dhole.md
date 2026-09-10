@@ -64,7 +64,11 @@ decide what may be cached and what may be retried.
   0024 triggers (the stored trigger table behind CreateTrigger/ListTriggers/
   DeleteTrigger — before it, an event source could only be DECLARED in the
   plane's `--triggers` file, so creating one needed a shell on that host and a
-  restart). A task
+  restart). Definition-attached files (ADR 0023) took NO number and added no
+  table on purpose: the declaration is a field of the definition proto, which
+  the `revisions` row already stores whole, and the bytes live in the CAS,
+  which is not SQL — a table binding revision to file would be a second copy of
+  what the definition already says. A task
   needing a new table takes the next number after 0010 and adds it to this
   list in the same commit. The runner must tolerate gaps — a branch carries
   only its own migration until it merges. The runner applies every migration file in
@@ -391,19 +395,72 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
-- [ ] **What the plane still does not host, after the dispatcher landed.** Three
-      things left of the original five; (d) and (e) are closed below.
-      (a) `internal/steps/agent` has no `builtin:agent` — the action space, the
-      taint check and the per-action approval are still library-only, because
-      an agent step needs an invoker for the actions it may take and nothing
-      supplies one.
-      (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
-      a model client holds an API key and nothing in this system leases the
-      PLANE a secret. A step on a plane with no factory fails with that reason.
+- [ ] **A definition file is never collected, and ADR 0023 says it is.** That
+      record's Consequences claim "a file removed by an operation is not deleted
+      from the CAS: it is unreferenced, and the collector reclaims it when
+      nothing points at it". The first half is true and the second is not.
+      `cas.GC` enumerates `blob_refs`, and only a step OUTPUT ever writes a row
+      there (`GC.Reference`), so a definition file has no row, is never
+      enumerated, and is retained forever. The current behaviour is
+      safe-but-leaky rather than dangerous — the opposite error, collecting a
+      file a revision still carries, would break a pinned run — but a tenant
+      that replaces a large file on every edit grows without bound against the
+      MaxCASBytes quota those very files are charged to.
+      The fix is to teach the collector what a revision pins: a file carried by
+      SOME revision is retained, one carried by none is collectable. Note the
+      `blob_refs` key is `(tenant_id, digest, run_id)` and a definition file is
+      owned by a revision rather than a run, so this is a schema question, not
+      only a query. ADR 0023 is accepted and immutable; if the answer changes
+      the decision rather than completing it, supersede rather than edit.
+      Found by the agent that implemented 0023, which reported the gap in its
+      own work rather than leaving it to be discovered.
+- [ ] **What the plane still does not host, after the dispatcher landed.** ONE
+      clause left of the original five. (a) is closed by ADR 0025 and
+      `internal/steps/agent/contract.go` + `internal/server/agent.go`: an agent
+      acts ONLY through Dhole's own public API, as a principal of its tenant,
+      with an action space of `start_run`, `read_run`, `decide_approval` and
+      `apply_operation` and nothing else. The invoker is a Connect client over
+      the plane's OWN loopback listener carrying a token minted for the agent's
+      subject, NOT a direct call into `api.Server` — ADR 0013's point is that
+      there is no privileged path, and an in-process shortcut would be the one
+      caller that missed every interceptor added later. Taint follows the
+      CREDENTIAL as well as the value, so a CEL rule can refuse an at-most-once
+      effect to an agent while allowing it to a person. An agent cannot run a
+      command, and `TestAnAgentStepHasNoPathToExecutingACommand` asserts the
+      package cannot even reach `internal/executor`. (b), (d) and (e) are
+      closed in their own entries below. What remains:
       (c) A `builtin:loop` body is one builtin reference in `config.body`, not
-      a nested pipeline: the definition format has no syntax for a subgraph and
-      no run can contain another, so a body that dispatches to engines needs
-      nested runs.
+      a nested pipeline. ADR 0022 decides it is spliced into the SAME run
+      through the generator machinery rather than becoming a nested run.
+      NOT closed by (a): a parked agent is not resumed after a person decides
+      its gate — re-entering the model's loop at the call it stopped on needs
+      its own task, so the step fails with the gate's own reason and the run
+      stops readably rather than hanging.
+- [x] **(b) Nothing leased the PLANE a secret, so `builtin:llm` had no key.**
+      `server.Config.Models` was a factory a deployment had to construct with an
+      API key in hand, and the CLI passed none — so every `builtin:llm` step
+      failed with that named reason. Closed by ADR 0024: the plane redeems its
+      own secrets through the broker it already serves. A model configuration
+      NAMES a secret (`api_key_secret` in the step's config); the plane resolves
+      it at CALL time through `internal/secrets` (`Source`, `MapSource`,
+      `PlaneResolver`), as a principal of the tenant whose step is running, and
+      hands the value to the factory as `server.ModelRequest.APIKey` — which is
+      why `ModelFactory` now takes that struct instead of two strings. The
+      broker's rules are unchanged: single use, an issuer-enforced expiry, a
+      refusal naming neither handle nor value. Redeemed per call and never
+      cached, so a provider key rotates without a restart and an hour-long run
+      holds no value for an hour. `server.DefaultModels` builds anthropic and
+      openai clients from the redeemed key and REFUSES to fall back to the
+      provider libraries' `os.Getenv` default — the ambient credential is the
+      trap this design exists to avoid. The `--model-secret` flag on
+      `dhole serve` supplies the values (never on argv), and the chart's
+      `controlPlane.modelSecrets` reads each from an existing Kubernetes
+      Secret. START-UP ORDERING is now a rule with a test: the broker serves
+      BEFORE the advance loop, the builtin workers and the hosted engine, or
+      the first LLM step of a fresh plane races its own credential
+      (`internal/server/startup_order_test.go`). A plane with no factory, or one
+      naming a secret it cannot resolve, still fails the step with a named
+      reason — never a nil dereference and never a silent skip. No migration.
 - [x] **(d) An operator could not create a trigger through the contract.**
       Triggers were declared on `server.Config` and read from a YAML file by
       `--triggers`, so creating one needed a shell on the control plane's host
@@ -498,53 +555,43 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       names it between platform and capability, coarsest cause first, so a step
       that cannot be placed is reported rather than held.
 - [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
-      template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
-      through the dispatch (`JobDispatch.step` already carries the whole step),
-      and it is what the cache key is hashed against. Still open in this item:
-      it **cannot reference a file from the repository** and **has no syntax for
-      a loop's body**. A trigger's bound inputs reach the sink and no run
-      carries them.
-
-      The file reference NEEDS A DECISION, not an implementation, and the
-      reason is that the phrase "the definition's repository" names something
-      this system does not have. Git is a one-way MIRROR OUT of the definition
-      store (ADR 0008, `internal/mirror`): the database is canonical and the
-      repository is an export nobody may push to meaningfully. The git TRIGGER
-      parses a forge's webhook and never clones — there is no fetch, no
-      credential for a source remote, and no checkout anywhere in the tree. So
-      there is no repository to read a file FROM, and adding one is a decision
-      about what a pipeline's source of truth is, which is the shape of an ADR.
-      The options, with what each costs:
-
-      1. **Definition-attached files.** A file is part of the DEFINITION: stored
-         with the revision in `internal/defstore`, content-addressed, and named
-         by a step as an input the plane materialises. Preserves ADR 0001 (the
-         file is declared, the DAG still derives from declarations, no ambient
-         filesystem state) and ADR 0008 (nothing outside the database decides
-         what runs). It is part of the content hash, so it is part of the cache
-         key for free. Costs: an upload path through the API and the CLI, a size
-         ceiling, a `defstore` schema change, and the mirror has to export them.
-         This is the smallest answer that closes the acceptance pipeline's
-         embedded Dockerfile.
-      2. **A source-fetch step.** A builtin step clones a repository at a pinned
-         commit and emits it on an output port; every consumer reads it through
-         an edge. Mechanically ADR 0001-clean, and it is the CI-shaped answer.
-         Costs: source credentials the plane must hold, an effect class that is
-         not pure, and a cache key that is only stable if the step names a
-         commit sha rather than a ref — a branch name is `Step.image`'s tag
-         problem again.
-      3. **Read from the git mirror.** REJECTED, and worth writing down so it is
-         not proposed again: it makes a run's behaviour depend on a repository
-         that is by design not a source of truth, so anyone with push access to
-         the mirror changes what runs, and the approval state and the run
-         history stop meaning anything (ADR 0008's opening paragraph).
-      4. **Trigger inputs reaching the step.** Already open above. It delivers a
-         commit sha and a payload, never file bytes, so it is a prerequisite for
-         option 2 and not an answer on its own.
-
-      Until one is chosen, `acceptance/ci/pipeline.yaml` keeps carrying the
-      Dockerfile's text and `TestCIPipelineBuildsTheCheckedInDockerfile` keeps
-      that copy equal to the checked-in file.
+      template does) — CLOSED: `Step.image` reaches `executor.Spec.Image` through the dispatch
+      (`JobDispatch.step` already carries the whole step), and it is what the cache key is
+      hashed against. **It cannot reference a file from the repository** — CLOSED by ADR 0023,
+      option 1 below. A file a step needs is part of the DEFINITION, not of a repository:
+      `Pipeline.files` carries `File{path, digest, size, media type}`, a step binds one to an
+      input port with `Step.file_inputs`, and `dag.FileInputs` resolves the binding into the
+      same `InputRef` an edge produces — so the engine materialises it at `inputs/<port>` with
+      no engine change at all, ADR 0001 holds, and the digest lands in the cache key for free
+      (`TestADeclaredFileIsPartOfTheStepsCacheKey` asserts the miss and the hit together).
+      `PutDefinitionFile` uploads the bytes through the guarded CAS, so a definition's ceiling
+      is the tenant's `MaxCASBytes` and not a constant; `dhole pipeline push-file` is the CLI
+      surface; `SetFile` is the sixth-and-a-half editing operation, closed under inversion
+      (ADR 0020) in all three directions, refusing a detach of a path that carries nothing and
+      of a file a step still reads; the git mirror exports the bytes beside the YAML under
+      `pipelines/<id>.files/<path>`. NO MIGRATION was needed: the declaration lives in the
+      definition proto, which the `revisions` row already stores whole, and the bytes live in
+      the CAS, which is not SQL. `acceptance/ci/pipeline.yaml` now DECLARES the Dockerfile and
+      `TestCIPipelineBuildsTheCheckedInDockerfile` is GONE — which was the point: the test
+      existed only because the feature did not. Verified against the live cluster:
+      `TestAcceptanceCICacheHit` passes with a 10.5s first run and a 30ms second. Still open
+      in this item: a pipeline **has no syntax for a loop's body**, and a trigger's bound
+      inputs reach the sink and no run carries them. What ADR 0023 does NOT give anyone is a
+      checkout. A pipeline that wants a whole repository at a commit still cannot have one; if
+      that becomes the common case, option 2 supersedes this rather than extending it. The
+      options as they stood, with what each costs, kept because the rejection of option 3 is
+      worth not re-proposing: 1. **Definition-attached files.** CHOSEN — ADR 0023. 2. **A
+      source-fetch step.** A builtin step clones a repository at a pinned commit and emits it
+      on an output port; every consumer reads it through an edge. Mechanically ADR 0001-clean,
+      and it is the CI-shaped answer. Costs: source credentials the plane must hold, an effect
+      class that is not pure, and a cache key that is only stable if the step names a commit
+      sha rather than a ref — a branch name is `Step.image`'s tag problem again. 3. **Read
+      from the git mirror.** REJECTED, and worth writing down so it is not proposed again: it
+      makes a run's behaviour depend on a repository that is by design not a source of truth,
+      so anyone with push access to the mirror changes what runs, and the approval state and
+      the run history stop meaning anything (ADR 0008's opening paragraph). 4. **Trigger
+      inputs reaching the step.** Already open above. It delivers a commit sha and a payload,
+      never file bytes, so it is a prerequisite for option 2 and not an answer on its own.
 - [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
       Closed: giving up now records `STEP_FAILED` and nothing else, so whether

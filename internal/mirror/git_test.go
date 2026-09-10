@@ -1,9 +1,13 @@
 package mirror_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -430,8 +434,19 @@ func fullPipeline() *dholev1.Pipeline {
 				// forever. The round trip has to carry it or a mirrored
 				// pipeline comes back unbounded.
 				TimeoutSeconds: 900,
+				// A file the DEFINITION carries, bound to an input port
+				// (ADR 0023). It is what a revision pins the bytes of, so a
+				// mirror that dropped the binding would export a step reading
+				// nothing.
+				FileInputs: []*dholev1.FileInput{{Port: "status", Path: "Dockerfile"}},
 			},
 		},
+		Files: []*dholev1.File{{
+			Path:      "Dockerfile",
+			Digest:    &dholev1.Digest{Algo: "sha256", Hex: strings.Repeat("a", 64)},
+			SizeBytes: 42,
+			MediaType: "text/plain",
+		}},
 		Edges: []*dholev1.Edge{
 			{FromStep: "build", FromPort: "artifact", ToStep: "publish", ToPort: "artifact"},
 			{FromStep: "publish", FromPort: "receipt", ToStep: "announce", ToPort: "receipt"},
@@ -603,4 +618,124 @@ func messageOf(fd protoreflect.FieldDescriptor) protoreflect.MessageDescriptor {
 		return fd.MapValue().Message()
 	}
 	return fd.Message()
+}
+
+// TestTheMirrorExportsTheFilesADefinitionCarries keeps the mirror a complete
+// export.
+//
+// A definition now carries files (ADR 0023), and a mirror holding the YAML
+// that NAMES a Dockerfile without the Dockerfile beside it exports a digest
+// nobody can read back — which defeats the whole point of the mirror, which is
+// to be a readable, diffable, backup-able copy of what the store holds. The
+// direction is unchanged: this is still an export, and a file edited in a
+// clone is overwritten by the next authoritative push like everything else.
+func TestTheMirrorExportsTheFilesADefinitionCarries(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+	remote := newBareRepo(t)
+	blobs := newFileSource()
+
+	m, err := mirror.NewGit(mirror.Config{
+		Remotes:   map[string]string{tenant: remote},
+		WorkDir:   t.TempDir(),
+		Files:     blobs,
+		Attempts:  2,
+		BaseDelay: time.Millisecond,
+		MaxDelay:  2 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	dockerfile := []byte("FROM busybox:1.36\n")
+	digest := blobs.put(tenant, dockerfile)
+
+	p := smallPipeline("p1", "oci://dhole/build:1")
+	p.Files = []*dholev1.File{{
+		Path: "Dockerfile", Digest: digest, SizeBytes: uint64(len(dockerfile)), MediaType: "text/plain",
+	}}
+	rev, err := store.Save(ctx, tenant, p, "ada")
+	require.NoError(t, err)
+	require.NoError(t, m.Push(ctx, tenant, rev, p))
+
+	got, ok := readMirrored(t, remote, "pipelines/p1.files/Dockerfile")
+	require.True(t, ok,
+		"the mirror exported a definition naming a file and not the file, so the copy is unreadable")
+	require.Equal(t, string(dockerfile), got)
+
+	// The definition itself still exports, and still names the file by the
+	// digest that pins it.
+	yaml, ok := readMirrored(t, remote, "pipelines/p1.yaml")
+	require.True(t, ok)
+	require.Contains(t, yaml, digest.GetHex())
+
+	// The second push replaces the exported bytes rather than accumulating
+	// them: a file whose content changed must not leave the old copy behind
+	// under the same name, which would make the mirror show two answers.
+	replacement := []byte("FROM alpine:3.19\n")
+	p.Files[0].Digest = blobs.put(tenant, replacement)
+	p.Files[0].SizeBytes = uint64(len(replacement))
+	rev2, err := store.Save(ctx, tenant, p, "ada")
+	require.NoError(t, err)
+	require.NoError(t, m.Push(ctx, tenant, rev2, p))
+
+	got, ok = readMirrored(t, remote, "pipelines/p1.files/Dockerfile")
+	require.True(t, ok)
+	require.Equal(t, string(replacement), got)
+}
+
+// TestTheMirrorReportsAFileItCannotRead: a mirror that silently skipped a file
+// it could not fetch would produce an export that looks complete and is not,
+// and the operator's first sign of it would be a clone with a missing file.
+func TestTheMirrorReportsAFileItCannotRead(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+	remote := newBareRepo(t)
+
+	m, err := mirror.NewGit(mirror.Config{
+		Remotes:   map[string]string{tenant: remote},
+		WorkDir:   t.TempDir(),
+		Files:     newFileSource(), // holds nothing
+		Attempts:  1,
+		BaseDelay: time.Millisecond,
+		MaxDelay:  time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	p := smallPipeline("p1", "oci://dhole/build:1")
+	p.Files = []*dholev1.File{{
+		Path: "Dockerfile", Digest: &dholev1.Digest{Algo: "sha256", Hex: "absent"},
+	}}
+	rev, err := store.Save(ctx, tenant, p, "ada")
+	require.NoError(t, err)
+
+	err = m.Push(ctx, tenant, rev, p)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Dockerfile")
+
+	state, err := m.Status(ctx, tenant)
+	require.NoError(t, err)
+	require.True(t, state.Drift, "a push that could not export a file must be reported as drift")
+}
+
+// fileSource is an in-memory stand-in for the content-addressed store the
+// mirror reads a definition's files out of. It is keyed by tenant because
+// there is no unscoped read in this system, even here.
+type fileSource struct {
+	blobs map[string][]byte
+}
+
+func newFileSource() *fileSource { return &fileSource{blobs: map[string][]byte{}} }
+
+func (f *fileSource) put(tenantID string, content []byte) *dholev1.Digest {
+	sum := sha256.Sum256(content)
+	d := &dholev1.Digest{Algo: "sha256", Hex: hex.EncodeToString(sum[:])}
+	f.blobs[tenantID+"/"+d.GetHex()] = content
+	return d
+}
+
+func (f *fileSource) Get(_ context.Context, tenantID string, d *dholev1.Digest) (io.ReadCloser, error) {
+	content, ok := f.blobs[tenantID+"/"+d.GetHex()]
+	if !ok {
+		return nil, errors.New("no such blob")
+	}
+	return io.NopCloser(bytes.NewReader(content)), nil
 }

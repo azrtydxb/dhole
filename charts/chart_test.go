@@ -291,3 +291,34 @@ func TestTheChartCanPassAnS3SessionToken(t *testing.T) {
 		t.Errorf("the session token reaches %d containers, want the plane and its engines", got)
 	}
 }
+
+// A model credential the control plane redeems for a `builtin:llm` step must
+// reach the pod from a Secret, never from the values file: a key in a rendered
+// manifest is a key in every `helm get manifest`, every GitOps repository and
+// every `kubectl describe` a support ticket asks for.
+func TestAModelCredentialComesFromASecretAndIsNamedOnTheCommandLine(t *testing.T) {
+	out := render(t,
+		"--set", "controlPlane.modelSecrets[0].name=ANTHROPIC_API_KEY",
+		"--set", "controlPlane.modelSecrets[0].existingSecret=anthropic",
+		"--set", "controlPlane.modelSecrets[0].key=apiKey")
+
+	if !strings.Contains(out, "--model-secret=ANTHROPIC_API_KEY=DHOLE_MODEL_SECRET_ANTHROPIC_API_KEY") {
+		t.Errorf("the plane was not told which secret to redeem:\n%s", out)
+	}
+	if !strings.Contains(out, "name: DHOLE_MODEL_SECRET_ANTHROPIC_API_KEY") ||
+		!strings.Contains(out, "name: anthropic") {
+		t.Errorf("the credential is not read from a Secret:\n%s", out)
+	}
+	if regexp.MustCompile(`DHOLE_MODEL_SECRET_ANTHROPIC_API_KEY\n\s+value:`).MatchString(out) {
+		t.Errorf("a model credential was rendered as a literal value in the pod spec:\n%s", out)
+	}
+}
+
+// A model secret that names no Kubernetes Secret to read is a plane that
+// starts with a credential it cannot read and fails its first model call.
+// It must fail at install instead.
+func TestAModelSecretWithNoSecretToReadIsRefusedAtInstall(t *testing.T) {
+	if _, err := renderErr(t, "--set", "controlPlane.modelSecrets[0].name=ANTHROPIC_API_KEY"); err == nil {
+		t.Fatal("the chart rendered a model secret with nothing behind it")
+	}
+}

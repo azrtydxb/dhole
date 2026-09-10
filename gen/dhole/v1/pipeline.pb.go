@@ -263,6 +263,152 @@ func (x *Port) GetType() *PortType {
 	return nil
 }
 
+// File is a byte string the DEFINITION carries, named by a path and identified
+// by the digest of its content (ADR 0023).
+//
+// It exists because a pipeline could not reference a file. "Read it from the
+// repository" names something this system does not have — git is a one-way
+// mirror OUT of the definition store (ADR 0008) and nothing in the tree clones
+// — so the CI acceptance pipeline embedded a Dockerfile's TEXT in a step and a
+// test kept that copy equal to the checked-in file.
+//
+// The digest is what a run pins. Because the file is part of the definition it
+// is part of the revision's content hash, so a revision names exact bytes and
+// two definitions whose file differs are two revisions. The bytes themselves
+// live in the tenant's content-addressed store, uploaded before the definition
+// that names them, and they count against the tenant's max_cas_bytes like
+// every other stored byte rather than against a ceiling invented for files.
+type File struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Path the file is known by within the definition. It is the name a step
+	// binds to and the name the git mirror exports it under; it is not a path
+	// on any machine.
+	Path   string  `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Digest *Digest `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	// Size of the content, for a reader that wants to show it without fetching.
+	SizeBytes uint64 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	// Advisory media type, e.g. "text/plain". Nothing type-checks against it.
+	MediaType     string `protobuf:"bytes,4,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *File) Reset() {
+	*x = File{}
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *File) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*File) ProtoMessage() {}
+
+func (x *File) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use File.ProtoReflect.Descriptor instead.
+func (*File) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *File) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *File) GetDigest() *Digest {
+	if x != nil {
+		return x.Digest
+	}
+	return nil
+}
+
+func (x *File) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *File) GetMediaType() string {
+	if x != nil {
+		return x.MediaType
+	}
+	return ""
+}
+
+// FileInput binds one of a step's input ports to a file the definition
+// carries, which is how a file reaches a step: as a DECLARED INPUT like any
+// other, so ADR 0001 holds — the step inherits no ambient filesystem state,
+// and the file's digest is already what the cache key is built from.
+type FileInput struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The step's input port this file satisfies.
+	Port string `protobuf:"bytes,1,opt,name=port,proto3" json:"port,omitempty"`
+	// The path of the file, as the pipeline's files declare it.
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileInput) Reset() {
+	*x = FileInput{}
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileInput) ProtoMessage() {}
+
+func (x *FileInput) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileInput.ProtoReflect.Descriptor instead.
+func (*FileInput) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FileInput) GetPort() string {
+	if x != nil {
+		return x.Port
+	}
+	return ""
+}
+
+func (x *FileInput) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 // Step is one unit of work: a plugin reference, its typed ports, the effect
 // class that governs caching and retry, and the capabilities it requires.
 type Step struct {
@@ -333,13 +479,22 @@ type Step struct {
 	// Added in protocol version 3. An engine that negotiated 2 ignores it and
 	// runs the step unbounded — see docs/wire-contract.md, "Step timeouts".
 	TimeoutSeconds uint32 `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Input ports this step reads from files the DEFINITION carries rather than
+	// from an edge (ADR 0023). Each names a port of `inputs` and a path of the
+	// pipeline's `files`.
+	//
+	// It is an input like any other: the engine materialises it at
+	// inputs/<port>, and its digest is folded into the cache key alongside the
+	// digests arriving over edges — which is what makes a changed file a cache
+	// miss rather than a stale hit.
+	FileInputs    []*FileInput `protobuf:"bytes,13,rep,name=file_inputs,json=fileInputs,proto3" json:"file_inputs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Step) Reset() {
 	*x = Step{}
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[4]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -351,7 +506,7 @@ func (x *Step) String() string {
 func (*Step) ProtoMessage() {}
 
 func (x *Step) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[4]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -364,7 +519,7 @@ func (x *Step) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Step.ProtoReflect.Descriptor instead.
 func (*Step) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{4}
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Step) GetId() string {
@@ -451,6 +606,13 @@ func (x *Step) GetTimeoutSeconds() uint32 {
 	return 0
 }
 
+func (x *Step) GetFileInputs() []*FileInput {
+	if x != nil {
+		return x.FileInputs
+	}
+	return nil
+}
+
 // Edge connects one step's output port to another step's input port. The DAG
 // is these edges; there is no separately authored dependency list to drift
 // from them.
@@ -466,7 +628,7 @@ type Edge struct {
 
 func (x *Edge) Reset() {
 	*x = Edge{}
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[5]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -478,7 +640,7 @@ func (x *Edge) String() string {
 func (*Edge) ProtoMessage() {}
 
 func (x *Edge) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[5]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -491,7 +653,7 @@ func (x *Edge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Edge.ProtoReflect.Descriptor instead.
 func (*Edge) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{5}
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Edge) GetFromStep() string {
@@ -524,18 +686,21 @@ func (x *Edge) GetToPort() string {
 
 // Pipeline is a tenant-scoped set of steps and the edges between them.
 type Pipeline struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Tenant        *Tenant                `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"`
-	Steps         []*Step                `protobuf:"bytes,3,rep,name=steps,proto3" json:"steps,omitempty"`
-	Edges         []*Edge                `protobuf:"bytes,4,rep,name=edges,proto3" json:"edges,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Tenant *Tenant                `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	Steps  []*Step                `protobuf:"bytes,3,rep,name=steps,proto3" json:"steps,omitempty"`
+	Edges  []*Edge                `protobuf:"bytes,4,rep,name=edges,proto3" json:"edges,omitempty"`
+	// The files this definition carries, which its steps declare as inputs.
+	// Content-addressed, so the revision pins the bytes (ADR 0023).
+	Files         []*File `protobuf:"bytes,5,rep,name=files,proto3" json:"files,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Pipeline) Reset() {
 	*x = Pipeline{}
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -547,7 +712,7 @@ func (x *Pipeline) String() string {
 func (*Pipeline) ProtoMessage() {}
 
 func (x *Pipeline) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -560,7 +725,7 @@ func (x *Pipeline) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pipeline.ProtoReflect.Descriptor instead.
 func (*Pipeline) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{6}
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Pipeline) GetId() string {
@@ -591,6 +756,13 @@ func (x *Pipeline) GetEdges() []*Edge {
 	return nil
 }
 
+func (x *Pipeline) GetFiles() []*File {
+	if x != nil {
+		return x.Files
+	}
+	return nil
+}
+
 var File_dhole_v1_pipeline_proto protoreflect.FileDescriptor
 
 const file_dhole_v1_pipeline_proto_rawDesc = "" +
@@ -611,7 +783,17 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\x04kind\"B\n" +
 	"\x04Port\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
-	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\x95\x04\n" +
+	"\x04type\x18\x02 \x01(\v2\x12.dhole.v1.PortTypeR\x04type\"\x82\x01\n" +
+	"\x04File\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12(\n" +
+	"\x06digest\x18\x02 \x01(\v2\x10.dhole.v1.DigestR\x06digest\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12\x1d\n" +
+	"\n" +
+	"media_type\x18\x04 \x01(\tR\tmediaType\"3\n" +
+	"\tFileInput\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"\xcb\x04\n" +
 	"\x04Step\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -628,7 +810,9 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	" \x01(\tR\x05image\x12\x1f\n" +
 	"\vengine_type\x18\v \x01(\tR\n" +
 	"engineType\x12'\n" +
-	"\x0ftimeout_seconds\x18\f \x01(\rR\x0etimeoutSeconds\x1a9\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\rR\x0etimeoutSeconds\x124\n" +
+	"\vfile_inputs\x18\r \x03(\v2\x13.dhole.v1.FileInputR\n" +
+	"fileInputs\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +
@@ -636,12 +820,13 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"\tfrom_step\x18\x01 \x01(\tR\bfromStep\x12\x1b\n" +
 	"\tfrom_port\x18\x02 \x01(\tR\bfromPort\x12\x17\n" +
 	"\ato_step\x18\x03 \x01(\tR\x06toStep\x12\x17\n" +
-	"\ato_port\x18\x04 \x01(\tR\x06toPort\"\x90\x01\n" +
+	"\ato_port\x18\x04 \x01(\tR\x06toPort\"\xb6\x01\n" +
 	"\bPipeline\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12(\n" +
 	"\x06tenant\x18\x02 \x01(\v2\x10.dhole.v1.TenantR\x06tenant\x12$\n" +
 	"\x05steps\x18\x03 \x03(\v2\x0e.dhole.v1.StepR\x05steps\x12$\n" +
-	"\x05edges\x18\x04 \x03(\v2\x0e.dhole.v1.EdgeR\x05edgesB\x8e\x01\n" +
+	"\x05edges\x18\x04 \x03(\v2\x0e.dhole.v1.EdgeR\x05edges\x12$\n" +
+	"\x05files\x18\x05 \x03(\v2\x0e.dhole.v1.FileR\x05filesB\x8e\x01\n" +
 	"\fcom.dhole.v1B\rPipelineProtoP\x01Z.github.com/azrtydxb/dhole/gen/dhole/v1;dholev1\xa2\x02\x03DXX\xaa\x02\bDhole.V1\xca\x02\bDhole\\V1\xe2\x02\x14Dhole\\V1\\GPBMetadata\xea\x02\tDhole::V1b\x06proto3"
 
 var (
@@ -656,39 +841,45 @@ func file_dhole_v1_pipeline_proto_rawDescGZIP() []byte {
 	return file_dhole_v1_pipeline_proto_rawDescData
 }
 
-var file_dhole_v1_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_dhole_v1_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_dhole_v1_pipeline_proto_goTypes = []any{
 	(*BlobType)(nil),   // 0: dhole.v1.BlobType
 	(*StructType)(nil), // 1: dhole.v1.StructType
 	(*PortType)(nil),   // 2: dhole.v1.PortType
 	(*Port)(nil),       // 3: dhole.v1.Port
-	(*Step)(nil),       // 4: dhole.v1.Step
-	(*Edge)(nil),       // 5: dhole.v1.Edge
-	(*Pipeline)(nil),   // 6: dhole.v1.Pipeline
-	nil,                // 7: dhole.v1.Step.ConfigEntry
-	(EffectClass)(0),   // 8: dhole.v1.EffectClass
-	(Capability)(0),    // 9: dhole.v1.Capability
-	(LeaseScope)(0),    // 10: dhole.v1.LeaseScope
-	(*Tenant)(nil),     // 11: dhole.v1.Tenant
+	(*File)(nil),       // 4: dhole.v1.File
+	(*FileInput)(nil),  // 5: dhole.v1.FileInput
+	(*Step)(nil),       // 6: dhole.v1.Step
+	(*Edge)(nil),       // 7: dhole.v1.Edge
+	(*Pipeline)(nil),   // 8: dhole.v1.Pipeline
+	nil,                // 9: dhole.v1.Step.ConfigEntry
+	(*Digest)(nil),     // 10: dhole.v1.Digest
+	(EffectClass)(0),   // 11: dhole.v1.EffectClass
+	(Capability)(0),    // 12: dhole.v1.Capability
+	(LeaseScope)(0),    // 13: dhole.v1.LeaseScope
+	(*Tenant)(nil),     // 14: dhole.v1.Tenant
 }
 var file_dhole_v1_pipeline_proto_depIdxs = []int32{
 	0,  // 0: dhole.v1.PortType.blob:type_name -> dhole.v1.BlobType
 	1,  // 1: dhole.v1.PortType.structured:type_name -> dhole.v1.StructType
 	2,  // 2: dhole.v1.Port.type:type_name -> dhole.v1.PortType
-	8,  // 3: dhole.v1.Step.effect_class:type_name -> dhole.v1.EffectClass
-	3,  // 4: dhole.v1.Step.inputs:type_name -> dhole.v1.Port
-	3,  // 5: dhole.v1.Step.outputs:type_name -> dhole.v1.Port
-	9,  // 6: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
-	10, // 7: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
-	7,  // 8: dhole.v1.Step.config:type_name -> dhole.v1.Step.ConfigEntry
-	11, // 9: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
-	4,  // 10: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
-	5,  // 11: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	10, // 3: dhole.v1.File.digest:type_name -> dhole.v1.Digest
+	11, // 4: dhole.v1.Step.effect_class:type_name -> dhole.v1.EffectClass
+	3,  // 5: dhole.v1.Step.inputs:type_name -> dhole.v1.Port
+	3,  // 6: dhole.v1.Step.outputs:type_name -> dhole.v1.Port
+	12, // 7: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
+	13, // 8: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
+	9,  // 9: dhole.v1.Step.config:type_name -> dhole.v1.Step.ConfigEntry
+	5,  // 10: dhole.v1.Step.file_inputs:type_name -> dhole.v1.FileInput
+	14, // 11: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
+	6,  // 12: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
+	7,  // 13: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
+	4,  // 14: dhole.v1.Pipeline.files:type_name -> dhole.v1.File
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_pipeline_proto_init() }
@@ -707,7 +898,7 @@ func file_dhole_v1_pipeline_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_pipeline_proto_rawDesc), len(file_dhole_v1_pipeline_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
