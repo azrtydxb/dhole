@@ -31,13 +31,13 @@ import (
 //  1. HOW AN ENGINE IS CONFIGURED. The contract never says how an engine
 //     learns its bus URL, its engine id, or its tier. The suite passes them in
 //     the environment: DHOLE_NATS_URL, DHOLE_ENGINE_ID, DHOLE_ENGINE_TIER.
-//  2. WHAT THE OBJECT STORE IS. JobDispatch.output_prefix and
-//     JobStatus.log_key name objects in a store whose PROTOCOL still appears
-//     nowhere in the contract. The suite uses a directory, passed as
-//     DHOLE_BLOB_DIR. The SHAPE of a key is no longer the suite's invention:
-//     the contract states that every object is tenant-scoped, so a key k for
-//     tenant t resolves at <tenant>/<key>, and a content-addressed object at
-//     <tenant>/<algo>/<first two hex>/<hex>.
+//  2. WHAT THE OBJECT STORE IS -- no longer a gap, and kept here because the
+//     suite's choice is the contract's now rather than its own. "Reaching the
+//     object store" names the backend in DHOLE_OBJECT_STORE and configures it
+//     from that backend's variables; the suite sets it to filesystem, with
+//     DHOLE_BLOB_DIR, because it starts no bucket. The SHAPE of a key is
+//     likewise the contract's: a key k for tenant t resolves at <tenant>/<key>
+//     and a content-addressed object at <tenant>/<algo>/<first two hex>/<hex>.
 //  3. HOW A SECRET IS REDEEMED. The contract says a handle is redeemed and
 //     never says on what subject or with what message. The suite serves a
 //     core-NATS request/reply on DHOLE_SECRET_SUBJECT: the request body is the

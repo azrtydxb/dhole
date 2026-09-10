@@ -45,21 +45,29 @@ of the length. Nothing in the contract requires either approach.
 
 ## What the engine is given
 
-None of this is in the wire contract, which is the single biggest gap this
-engine found: the contract says what an engine says on the bus, and nothing
-about how an engine is configured or what the object store is. These names are
-the conformance suite's convention, and an engine for a real deployment will
-need its own.
+Four of these are still the conformance suite's convention rather than the
+contract's — the contract says what an engine says on the bus, and not yet how
+it learns its bus URL, its identity, its tier or its slot count. The object
+store used to be on that list and no longer is: `DHOLE_OBJECT_STORE` and the
+variables that configure a backend are specified in
+[reaching the object store](../../../docs/wire-contract.md#reaching-the-object-store),
+so an engine for a real deployment reads them from there rather than guessing.
 
-| Variable                | Meaning                                                |
-| ----------------------- | ------------------------------------------------------ |
-| `DHOLE_BUS_URL`         | Bus to dial. Engines are outbound-only.                |
-| `DHOLE_ENGINE_ID`       | Identity to register under; names its control subject  |
-| `DHOLE_TIER`            | Trust tier — decides which dispatch subjects it takes  |
-| `DHOLE_BLOB_DIR`        | Object store root; an object lives at `<tenant>/<key>` |
-| `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches                |
-| `DHOLE_SECRET_SUBJECT`  | Request/reply subject that redeems a secret handle     |
-| `DHOLE_SLOTS`           | Jobs to run at once                                    |
+| Variable                | Meaning                                                    |
+| ----------------------- | ---------------------------------------------------------- |
+| `DHOLE_BUS_URL`         | Bus to dial. Engines are outbound-only.                    |
+| `DHOLE_ENGINE_ID`       | Identity to register under; names its control subject      |
+| `DHOLE_TIER`            | Trust tier — decides which dispatch subjects it takes      |
+| `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches                    |
+| `DHOLE_SECRET_SUBJECT`  | Request/reply subject that redeems a secret handle         |
+| `DHOLE_SLOTS`           | Jobs to run at once                                        |
+| the store's variables   | per the contract; this engine implements `filesystem` only |
+
+This engine REFUSES to start on an object store it cannot speak, and refuses a
+`filesystem` store with no directory rather than defaulting to one under
+`/tmp`. Both refusals guard the same failure: an engine that writes a step's
+log and its outputs where nothing else reads them, so every step succeeds and
+everything the run produced is unreachable.
 
 A step runs in a fresh working directory holding `inputs/<port>`, and whatever
 it writes to `outputs/<port>` is collected. That layout IS the contract now —

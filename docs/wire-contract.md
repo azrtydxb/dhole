@@ -411,6 +411,85 @@ An engine that reports an output by `key` writes it under the dispatch's
 `output_prefix`; one that reports it by `digest` writes it content-addressed.
 Either is acceptable; both are read back by the rules above.
 
+### Reaching the object store
+
+The key shape above says where an object lives. This says how an engine gets
+there, and it is a contract rather than one engine's configuration: the control
+plane reads back exactly what the engine wrote, so a deployment configures both
+ends with the same variables and an engine that invents its own has written the
+run's artifacts somewhere nothing reads.
+
+That failure is the reason this is specified at all. Nothing errors, every step
+succeeds, and the log and outputs are simply not there — found later, by
+somebody looking for evidence of a run that has none.
+
+| Variable                     | Backend    | Meaning                                                            |
+| ---------------------------- | ---------- | ------------------------------------------------------------------ |
+| `DHOLE_OBJECT_STORE`         | both       | which backend: `filesystem` or `s3`. Absent means `filesystem`.    |
+| `DHOLE_BLOB_DIR`             | filesystem | the directory the tenant prefixes live directly under              |
+| `DHOLE_S3_BUCKET`            | s3         | the bucket the tenant prefixes live directly under                 |
+| `DHOLE_S3_ENDPOINT`          | s3         | empty for AWS; the URL of a MinIO or other S3-compatible server    |
+| `DHOLE_S3_REGION`            | s3         | the bucket's region                                                |
+| `DHOLE_S3_ACCESS_KEY_ID`     | s3         | a static credential's key id                                       |
+| `DHOLE_S3_SECRET_ACCESS_KEY` | s3         | that credential's secret                                           |
+| `DHOLE_S3_SESSION_TOKEN`     | s3         | that credential's session token, when it is a temporary credential |
+
+**`DHOLE_OBJECT_STORE` names a backend, and an engine that does not implement
+the one it is given refuses to start.** Before it dials the bus, and certainly
+before it registers: an engine that announces itself and then fails every step
+is a fleet member advertising slots it cannot honour, and the scheduler has no
+way to tell that from an engine having a bad day. Falling back to `filesystem`
+because `s3` was not implemented is the same bug wearing a default.
+
+**The store already exists.** An engine creates objects and reads them back. It
+does not create the bucket or the directory, does not set a lifecycle policy,
+and does not delete anything — retention is the control plane's, and an engine
+that swept its own store would be deleting another run's evidence.
+
+**Credentials are the store's, not the step's.** They are read from this
+process's environment, never from a `SecretRef` in a dispatch. A `SecretRef`
+arrives with one step, and the engine needs the store before any step and
+independently of all of them — to write the authoritative log of a step that
+failed before it redeemed anything, and to fetch an input port for the dispatch
+carrying the reference. A step's own process never sees them either: what a
+step gets is `Port layout on disk` and the bindings its dispatch declared.
+
+**S3 with no static credential falls back to the ambient chain.** An empty
+`DHOLE_S3_ACCESS_KEY_ID` means the deployment is handing credentials to the
+process by another route — an instance profile, IRSA, a workload identity — and
+an engine must not refuse on that basis. This is the ordinary configuration in
+a cluster, and the only one that does not put a long-lived secret in a
+container's environment.
+
+**Whether the store is SHARED is a deployment's problem and an engine's
+warning.** `filesystem` is local to the process. On one host with one binary it
+is correct and needs no bucket; anywhere else the engine writes a step's log
+and its outputs to its own disk while the control plane looks for them on its
+own, and nothing errors — every step succeeds and everything it produced is
+unreachable.
+
+So an engine on a `filesystem` store must not start QUIETLY, and the same goes
+double when it was given no directory at all: an engine with no `DHOLE_BLOB_DIR`
+has been told nothing, and a default under the system temporary directory is a
+location the engine chose rather than one the plane agreed to. Two answers
+satisfy this, and Dhole ships one of each. `dhole-engine` defaults and warns at
+start-up, naming the directory it actually opened, because a single binary on a
+laptop is a supported deployment that does not deserve to be blocked by a check
+about a cluster. The reference Python engine refuses outright, because it is
+only ever pointed at a store by something that knows where the store is. What
+neither may do is open a directory nobody mentioned and say nothing.
+
+**A write is complete before the status that names it.** The authoritative log
+and every output port are durable in the store before the terminal `JobStatus`
+is published, because that status is what makes the run's next step ready. A
+reader that finds nothing at `log_key` cannot tell a lost object from one still
+being written.
+
+The conformance suite runs the `filesystem` backend — it starts no bucket — and
+sets `DHOLE_OBJECT_STORE` and `DHOLE_BLOB_DIR` to say so. It sets no `DHOLE_S3_`
+variable at all, so an engine that found one there would be exercising a path
+the suite has no server for.
+
 ## Step timeouts
 
 `Step.timeout_seconds` is how long a step may run before the engine kills it.
@@ -548,12 +627,10 @@ the reference Go engine does that this document does not say, so a stranger
 cannot implement it. They are listed rather than hidden, and the conformance
 suite's own choices are named so a second implementer makes the same ones.
 
-- **The object store's protocol.** The object store above says where a key
-  RESOLVES and says nothing about how an engine reaches the store: no protocol,
-  no addressing, no credentials. The conformance suite uses a directory named
-  by `DHOLE_BLOB_DIR`, which is a harness convention and not this contract.
 - **Engine configuration.** Bus URL, engine id, tier and slot count are not
-  described, so an engine cannot be started from this document alone.
+  described, so an engine cannot be started from this document alone. The
+  object store is no longer among them — see "Reaching the object store" — and
+  the same treatment is owed to the other four.
 - **Fence ordering.** Fence tokens are described as opaque, and the control
   plane compares them by age. Ordering an opaque string is undefined; an engine
   only ever needs equality, and this document should say so explicitly.

@@ -470,10 +470,50 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
       through the dispatch (`JobDispatch.step` already carries the whole step),
       and it is what the cache key is hashed against. Still open in this item:
-      it **cannot reference a file from the repository** (the Dockerfile's text
-      is embedded in the step, kept equal to the checked-in file by a test),
-      and **has no syntax for a loop's body**. A trigger's bound inputs reach
-      the sink and no run carries them.
+      it **cannot reference a file from the repository** and **has no syntax for
+      a loop's body**. A trigger's bound inputs reach the sink and no run
+      carries them.
+
+      The file reference NEEDS A DECISION, not an implementation, and the
+      reason is that the phrase "the definition's repository" names something
+      this system does not have. Git is a one-way MIRROR OUT of the definition
+      store (ADR 0008, `internal/mirror`): the database is canonical and the
+      repository is an export nobody may push to meaningfully. The git TRIGGER
+      parses a forge's webhook and never clones — there is no fetch, no
+      credential for a source remote, and no checkout anywhere in the tree. So
+      there is no repository to read a file FROM, and adding one is a decision
+      about what a pipeline's source of truth is, which is the shape of an ADR.
+      The options, with what each costs:
+
+      1. **Definition-attached files.** A file is part of the DEFINITION: stored
+         with the revision in `internal/defstore`, content-addressed, and named
+         by a step as an input the plane materialises. Preserves ADR 0001 (the
+         file is declared, the DAG still derives from declarations, no ambient
+         filesystem state) and ADR 0008 (nothing outside the database decides
+         what runs). It is part of the content hash, so it is part of the cache
+         key for free. Costs: an upload path through the API and the CLI, a size
+         ceiling, a `defstore` schema change, and the mirror has to export them.
+         This is the smallest answer that closes the acceptance pipeline's
+         embedded Dockerfile.
+      2. **A source-fetch step.** A builtin step clones a repository at a pinned
+         commit and emits it on an output port; every consumer reads it through
+         an edge. Mechanically ADR 0001-clean, and it is the CI-shaped answer.
+         Costs: source credentials the plane must hold, an effect class that is
+         not pure, and a cache key that is only stable if the step names a
+         commit sha rather than a ref — a branch name is `Step.image`'s tag
+         problem again.
+      3. **Read from the git mirror.** REJECTED, and worth writing down so it is
+         not proposed again: it makes a run's behaviour depend on a repository
+         that is by design not a source of truth, so anyone with push access to
+         the mirror changes what runs, and the approval state and the run
+         history stop meaning anything (ADR 0008's opening paragraph).
+      4. **Trigger inputs reaching the step.** Already open above. It delivers a
+         commit sha and a payload, never file bytes, so it is a prerequisite for
+         option 2 and not an answer on its own.
+
+      Until one is chosen, `acceptance/ci/pipeline.yaml` keeps carrying the
+      Dockerfile's text and `TestCIPipelineBuildsTheCheckedInDockerfile` keeps
+      that copy equal to the checked-in file.
 - [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
       Closed: giving up now records `STEP_FAILED` and nothing else, so whether
@@ -689,14 +729,30 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `TestAStepThatOutlivesItsTimeoutIsKilledAndReportedFailedWith137` pins it, and the
       conformance case sets the field instead of `DHOLE_STEP_TIMEOUT_SECONDS`. Both engines pass
       11/11.
-- [ ] **The object store has no protocol, only a key shape.** Closing the tenancy half said where
+- [x] **The object store has no protocol, only a key shape.** Closing the tenancy half said where
       an object RESOLVES — `<tenant>/<key>`, and `<tenant>/<algo>/<xx>/<hex>` for a
       content-addressed one — and left the rest of the store undescribed: how an engine reaches it,
       what it is addressed by, what credentials it presents. The conformance suite hands an engine
       a directory in `DHOLE_BLOB_DIR`, which is a harness convention no real deployment can use,
       and the shipped engine reads `DHOLE_OBJECT_STORE` plus a bucket's worth of variables that
       appear in no contract. A third-party engine still cannot be pointed at a deployment's store
-      from `docs/wire-contract.md` alone. Found closing the key-shape half, 2026-09-10.
+      from `docs/wire-contract.md` alone. Found closing the key-shape half, 2026-09-10. DONE: the
+      variables the tree already reads ARE the contract, and the fix was to stop having two
+      documents disagree about them rather than to invent a third spelling — a rename would have
+      broken every chart, every compose file and both binaries to buy nothing. `docs/wire-contract.md`
+      gains "Reaching the object store": `DHOLE_OBJECT_STORE` selects the backend, each backend's
+      variables configure it, an engine that does not implement the named backend REFUSES to start
+      rather than falling back, credentials come from the process environment and never from a
+      `SecretRef`, an empty `DHOLE_S3_ACCESS_KEY_ID` means the ambient chain, the store already
+      exists and an engine never creates or deletes it, and a write is durable before the status
+      that names it. `docs/writing-an-engine.md` no longer carries its own copy of the table —
+      `DHOLE_S3_SESSION_TOKEN` was read by the code and documented nowhere, which is exactly the
+      drift. The conformance suite now sets `DHOLE_OBJECT_STORE=filesystem` beside `DHOLE_BLOB_DIR`,
+      so an engine that reasonably REQUIRES the variable can be tested; the reference Python engine
+      refuses a backend it cannot speak and refuses a filesystem store with no directory instead of
+      defaulting under `/tmp`. Guarded by `TestEveryObjectStoreVariableTheCodeReadsIsInTheWireContract`,
+      which derives the list from `internal/blobstore/fromenv.go` rather than keeping one beside it,
+      and by `TestTheEngineGuideDoesNotRestateTheObjectStoreContract`. Both engines still pass 11/11.
 - [x] **Nothing publishes to the catalog.** `catalog.Publish` has no caller outside tests — not the API, not the CLI, not the git mirror. So a plugin's declaration can be read through `GetPlugin` and there is no supported way to put one there; the e2e seeder has a `/plugin` route for exactly this reason. Found building Task 27b. DONE: `PublishPlugin` is an additive RPC on `PipelineService` — the same place `GetPlugin` reads from, because a publish only a process holding the plane's database could perform is a capability the GUI and an agent can never have (ADR 0013). `dhole plugin publish <manifest|@file|@->` is its CLI surface, which `TestCLICoversEveryRPC` obliges. The seeder's `/plugin` back door is GONE and `panel.spec.ts` publishes through the contract.
 - [x] **The quota enforcer and the CAS guard are built and unwired.** Task 58's `Enforcer.AdmitRun`/`AdmitStep` and `GuardCAS` are tested but have no call sites: `internal/scheduler` and `internal/cas` belonged to other agents that round. Wire `AdmitStep` into the dispatch loop and `GuardCAS` around the blob store. Note `tenancy` deliberately does not import `scheduler` — the dependency runs the other way — so it mirrors two persistence contracts, guarded by `TestMirroredSchedulerContractsHaveNotDrifted`.
 - [x] **The fair queue and budgets are built and unwired.** Task 42 delivered `scheduler.Queue` and

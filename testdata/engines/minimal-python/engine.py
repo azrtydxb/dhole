@@ -15,7 +15,8 @@ Run it as the conformance suite does:
 
     DHOLE_BUS_URL=nats://127.0.0.1:4222 \
     DHOLE_ENGINE_ID=my-engine DHOLE_TIER=trusted \
-    DHOLE_BLOB_DIR=/var/lib/dhole/blobs python3 engine.py
+    DHOLE_OBJECT_STORE=filesystem DHOLE_BLOB_DIR=/var/lib/dhole/blobs \
+    python3 engine.py
 
 `--ignore-cancel` makes it drop EngineControl{Cancel}.  It is not a feature: it
 is the deliberately broken variant the conformance suite runs against itself to
@@ -429,9 +430,11 @@ def _env(canonical: str, deprecated: str, fallback: str) -> str:
 
 class Engine:
     def __init__(self, ignore_cancel=False):
-        # GAP: the contract never says how an engine is configured -- how it
-        # learns its bus URL, its identity, its tier, or where the object store
-        # is.  These names are the conformance suite's convention.
+        # GAP: the contract never says how an engine learns its bus URL, its
+        # identity or its tier.  These three names are the conformance suite's
+        # convention.  The object store is no longer among them: "Reaching the
+        # object store" says what a deployment sets and what this engine may
+        # assume, and _blob_dir reads exactly that.
         # Canonical name first, deprecated name second. Three variables had
         # two spellings: the conformance suite grew DHOLE_NATS_URL,
         # DHOLE_ENGINE_TIER and DHOLE_ENGINE_SLOTS while `dhole-engine` — the
@@ -443,7 +446,7 @@ class Engine:
         self.url = _env("DHOLE_BUS_URL", "DHOLE_NATS_URL", "nats://127.0.0.1:4222")
         self.engine_id = os.environ.get("DHOLE_ENGINE_ID", "minimal-python")
         self.tier = _env("DHOLE_TIER", "DHOLE_ENGINE_TIER", "trusted")
-        self.blob_dir = os.environ.get("DHOLE_BLOB_DIR", "/tmp/dhole-blobs")
+        self.blob_dir = self._blob_dir()
         self.stream = os.environ.get("DHOLE_DISPATCH_STREAM", "DISPATCH")
         self.secret_subject = os.environ.get("DHOLE_SECRET_SUBJECT", "")
         self.slots = int(_env("DHOLE_SLOTS", "DHOLE_ENGINE_SLOTS", "2"))
@@ -455,6 +458,37 @@ class Engine:
         self.jobs_lock = threading.Lock()
         self.free = threading.Semaphore(self.slots)
         self.running = True
+
+    @staticmethod
+    def _blob_dir():
+        """Where this engine reaches the object store.
+
+        The contract's "Reaching the object store" section: DHOLE_OBJECT_STORE
+        names the backend, and the variables that configure it belong to that
+        backend.  This engine implements `filesystem` and nothing else, so it
+        REFUSES any other name rather than starting.
+
+        Both refusals here are about the same failure, which is the expensive
+        one because nothing reports it: an engine that writes a step's log and
+        its outputs somewhere no other process reads.  Every step succeeds and
+        everything the run produced is unreachable.  Starting against a store
+        this engine cannot speak, or against a directory nobody configured,
+        both end there -- so both are start-up errors, before the bus is
+        dialled and before this engine advertises a single slot.
+        """
+        kind = os.environ.get("DHOLE_OBJECT_STORE", "").strip() or "filesystem"
+        if kind != "filesystem":
+            raise SystemExit(
+                "this engine implements only the filesystem object store; "
+                "DHOLE_OBJECT_STORE=%s names one it cannot speak" % kind
+            )
+        blob_dir = os.environ.get("DHOLE_BLOB_DIR", "").strip()
+        if not blob_dir:
+            raise SystemExit(
+                "the filesystem object store needs a directory the control "
+                "plane also reads: set DHOLE_BLOB_DIR"
+            )
+        return blob_dir
 
     # -- lifecycle ---------------------------------------------------------
 

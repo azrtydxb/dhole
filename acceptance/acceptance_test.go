@@ -160,6 +160,15 @@ func TestAcceptanceCICacheHit(t *testing.T) {
 // trigger input reaches a step today. So the definition carries the
 // Dockerfile's text in the step that emits it, and this test is what stops
 // that copy drifting from the file it claims to be.
+//
+// It cannot simply be implemented, which is why it is still here. "The
+// definition's repository" names something this system does not have: git is a
+// one-way mirror OUT of the definition store (ADR 0008), and the git trigger
+// parses a webhook rather than cloning, so there is no repository to read a
+// file from and no credential for one. Adding either a definition-attached
+// file or a source-fetch step is a decision about what a pipeline's source of
+// truth is; the options are written out in .procoder/plans/dhole.md under
+// "A pipeline cannot name the image its steps run in".
 func TestCIPipelineBuildsTheCheckedInDockerfile(t *testing.T) {
 	pipeline := loadPipeline(t, "ci/pipeline.yaml")
 	want, err := os.ReadFile("ci/Dockerfile")
