@@ -287,6 +287,13 @@ func TestATokenFromTheSupportedMintingPathIsAcceptedAsAnApprover(t *testing.T) {
 
 // TestDecidingAGateNobodyOpenedIsRefused: without it, any caller could mark
 // any step of any run succeeded by naming it.
+//
+// The step it names is an ORDINARY one, and that is the whole test. It used to
+// name the gate of a gated pipeline and rely on nothing having armed it yet —
+// which held only while `dhole serve` ran no step types at all. Now that the
+// plane arms its own gates, that pipeline's gate is legitimately open by the
+// time the call lands, and the test was asserting a race rather than the rule
+// in its own comment.
 func TestDecidingAGateNobodyOpenedIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -295,11 +302,47 @@ func TestDecidingAGateNobodyOpenedIsRefused(t *testing.T) {
 	client := apiClient(t, srv)
 	approverToken := openPlane(t, dir).issueTokenTheSupportedWay(ctx, t, releaseManager)
 
-	runID := startGatedRun(ctx, t, client, srv.BootstrapToken(), approverToken, "ungated")
+	runID := startUngatedRun(ctx, t, client, srv.BootstrapToken(), approverToken, "no-gate-here")
 
 	_, err := decideApproval(ctx, client, approverToken, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "approve", Approved: true,
+		RunId: runID, StepId: "work", Approved: true,
 	})
 	require.Error(t, err, "a step nobody asked an approval for was marked approved")
 	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// startUngatedRun starts a run of a pipeline with no approval gate in it, so
+// the step named above is one no approval was ever requested for.
+func startUngatedRun(
+	ctx context.Context, t *testing.T,
+	client dholev1connect.PipelineServiceClient, bootstrap, approverToken, id string,
+) string {
+	t.Helper()
+
+	pipeline := &dholev1.Pipeline{
+		Id: id,
+		Steps: []*dholev1.Step{{
+			Id:          "work",
+			Name:        "ordinary work",
+			PluginRef:   `command:{"args":["/bin/sh","-c","true"]}`,
+			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+		}},
+	}
+
+	create := connect.NewRequest(&dholev1.CreatePipelineRequest{PipelineId: id, Pipeline: pipeline})
+	create.Header().Set("Authorization", "Bearer "+bootstrap)
+	created, err := client.CreatePipeline(ctx, create)
+	require.NoError(t, err)
+	revision := created.Msg.GetRevision().GetId()
+
+	approve := connect.NewRequest(&dholev1.ApproveRevisionRequest{RevisionId: revision})
+	approve.Header().Set("Authorization", "Bearer "+approverToken)
+	_, err = client.ApproveRevision(ctx, approve)
+	require.NoError(t, err)
+
+	start := connect.NewRequest(&dholev1.StartRunRequest{PipelineId: id, RevisionId: revision})
+	start.Header().Set("Authorization", "Bearer "+bootstrap)
+	started, err := client.StartRun(ctx, start)
+	require.NoError(t, err)
+	return started.Msg.GetRunId()
 }

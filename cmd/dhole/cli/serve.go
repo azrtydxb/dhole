@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 
 	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/obs"
@@ -26,7 +28,7 @@ import (
 // same control plane and puts it in front of somebody else's Postgres, NATS
 // and engines.
 func serveCmd(o *options) *cobra.Command {
-	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr string
+	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr, triggerFile string
 	var otlpInsecure, noAPI bool
 	var apiOrigins []string
 	cmd := &cobra.Command{
@@ -72,6 +74,16 @@ func serveCmd(o *options) *cobra.Command {
 						"where this plane cannot read them. Set DHOLE_OBJECT_STORE=s3.\n")
 			}
 
+			// The event sources this plane runs. There is no trigger table
+			// and no RPC that creates one, so a file is how a deployment
+			// declares them; an unreadable or invalid file is an error
+			// rather than a warning, because a trigger nobody notices is
+			// missing is a pipeline that silently never runs.
+			triggers, err := loadTriggers(triggerFile)
+			if err != nil {
+				return err
+			}
+
 			srv, err := server.New(server.Config{
 				Mode:     server.Mode(mode),
 				StoreDSN: storeDSN,
@@ -82,6 +94,8 @@ func serveCmd(o *options) *cobra.Command {
 				EnvironmentIdentity: os.Getenv("DHOLE_ENVIRONMENT_IDENTITY"),
 
 				DeploymentID: deploymentID,
+
+				Triggers: triggers,
 
 				APIAddr:           apiAddr,
 				NoAPI:             noAPI,
@@ -150,7 +164,35 @@ func serveCmd(o *options) *cobra.Command {
 		"serve no API at all; the CLI and the web client then have nothing to talk to")
 	flags.StringArrayVar(&apiOrigins, "api-allowed-origin", nil,
 		"browser origin allowed to make cross-origin API calls; repeatable, and none by default")
+	flags.StringVar(&triggerFile, "triggers", os.Getenv("DHOLE_TRIGGERS"),
+		"YAML file declaring the cron schedules and webhook endpoints this plane runs")
 	return cmd
+}
+
+// loadTriggers reads the trigger declarations a plane runs.
+//
+// A file rather than a table because there is no table: nothing in proto/,
+// internal/defstore or internal/api can describe a trigger, so an operator has
+// no way to create one through the contract. That is a gap this flag works
+// around rather than closes, and it is recorded with Task 27b.
+func loadTriggers(path string) ([]server.TriggerSpec, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // the operator names this file
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var doc struct {
+		Triggers []server.TriggerSpec `json:"triggers"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(doc.Triggers) == 0 {
+		return nil, fmt.Errorf("%s declares no triggers", path)
+	}
+	return doc.Triggers, nil
 }
 
 // apiEndpoint is the API address as a URL a person can paste into --server,

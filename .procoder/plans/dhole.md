@@ -368,12 +368,41 @@ does not have.
 
 Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/wait/`, `internal/trigger/`, `proto/dhole/v1/api.proto`, `.github/workflows/`
 
-- [ ] **`dhole serve` runs no step types, no triggers and no timer poll.** It
+- [x] **`dhole serve` runs no step types, no triggers and no timer poll.** It
       imports none of `internal/steps/{llm,loop,approval,agent}`, none of
       `internal/trigger/*`, and never runs `internal/wait`'s poll. The
       acceptance harness IS the missing dispatcher — it drives all of them
       against the same store and tenant. Until the server does this, the three
       profiles are a claim the tests make and the product does not.
+      Closed by `internal/server/builtins.go` and `internal/server/triggers.go`:
+      `scheduler.BuiltinSteps` is a hook in the ready loop, and the plane
+      registers `builtin:{timer,approval,llm,loop}` behind it; `Config.Triggers`
+      runs cron schedules on their own poll and mounts `http`/`git` endpoints
+      under `server.TriggerPrefix` on the API's own listener (`dhole serve
+      --triggers`); `internal/wait`'s Runner is a spawned loop like the outbox
+      and the sweeper. `Server.Approve` decides a gate the plane armed;
+      `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
+      through `server.New`/`Start` alone in
+      `internal/server/builtins_e2e_test.go` — no test supplies wiring.
+- [ ] **What the plane still does not host, after the dispatcher landed.** Five
+      things, each named where it bites:
+      (a) `internal/steps/agent` has no `builtin:agent` — the action space, the
+      taint check and the per-action approval are still library-only, because
+      an agent step needs an invoker for the actions it may take and nothing
+      supplies one.
+      (b) `builtin:llm` needs `server.Config.Models`, and the CLI passes none:
+      a model client holds an API key and nothing in this system leases the
+      PLANE a secret. A step on a plane with no factory fails with that reason.
+      (c) A `builtin:loop` body is one builtin reference in `config.body`, not
+      a nested pipeline: the definition format has no syntax for a subgraph and
+      no run can contain another, so a body that dispatches to engines needs
+      nested runs.
+      (d) There is no trigger table and no trigger RPC, so triggers are declared
+      on `server.Config` and read from a YAML file by `--triggers`. An operator
+      still cannot create one through the contract.
+      (e) A builtin step in flight when the plane dies is not recovered: it
+      writes STEP_DISPATCHED but holds no lease, so `SweepOrphans` cannot see
+      it. Closing it means giving a builtin step a lease of its own.
 - [ ] **Arming a durable gate is not atomic with the readiness decision.**
       `STEP_AWAITING_TIMER` is written in its own transaction, so it can appear
       earlier in the log than the `STEP_DISPATCHED` of the step it should have

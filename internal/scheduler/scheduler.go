@@ -190,6 +190,31 @@ type Provenances interface {
 		signed bool, upstream string, err error)
 }
 
+// BuiltinSteps runs the step types the CONTROL PLANE hosts itself rather than
+// handing to an engine — a durable timer, a human approval gate, a model call,
+// a bounded loop.
+//
+// It is an interface here, and implemented in internal/server, because the
+// dependency has to run that way round: the step types reach for the
+// scheduler (to resume a run), and a scheduler that imported them back would
+// be a cycle. It is also why this is one method and not four — the scheduler
+// deliberately knows nothing about WHICH types exist.
+//
+// Nil means the plane hosts none, and every step goes to an engine. That was
+// the state of `dhole serve` for the whole of Tasks 20-51: internal/steps/*
+// were libraries with tests and no caller, and only the acceptance harness
+// ever ran one.
+type BuiltinSteps interface {
+	// Take reports whether it has taken responsibility for the step. A step
+	// it does not recognise is left to the engines, untouched.
+	//
+	// Taking a step does NOT mean the step has finished. A gate is taken and
+	// then waits for days; a model call is taken and then runs. What it means
+	// is that this pass must not dispatch it, and that whoever took it will
+	// write the step's terminal event when there is one.
+	Take(ctx context.Context, tenantID, runID string, step *dholev1.Step) (bool, error)
+}
+
 // Config is everything the scheduler needs. All of it is durable
 // infrastructure or a pure lookup: there is deliberately no place to keep
 // per-run state, because a field holding one would be the run position that
@@ -244,6 +269,10 @@ type Config struct {
 	// enforces no tenant limit at all, exactly as a nil Policy means it
 	// enforces no policy. It requires Budgets: see New.
 	Quotas Quotas
+	// Builtins runs the step types the control plane hosts itself. Nil sends
+	// every step to an engine — including a `builtin:` one, which no engine
+	// can run, so the step fails with a reference nothing resolves.
+	Builtins BuiltinSteps
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Log is where a tier whose engines disagree about their environment is
@@ -266,6 +295,7 @@ type Scheduler struct {
 	refs  BlobRefs
 	pol   policy.Engine
 	prov  Provenances
+	built BuiltinSteps
 
 	queue   *Queue
 	budgets Budget
@@ -377,6 +407,7 @@ func New(cfg Config) (*Scheduler, error) {
 		refs:     cfg.BlobRefs,
 		pol:      cfg.Policy,
 		prov:     cfg.Provenance,
+		built:    cfg.Builtins,
 		tier:     cfg.Tier,
 		os:       cfg.OS,
 		arch:     cfg.Arch,
@@ -493,6 +524,17 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 			served = true
 			continue
 		}
+		// A step type the PLANE hosts is not dispatched anywhere, and is not
+		// queued either: a durable timer, an approval gate, a model call and a
+		// bounded loop take no engine slot, so putting them through the fair
+		// queue would charge a tenant's share for work no engine does.
+		taken, err := s.takeBuiltin(ctx, tenantID, runID, step)
+		if err != nil {
+			return err
+		}
+		if taken {
+			continue
+		}
 		if s.queue == nil {
 			if err := s.dispatch(ctx, tenantID, runID, pipeline, step, state); err != nil {
 				return err
@@ -526,6 +568,26 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		return s.Advance(ctx, tenantID, runID)
 	}
 	return nil
+}
+
+// takeBuiltin offers a ready step to the plane's own step types.
+//
+// It deliberately does NOT set `served`: a builtin that finished writes the
+// step's terminal event itself and the next advance sees it, and a builtin
+// that armed a gate has made the run WAIT — re-advancing immediately would
+// only walk the same log again. The 250ms advance tick is what picks both up,
+// which is the same mechanism a restart relies on (ADR 0003).
+func (s *Scheduler) takeBuiltin(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+) (bool, error) {
+	if s.built == nil {
+		return false, nil
+	}
+	taken, err := s.built.Take(ctx, tenantID, runID, step)
+	if err != nil {
+		return false, fmt.Errorf("scheduler: run %q step %q: %w", runID, step.GetId(), err)
+	}
+	return taken, nil
 }
 
 // serveFromCache finishes a step from what an earlier run recorded, and
