@@ -425,6 +425,9 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 	tenantID := d.GetTenant().GetId()
 
 	sandbox, err := a.cfg.Executor.Acquire(ctx, executor.Spec{
+		// The pipeline's image, not the backend's default. A backend with no
+		// notion of an image ignores it, which is not an error (ADR 0006).
+		Image: d.GetStep().GetImage(),
 		Env:   d.GetEnv(),
 		Lease: leaseScopeFrom(d.GetStep().GetLeaseScope()),
 		Requirements: executor.Requirements{

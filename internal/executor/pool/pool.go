@@ -430,6 +430,18 @@ func (l *lease) Put(ctx context.Context, name string, r io.Reader) error {
 	return err
 }
 
+// EnvironmentIdentity passes the warm sandbox's own answer through. It is the
+// truth about the environment, and it is deliberately NOT the answer to
+// "may this be cached": that is Cacheable's, and for a pool lease it is always
+// no, because the state a previous occupant left behind is an input no digest
+// covers.
+func (l *lease) EnvironmentIdentity() (string, error) {
+	if err := l.check(); err != nil {
+		return "", err
+	}
+	return l.e.sb.EnvironmentIdentity()
+}
+
 func (l *lease) Get(ctx context.Context, name string) (io.ReadCloser, error) {
 	if err := l.check(); err != nil {
 		return nil, err

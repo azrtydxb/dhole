@@ -96,6 +96,13 @@ type sandbox struct {
 	hasUsage bool
 }
 
+// EnvironmentIdentity implements executor.Sandbox. A temporary directory on a
+// host is no more nameable than the host itself, so a process sandbox answers
+// exactly what its executor does: nothing, honestly.
+func (*sandbox) EnvironmentIdentity() (string, error) {
+	return "", executor.ErrNoStableIdentity
+}
+
 // processUsage is what one finished command consumed.
 type processUsage struct {
 	cpuSeconds  float64

@@ -107,7 +107,7 @@ func (s *Server) Plan(
 	//
 	// A tier with no agreed identity is not an error: cache.Eligible then
 	// reports it per step, in its own words, exactly as a run would find it.
-	envIdentity, _ := registry.TierEnvironmentIdentity(engines, s.tier)
+	tierIdentity, _ := registry.TierEnvironmentIdentity(engines, s.tier)
 
 	steps := make([]*dholev1.PlannedStep, 0, len(pipeline.GetSteps()))
 	byID := stepsByID(pipeline)
@@ -131,6 +131,11 @@ func (s *Server) Plan(
 				planned.EngineKind = kindOf(matched[0])
 			}
 
+			// Per step, because a step that names its own image runs in that
+			// image rather than in the engine's. A plan computed against the
+			// tier's digest for every step would report a hit for a step whose
+			// key the run will not even compute the same way.
+			envIdentity := cache.StepEnvironment(step, tierIdentity)
 			cacheable, reason := cache.Eligible(step, leaseScopeOf(step.GetLeaseScope()), envIdentity)
 			planned.NonCacheableReason = reason
 			if cacheable {
@@ -249,6 +254,10 @@ func (s *Server) requirements(step *dholev1.Step) executor.Requirements {
 		OS:           s.os,
 		Arch:         s.arch,
 		Capabilities: step.GetCapabilities(),
+		// Straight off the step, in both callers, so the placement the planner
+		// reports and the placement the dispatcher performs are the same
+		// computation over the same field.
+		EngineType: step.GetEngineType(),
 	}
 }
 

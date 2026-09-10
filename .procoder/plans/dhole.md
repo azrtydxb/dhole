@@ -386,8 +386,8 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       through the real contract, and the gate is then decided by the principal
       that contract authenticated — through the Go API, not the wire.
       `PipelineService.DecideApproval` closes it: the approver is the
-      credential's subject and never a request field, `dhole run approve
-      <run-id> <step-id>` is its CLI surface, and
+      credential's subject and never a request field,
+      `dhole run approve <run-id> <step-id>` is its CLI surface, and
       `internal/server/approval_api_test.go` decides a gate over a real HTTP
       connection to a plane started by `server.New`/`Start` and asserts the run
       is released. `acceptance/acceptance_test.go` still decides through the Go
@@ -402,15 +402,26 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       would wipe the password of a person who is also issued a token — and
       migration 0022 backfills the subjects of tokens already in flight, so an
       existing deployment does not have to reissue them.
-- [ ] **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
+- [x] **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
       filter on engine type, so a capability is the only lever — the pipeline
       asks for NETWORK to reach a pod. A step's placement on the process engine
-      is not expressible at all.
+      is not expressible at all. CLOSED: `Step.engine_type` is the lever, and
+      it is read off the step by BOTH `Scheduler.requirements` and
+      `api.Server.requirements`, so the planner's answer and the dispatcher's
+      are one computation over one field — the disagreement the filter was
+      withheld for. `Match` refuses an engine that did not offer the kind (an
+      engine advertising none satisfies no such step: unstated is unknown, not
+      universal, the rule the platform axes already follow), and `Explain`
+      names it between platform and capability, coarsest cause first, so a step
+      that cannot be placed is reported rather than held.
 - [ ] **A pipeline cannot name the image its steps run in** (the executor's pod
-      template does), **cannot reference a file from the repository** (the
-      Dockerfile's text is embedded in the step, kept equal to the checked-in
-      file by a test), and **has no syntax for a loop's body**. A trigger's
-      bound inputs reach the sink and no run carries them.
+      template does) — CLOSED: `Step.image` reaches `executor.Spec.Image`
+      through the dispatch (`JobDispatch.step` already carries the whole step),
+      and it is what the cache key is hashed against. Still open in this item:
+      it **cannot reference a file from the repository** (the Dockerfile's text
+      is embedded in the step, kept equal to the checked-in file by a test),
+      and **has no syntax for a loop's body**. A trigger's bound inputs reach
+      the sink and no run carries them.
 - [ ] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
 - [x] **No nightly CI job runs the acceptance pipelines** — `.github/` was
@@ -727,8 +738,8 @@ template rather than the step's actual image. Task 37 honours `Spec.Image`
 for the pod and documents the limitation on the method rather than bending
 the interface to hide it.
 
-- [ ] Move environment identity to where the image actually is: a `Sandbox.EnvironmentIdentity()`, or an identity returned from `Acquire`. Update `cache.Key`'s caller so the key describes the image a step really ran under.
-- [ ] Write the failing test first: one Kubernetes executor, two steps with different images, must produce different cache keys. It must fail on the tree as it stands.
+- [x] Move environment identity to where the image actually is: a `Sandbox.EnvironmentIdentity()`, or an identity returned from `Acquire`. Update `cache.Key`'s caller so the key describes the image a step really ran under. DONE: `executor.Sandbox` gained `EnvironmentIdentity()`, resolved per sandbox from the image its pod was actually created with; `Executor.EnvironmentIdentity()` stays and is now documented as the identity of a sandbox acquired with an EMPTY `Spec`, which is what registration means and what ADR 0021 needs before anything is dispatched. `cache.StepEnvironment(step, tierIdentity)` is what both cache-key callers — `Scheduler.cacheKey`/`dispatch` and `api.Plan`/`Validate` — now hash against: the image the step named when it named one, the tier's identity when it did not, and NOTHING when the step named a mutable tag, since the plane resolves no tags and a name whose meaning can change is not an identity.
+- [x] Write the failing test first: one Kubernetes executor, two steps with different images, must produce different cache keys. It must fail on the tree as it stands. DONE: `TestTwoStepsOnDifferentImagesGetDifferentCacheKeys` against the live cluster. It failed to compile on the tree as it stood (`sb.EnvironmentIdentity undefined`), and reverting the sandbox to the executor-wide answer by hand makes it fail on the assertion itself: one key for two images.
 - [x] The contract's 2s SIGTERM window is a local-process budget; a remote backend spends ~80ms per exec round trip and has far less headroom. Decide whether the contract should scale that per backend, or stay strict deliberately. DECIDED: stays strict, by measurement rather than argument — the Kubernetes executor passes the whole shared contract, this subtest included, against a live cluster in 18s. The window is a promise to the scheduler (a lease expires 30s after it is claimed), so a backend that cannot meet it has told us something the scheduler needs, not something to widen the number for. Recorded on `executortest.sigtermWindow`.
 
 ## Task 38: Lease scopes, warm pools and lazy image pull

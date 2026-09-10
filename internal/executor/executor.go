@@ -23,11 +23,12 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 )
 
-// ErrNoStableIdentity is returned by EnvironmentIdentity when a backend has no
-// reproducible environment to hash. A host-process backend runs against
-// whatever toolchain the host happens to carry, and no honest digest describes
-// that; the scheduler treats such steps as non-cacheable rather than caching
-// them against an identity that quietly changes.
+// ErrNoStableIdentity is returned by EnvironmentIdentity when a backend, or
+// one of its sandboxes, has no reproducible environment to hash. A
+// host-process backend runs against whatever toolchain the host happens to
+// carry, and no honest digest describes that; the scheduler treats such steps
+// as non-cacheable rather than caching them against an identity that quietly
+// changes.
 var ErrNoStableIdentity = errors.New("executor: no stable environment identity")
 
 // LeaseScope is how long a sandbox lives. It is chosen by the caller, not
@@ -61,6 +62,14 @@ type Requirements struct {
 	// Capabilities the step needs the sandbox to grant. An executor that does
 	// not advertise one cannot be given the step.
 	Capabilities []dholev1.Capability
+	// EngineType is the executor KIND the step must run on — "process",
+	// "kubernetes", "containerd" — matched against the kinds an engine
+	// registered. Empty means the step does not care.
+	//
+	// Placement had no other lever than capability before this: a pipeline
+	// that needed a pod asked for NETWORK and hoped, and a step that had to be
+	// a host process could not be expressed at all.
+	EngineType string
 }
 
 // Spec describes the sandbox a caller wants.
@@ -131,6 +140,20 @@ type Sandbox interface {
 	// Release tears the sandbox down. It is idempotent: releasing an already
 	// released sandbox is not an error, so cleanup paths can be unconditional.
 	Release(ctx context.Context) error
+	// EnvironmentIdentity is a digest of the environment THIS sandbox runs
+	// commands in — the resolved digest of the image it was acquired with, a
+	// VM snapshot id — used as a cache key input. A sandbox with no
+	// reproducible environment returns ErrNoStableIdentity and an empty
+	// string.
+	//
+	// It lives here because this is where the environment is. Identity used to
+	// be a property of the executor alone, and for a container backend it is
+	// not: the image comes off the Spec, so one Kubernetes executor asked
+	// about two steps running two different images answered with the digest of
+	// its configured pod template both times. The two steps then hashed to one
+	// cache key, and a content-addressed cache that collides hands one step's
+	// outputs back as another step's result.
+	EnvironmentIdentity() (string, error)
 }
 
 // Executor is one backend: a place sandboxes come from.
@@ -142,9 +165,16 @@ type Executor interface {
 	Capabilities() []dholev1.Capability
 	// Kind is the backend's stable identifier, as configuration names it.
 	Kind() string
-	// EnvironmentIdentity is a digest of the environment steps run in —
-	// an image digest, a VM snapshot id — used as a cache key input. A
-	// backend with no reproducible environment returns ErrNoStableIdentity
-	// and an empty string.
+	// EnvironmentIdentity is the digest of the environment a sandbox acquired
+	// with an EMPTY Spec would run in — this backend's own default, and
+	// nothing about any particular step. A backend with no reproducible
+	// environment returns ErrNoStableIdentity and an empty string.
+	//
+	// It is what an engine announces on registration and what its tier's cache
+	// keys are hashed against (ADR 0021): the plane needs one identity per
+	// tier before it dispatches anything, and it cannot acquire a sandbox on
+	// another machine to ask. A step that names its OWN image is a different
+	// environment from this one, and cache.StepEnvironment keys it against
+	// what the step named instead.
 	EnvironmentIdentity() (string, error)
 }

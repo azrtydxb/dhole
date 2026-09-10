@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
@@ -17,17 +18,15 @@ import (
 // lifecycle combination — and a function that needed a running NATS to answer
 // would be tested once, at the happy path, and then trusted.
 //
-// It does NOT filter on the engine TYPE an instance advertises, even though
-// registry.Instance now carries it. The engine types a step is compatible with
-// are declared by its plugin's manifest (catalog.Entry.EngineTypes), and
-// neither caller — Scheduler.dispatch nor api.Plan — resolves a manifest to
-// build executor.Requirements. A filter only one of the two could populate
-// would make the planner's answer disagree with the dispatcher's, which is the
-// one property both sides are written to preserve. The type belongs in
-// Requirements together with the manifest lookup that fills it, in one change
-// that moves both callers; until then a step needing a container engine and
-// matched to a process-only one fails at the far end, visibly, rather than
-// being reported as unschedulable by a planner and dispatched anyway.
+// It filters on the engine TYPE an instance advertises, and the step is where
+// that requirement comes from: Step.engine_type, read off the definition by
+// BOTH callers — Scheduler.dispatch and api.Plan — so the placement the
+// planner reports and the placement the dispatcher performs cannot disagree.
+// That disagreement is the whole reason the filter did not exist earlier: a
+// plugin manifest names the engine types a plugin is compatible with, and
+// neither caller resolves a manifest, so a filter fed from one would have been
+// applied by the planner alone. A step naming its engine type is fed from the
+// step, which both callers already hold.
 //
 // The filter is a conjunction and it never widens: an empty OS or Arch in the
 // requirements means the step does not care, but an empty one on the INSTANCE
@@ -58,6 +57,9 @@ func eligible(req executor.Requirements, e registry.Instance) bool {
 	if !platformMatches(req.OS, e.OS) || !platformMatches(req.Arch, e.Arch) {
 		return false
 	}
+	if !offersEngineType(req.EngineType, e) {
+		return false
+	}
 	for _, c := range req.Capabilities {
 		if c == dholev1.Capability_CAPABILITY_UNSPECIFIED {
 			continue
@@ -74,6 +76,14 @@ func eligible(req executor.Requirements, e registry.Instance) bool {
 // requirement, because an unstated platform is unknown rather than universal.
 func platformMatches(required, offered string) bool {
 	return required == "" || required == offered
+}
+
+// offersEngineType applies the same rule the platform axes do: an empty
+// requirement accepts anything, and an instance that advertised no engine type
+// at all satisfies only such a requirement — it never said which kinds it
+// offers, and unstated is unknown rather than universal.
+func offersEngineType(required string, e registry.Instance) bool {
+	return required == "" || slices.Contains(e.EngineTypes, required)
 }
 
 func advertises(e registry.Instance, c dholev1.Capability) bool {
@@ -126,6 +136,22 @@ func Explain(req executor.Requirements, engines []registry.Instance) string {
 		return fmt.Sprintf("no ready engine runs on %s", platformName(req.OS, req.Arch))
 	}
 
+	// Engine type before capability: it is the coarser cause. An operator told
+	// only that nothing advertises NETWORK would go looking for a capability
+	// to grant, when what is missing is a whole class of engine.
+	if req.EngineType != "" {
+		var onType []registry.Instance
+		for _, e := range onPlatform {
+			if offersEngineType(req.EngineType, e) {
+				onType = append(onType, e)
+			}
+		}
+		if len(onType) == 0 {
+			return fmt.Sprintf("no ready engine offers engine type %s", req.EngineType)
+		}
+		onPlatform = onType
+	}
+
 	for _, c := range req.Capabilities {
 		if c == dholev1.Capability_CAPABILITY_UNSPECIFIED {
 			continue
@@ -144,8 +170,9 @@ func Explain(req executor.Requirements, engines []registry.Instance) string {
 
 	// Everything above is satisfied by somebody, so what is left is that no
 	// single instance satisfies all of it at once, or that none has a slot.
-	return fmt.Sprintf("no single engine satisfies %s together with %s",
-		platformName(req.OS, req.Arch), capabilityList(req.Capabilities))
+	return fmt.Sprintf("no single engine satisfies %s%s together with %s",
+		platformName(req.OS, req.Arch), engineTypeClause(req.EngineType),
+		capabilityList(req.Capabilities))
 }
 
 // platformName renders the platform axes for a person to read.
@@ -160,6 +187,15 @@ func platformName(os, arch string) string {
 	default:
 		return os + "/" + arch
 	}
+}
+
+// engineTypeClause renders the engine type into the combined reason, and
+// renders nothing when the step did not name one.
+func engineTypeClause(engineType string) string {
+	if engineType == "" {
+		return ""
+	}
+	return fmt.Sprintf(" on engine type %s", engineType)
 }
 
 // capabilityList renders required capabilities in the same short form the

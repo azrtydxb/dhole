@@ -103,6 +103,12 @@ func (f *fakeSandbox) Get(context.Context, string) (io.ReadCloser, error) {
 
 func (f *fakeSandbox) Signal(context.Context, executor.Signal) error { return nil }
 
+// EnvironmentIdentity stands in for a container backend that resolved its
+// image: the pool must pass a real answer through, not invent one.
+func (f *fakeSandbox) EnvironmentIdentity() (string, error) {
+	return "sha256:fake-" + f.id, nil
+}
+
 func (f *fakeSandbox) Release(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

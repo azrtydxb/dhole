@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/cache"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/executortest"
 	k8sexec "github.com/azrtydxb/dhole/internal/executor/kubernetes"
@@ -342,4 +343,47 @@ func TestReleaseIsIdempotentAndSurvivesAnAlreadyDeletedPod(t *testing.T) {
 
 	require.NoError(t, sb.Release(t.Context()), "releasing a sandbox whose pod is already gone is not an error")
 	require.NoError(t, sb.Release(t.Context()), "Release is idempotent")
+}
+
+// TestTwoStepsOnDifferentImagesGetDifferentCacheKeys is the whole reason
+// environment identity moved onto the sandbox.
+//
+// EnvironmentIdentity used to be a method on the EXECUTOR, so one Kubernetes
+// executor asked twice — once for a step running busybox and once for a step
+// running alpine — answered with the digest of its configured pod template
+// both times. Two different computations then hashed to ONE cache key, and a
+// content-addressed cache that collides serves one step's outputs as another
+// step's result. That is the worst thing this subsystem can do, and it is
+// silent.
+//
+// The identity belongs to the sandbox because that is where the image is: the
+// Spec names it, Acquire honours it, and only the sandbox that came back knows
+// what it actually ran.
+func TestTwoStepsOnDifferentImagesGetDifferentCacheKeys(t *testing.T) {
+	e := newExecutor(t, nil)
+	step := &dholev1.Step{
+		Id:          "build",
+		PluginRef:   "builtin:command",
+		EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+	}
+
+	key := func(image string) *dholev1.Digest {
+		t.Helper()
+		sb, err := e.Acquire(t.Context(), executor.Spec{Image: image, Lease: executor.LeaseStep})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, sb.Release(context.WithoutCancel(t.Context()))) }()
+
+		identity, err := sb.EnvironmentIdentity()
+		require.NoError(t, err)
+		require.Contains(t, identity, "@sha256:", "a sandbox identity is a digest, never a tag")
+
+		k, err := cache.Key(step, identity, nil, nil)
+		require.NoError(t, err)
+		return k
+	}
+
+	busybox := key("busybox:1.36")
+	alpine := key("alpine:3.20")
+	require.NotEqual(t, busybox.GetHex(), alpine.GetHex(),
+		"the same step run under two different images is two different computations and must not share one cache key")
 }

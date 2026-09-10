@@ -69,6 +69,31 @@ message Step {
   // part of the content hash and therefore part of the cache key — two runs
   // configured differently are two different pieces of work.
   map<string, string> config = 9;
+  // Image the sandbox this step runs in is built from, as the executor's
+  // backend understands it: an OCI reference for a container backend, ignored
+  // by a backend that has no images at all.
+  //
+  // It exists because a pipeline could not say what its steps run in. The
+  // executor's pod template did, so every step on one Kubernetes engine ran
+  // the same image and the acceptance pipelines had to embed a Dockerfile's
+  // text in a step to get a toolchain in.
+  //
+  // PIN IT TO A DIGEST if the step is to be cached. The cache key is hashed
+  // against this reference, and the plane resolves nothing: a tag is a moving
+  // target, so a step naming one has no stable environment identity and is
+  // refused by cache.Eligible rather than keyed against a name whose meaning
+  // can change under it. Empty means the engine's own environment, whose
+  // digest its tier already reported (ADR 0021).
+  string image = 10;
+  // Executor kind this step must run on — "process", "kubernetes",
+  // "containerd" — matched against the engine_types an engine registered.
+  // Empty means any kind will do.
+  //
+  // Capability was the only lever before this: a pipeline that needed a pod
+  // asked for NETWORK and hoped, and a step that had to run as a host process
+  // could not be expressed at all. Both the planner and the dispatcher read
+  // it straight off the step, so the placement they compute cannot disagree.
+  string engine_type = 11;
 }
 
 // Edge connects one step's output port to another step's input port. The DAG

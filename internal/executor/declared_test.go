@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -67,5 +68,34 @@ func TestDeclaringAnEnvironmentForNoBackendIsAnError(t *testing.T) {
 	_, err := executor.WithDeclaredEnvironment(nil, "sha256:x")
 	if err == nil || !strings.Contains(err.Error(), "backend") {
 		t.Errorf("a nil backend was accepted or the error does not say so: %v", err)
+	}
+}
+
+// TestADeclaredEnvironmentIsAlsoWhatItsSandboxesReport. The declaration is the
+// answer for the whole backend, and the cache key is hashed against what the
+// SANDBOX names. A wrapper that changed only the registration would have the
+// engine announce one environment and its sandboxes name none — the one place
+// a declared identity has to hold is the one it would not have reached.
+func TestADeclaredEnvironmentIsAlsoWhatItsSandboxesReport(t *testing.T) {
+	declared, err := executor.WithDeclaredEnvironment(process.New(), "sha256:image-digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb, err := declared.Acquire(t.Context(), executor.Spec{Lease: executor.LeaseStep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sb.Release(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("releasing the sandbox: %v", err)
+		}
+	})
+
+	got, err := sb.EnvironmentIdentity()
+	if err != nil {
+		t.Fatalf("a sandbox of a declared backend still reported an error: %v", err)
+	}
+	if got != "sha256:image-digest" {
+		t.Errorf("sandbox identity is %q, not the declared one", got)
 	}
 }

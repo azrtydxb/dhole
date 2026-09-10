@@ -89,3 +89,49 @@ func leaseReason(scope executor.LeaseScope) string {
 func shortEffect(class dholev1.EffectClass) string {
 	return strings.TrimPrefix(class.String(), "EFFECT_CLASS_")
 }
+
+// StepEnvironment is the environment identity a step's cache key is hashed
+// against: the image the step itself named, or — when it named none — the
+// identity its engine's tier announced (ADR 0021).
+//
+// The tier's identity describes the engine's OWN sandbox image, which is the
+// right answer only for a step that accepted it. A step that names its own
+// image runs somewhere else entirely, and keying it against the tier's digest
+// hashed two different computations to one key: two steps on one Kubernetes
+// engine, one building with Go and one with Node, shared a cache entry, and
+// whichever ran second was handed the first one's outputs. That is the worst
+// failure a content-addressed cache has, and it is silent.
+//
+// A step naming a MUTABLE tag gets no identity at all, so Eligible refuses it.
+// The plane resolves nothing here: it holds no registry credentials, a
+// lookup would blow the 10ms policy-and-cache budget, and a lookup at plan
+// time is not the answer the engine gets at run time anyway. A tag is
+// therefore a name whose meaning can change under the key, and the only
+// honest thing to hash is nothing. Pin the digest and the step caches.
+func StepEnvironment(step *dholev1.Step, tierIdentity string) string {
+	image := step.GetImage()
+	if image == "" {
+		return tierIdentity
+	}
+	if !pinned(image) {
+		return ""
+	}
+	return image
+}
+
+// pinned reports whether an image reference names content rather than a moving
+// label — "repo@algo:hex".
+//
+// It is a string test and not a registry parse on purpose. This package is the
+// cache, not a container client: ADR 0006 keeps container vocabulary out of
+// the core, and an executor backend with no images at all still passes a step
+// through here. What matters is a reference no one can repoint, and a digest
+// suffix is what that looks like in every backend that has images.
+func pinned(image string) bool {
+	at := strings.LastIndex(image, "@")
+	if at <= 0 {
+		return false
+	}
+	algo, hex, ok := strings.Cut(image[at+1:], ":")
+	return ok && algo != "" && hex != ""
+}
