@@ -389,6 +389,13 @@ for the vm backend. The images are built the way `docs/executors/vm.md` describe
 
 ### ANSWERED (2026-09-11)
 
+- **Editor: build everything, modals and assistant included.** The three
+  wiring jobs (plan mode, run state on the canvas, the approval gate) and the
+  inspector's lease-scope and cache sections, AND the regions with no endpoint
+  behind them. Condition carried into the work: a pane with no RPC behind it
+  SAYS SO on its face — sample data is labelled as sample, never drawn as if
+  the plane had answered.
+
 - **truenas-csi CI/CD: push to Harbor (192.168.10.123), deploy by upgrading the
   LIVE release.** Nothing is published to a public registry. The deploy stage
   runs `helm upgrade` against the real `truenas-csi` release in its own
@@ -425,3 +432,32 @@ the stargz lazy-pull byte count and the QEMU contract's vsock-enabled kernel.
   published yet.
 - Push to a branch rather than `main`, so the history lands somewhere durable
   without moving the default branch.
+
+## Which of the editor design's unbuilt regions to build next
+
+`web/src/shell/` implements the Dhole Editor shell: tokens, both themes, menu
+bar, toolbar, canvas chrome, diagnostics, status bar, inspector, and the node
+and edge language. Wired to `GetPipeline`, `Validate`, `Plan`, `StartRun` and
+`ListEngines`.
+
+Not built, and named plainly: five modals (settings, engines, registry, git,
+import), the assistant chat panel, diff review, the approval gate, plan mode's
+node badges, run state on the canvas, loop boxes, toasts, the command palette,
+the pipeline switcher, and the inspector's lease-scope and cache sections.
+
+They split in two. Three are WIRING — the control plane already answers, and
+the editor throws the answer away or never asks:
+
+- plan mode — `Plan` is called and its result discarded, so no `HIT · cached`,
+  `exec · <engine>` or `gate` badge is ever drawn
+- run state on the canvas — `WatchRun` streams it and `StepNode` already takes
+  a `status` prop that nothing feeds
+- the approval gate — `DecideApproval` is on the wire with no caller
+
+The rest need endpoints that do not exist (no ListPlugins, no ListRuns, no
+assistant), so building them means inventing data the plane cannot confirm.
+
+- Do the three wiring jobs — plan mode, run state, approval gate.
+- Do the three, then the inspector's lease scope and cache sections.
+- Build the modals and assistant too, against invented data for now.
+- Leave the editor as it is; the shell was the ask.
