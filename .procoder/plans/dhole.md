@@ -1335,6 +1335,26 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       ack wait and asserts ONE sandbox acquisition; removing the renewal fails
       it with "the dispatch was delivered more than once while the step was
       still running".
+- [ ] **A sandbox pod has no resources, and a heavy step starves its own
+      engine.** Found 2026-09-11 running a real CI/CD pipeline on kw. Sandbox
+      pods are created with no requests and no limits — `executor.Spec` has no
+      resource field, `kubernetes.podSpec` never sets one, and the chart's
+      `sandbox:` block is only `namespace` and `serviceAccount` — so a
+      `go build` takes the whole node. The engine sharing that node then took
+      36 SECONDS to pick up a second dispatch, past the 30 second lease, and
+      the plane declared the attempt lost while the engine was still about to
+      run it. The run thrashed: lost, re-dispatched, and eventually completed
+      work nobody was waiting for any more. Nothing here is wrong in the
+      scheduler or the lease; the engine simply did not get scheduled.
+      A LimitRange in the sandbox namespace is the only lever a cluster has
+      today and it is what unblocked kw, but it is the cluster's answer to a
+      question Dhole should be able to answer: a step says what it needs, or a
+      tier says what its steps may have. The decision is which — a field on
+      `Step` is honest but lets a pipeline author size the cluster's pods,
+      while `engines[].sandbox.resources` keeps sizing with the operator and
+      costs a step the ability to ask for more. Whichever lands, the engine's
+      own pod must be protected from the steps it runs: an engine that misses
+      a lease because its own sandbox out-competed it is the failure above.
 - [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.
