@@ -21,7 +21,8 @@ documented here.
 - **Step types** — [agent](steps/agent.md), [approval](steps/approval.md),
   [llm](steps/llm.md), [loop](steps/loop.md)
 - **Triggers** — [schedule](triggers/schedule.md), [http](triggers/http.md),
-  [git](triggers/git.md), [completion](triggers/completion.md)
+  [git](triggers/git.md), [completion](triggers/completion.md), and
+  [what their bound inputs become](triggers/bound-inputs.md)
 - **Executors** — [process](executors/process.md), [kubernetes](executors/kubernetes.md)
 
 ## The decisions behind all of it

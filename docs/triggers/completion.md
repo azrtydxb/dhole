@@ -48,3 +48,10 @@ unbounded number of runs, with no iteration budget anywhere.
 to c to a — when the triggers share a `Registry`, which is how a control plane
 holding all of a tenant's triggers wires them up. Configure the registry: without
 it, only the one-hop cycle is caught.
+
+## The inputs it binds
+
+What happens to them after the event arrives — the run log they land in, the
+taint mark they keep, and the two refusals that stop a run starting on a value
+the pipeline cannot use — is the same for every kind:
+[what a trigger's bound inputs become](bound-inputs.md).

@@ -59,3 +59,10 @@ next deploy.
 `DefaultActiveLease` is an hour — how long an in-flight fire is believed. Past
 it the mark is treated as stale, because the plane that set it may have died
 mid-fire, and a schedule that never fires again is worse than one that overlaps.
+
+## The inputs it binds
+
+What happens to them after the event arrives — the run log they land in, the
+taint mark they keep, and the two refusals that stop a run starting on a value
+the pipeline cannot use — is the same for every kind:
+[what a trigger's bound inputs become](bound-inputs.md).

@@ -59,6 +59,9 @@ and agent orchestration are profiles over a shared core.
   process (also the in-process engine for single-binary mode), and Kubernetes.
 - [S-7] Pluggable triggers bound to typed pipeline inputs. v1 ships four: schedule (cron),
   HTTP/API invoke and generic webhook, git webhook (push and PR), and pipeline completion.
+  The values a trigger binds travel into the run it starts and are recorded in that run's
+  event log, carrying the taint mark that says which boundary they crossed; a bound value
+  the pipeline's port refuses starts no run at all.
 - [S-8] Definition store: DB-primary with revision identity, one-way git mirror, in-app
   approval state (`draft -> reviewed -> active`).
 - [S-9] Content-addressed store and cache-keyed execution, with refcount reclamation from
@@ -190,6 +193,8 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   mirror holds.
 - A trigger firing while the previous run of the same pipeline is still active, against a
   concurrency budget of one.
+- A trigger whose binding produces a value the pipeline's port refuses, or produces nothing
+  at all, including where the pipeline was retyped after the trigger was configured.
 - A schedule trigger whose window was missed entirely because the control plane was down.
 - Clock skew between control plane and engines affecting lease expiry.
 - A step producing an output larger than the object-storage part limit, or producing no
@@ -276,6 +281,13 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
 - [ ] [S-7] One pipeline is started by cron, an HTTP call, a git webhook and another
       pipeline's completion with no change to its definition —
       `TestAllFourTriggersStartSamePipeline`.
+- [ ] [S-7] The run a trigger starts carries the values that trigger bound to the
+      pipeline's declared inputs, in the run's own event log and with the taint mark
+      naming the trigger that admitted them —
+      `TestTheRunATriggerStartsCarriesTheValueTheTriggerBoundToItsInput`.
+- [ ] [S-7] A trigger whose binding evaluates to nothing, or to a value the port's schema
+      refuses, starts no run and the reason names the trigger —
+      `TestATriggerWhoseBoundValueThePipelineRefusesStartsNoRunAtAll`.
 - [ ] [S-8] A GUI edit produces a new revision with content-hash identity, a reviewable diff
       and an approval state, and the git mirror receives a commit containing that YAML —
       `TestRevisionCreatedAndMirroredOnEdit`.

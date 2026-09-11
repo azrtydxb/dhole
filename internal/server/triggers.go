@@ -449,13 +449,44 @@ func fingerprintOf(spec TriggerSpec) string {
 }
 
 // triggerSink is what every trigger fires into: one run of the pipeline's
-// ACTIVE revision, in the trigger's tenant.
+// ACTIVE revision, in the trigger's tenant, CARRYING the values the trigger
+// bound to that pipeline's declared inputs (ADR 0007).
 //
-// The bound inputs are logged and not carried into the run, because there is
-// nowhere to carry them: nothing in the run log or the dispatch takes a
-// pipeline input, so a trigger supplies a pipeline's declared inputs in name
-// only (the other half of ADR 0007). Logging them is what makes that
-// observable instead of silent.
+// The bound inputs used to be logged here and dropped. That made a fired run
+// indistinguishable from one somebody pressed the button for: everything the
+// event carried — the ref that was pushed, the occurrence that came due —
+// stopped at this line. They now travel into the RUN_CREATED payload, which is
+// where a run's position already lives (ADR 0003) and therefore the one place
+// that still answers "what was this started with" once this process is gone.
+//
+// # Why the values are re-checked HERE
+//
+// Every trigger is CONFIGURED against a pipeline resolved when it was built,
+// and fires against the ACTIVE revision resolved on this line. Those are not
+// the same definition: a port retyped after the trigger was configured leaves
+// the trigger checking a payload against a pipeline nobody is going to run.
+// The schedule trigger did not check values at all — its event fields are all
+// strings, so binding one onto a port whose schema demands an object fired
+// happily until the run reached the step.
+//
+// So this is the single gate every run-with-inputs passes, and it is the same
+// trigger.ValidateInputs an operator's own path would use. There is no
+// operator-supplied input path to be inconsistent with today — StartRun takes
+// a pipeline and a revision and no values — so an event source is not a way
+// around a check that exists elsewhere; when one arrives, this is the function
+// it shares.
+//
+// # Why a refusal rather than an empty run
+//
+// A binding that evaluated to nothing, or to something the port refuses, could
+// start a run with the input simply absent. That run would look like it was
+// meant to happen, and would fail — or, worse, succeed on a default — inside a
+// step at 3am. Refusing leaves no run, no revision pinned and no event, and
+// the reason is logged against the trigger's own id, which is where somebody
+// asking "why is my webhook not firing" is already looking. It is not recorded
+// on the trigger row: a last-error column is a schema change, and a refusal
+// that only a plane with database access could see would be worse than one in
+// its log.
 func (s *Server) triggerSink(spec TriggerSpec, defs defstore.Store) trigger.Sink {
 	return trigger.SinkFunc(func(
 		ctx context.Context, tenantID, pipelineID string, inputs map[string]*structpb.Value,
@@ -464,7 +495,13 @@ func (s *Server) triggerSink(spec TriggerSpec, defs defstore.Store) trigger.Sink
 		if err != nil {
 			return err
 		}
-		runID, err := s.Submit(ctx, tenantID, pipeline)
+		if err := checkTriggerInputs(spec, pipeline, inputs); err != nil {
+			s.log.Error("a trigger fired and its bound inputs were refused",
+				"trigger", spec.ID, "kind", spec.Kind, "tenant", tenantID,
+				"pipeline", pipelineID, "error", err)
+			return err
+		}
+		runID, err := s.SubmitWithInputs(ctx, tenantID, pipeline, inputs, triggerSource(spec))
 		if err != nil {
 			return err
 		}
@@ -473,6 +510,31 @@ func (s *Server) triggerSink(spec TriggerSpec, defs defstore.Store) trigger.Sink
 			"pipeline", pipelineID, "run", runID, "inputs", strings.Join(inputNames(inputs), ","))
 		return nil
 	})
+}
+
+// checkTriggerInputs is the refusal, stated once for all four trigger kinds.
+//
+// The empty case is called out separately from the schema case because it is
+// the one that used to be silent: a binding naming inputs that produced no
+// value at all would have started a run with nothing on its ports, and
+// ValidateInputs — which checks the values that ARE there — would have passed
+// it without a word.
+func checkTriggerInputs(
+	spec TriggerSpec, pipeline *dholev1.Pipeline, inputs map[string]*structpb.Value,
+) error {
+	if len(spec.InputMapping) > 0 && len(inputs) == 0 {
+		return fmt.Errorf(
+			"trigger %q binds %d of pipeline %q's inputs and supplied none of them",
+			spec.ID, len(spec.InputMapping), spec.PipelineID)
+	}
+	return trigger.ValidateInputs(pipeline, inputs)
+}
+
+// triggerSource is how a trigger names itself in a run's log and in a taint
+// mark: the same "<kind>:<id>" both, so the value's provenance and the run's
+// read as one fact rather than two spellings of it.
+func triggerSource(spec TriggerSpec) string {
+	return spec.Kind + ":" + spec.ID
 }
 
 // activePipeline is the definition a trigger drives: the pipeline's active
