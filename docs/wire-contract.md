@@ -87,6 +87,13 @@ race rather than a route.
 unrestricted work it always received, and never receives kind-targeted work.**
 That is the intended outcome, not a degradation to tolerate: an engine that
 never heard of the token could not be trusted to honour the requirement anyway.
+**Upgrade the engines before the control plane.** The consequence of routing by
+subject is that a kind-targeted dispatch waits on the stream until an engine of
+that kind binds its queue. An engine that advertises `vm` in `engine_types` but
+predates this token is matched by the scheduler and never pulls the message, so
+the step is held and redelivered rather than run — a stall, which is the right
+failure and a visible one, but it is a stall until that engine is upgraded.
+
 There is no protocol version to check for this and no bump was made for it. The
 protocol version says what an engine speaking it must DO; here an older engine
 must do nothing differently, because the routing — not the negotiation — is
