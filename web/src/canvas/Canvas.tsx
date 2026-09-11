@@ -62,8 +62,10 @@ import {
   ZoomControl,
 } from "./CanvasChrome.js";
 import type { Theme } from "../design/useTheme.js";
+import { planBadge } from "./stepStatus.js";
 import {
   StepNode,
+  type StepStatus,
   nodeChrome,
   nodeWidth,
   portSpacing,
@@ -87,6 +89,14 @@ export interface CanvasProps {
   /** Told which step the user selected, so the shell's inspector can follow
    * the canvas. Selection lives in React Flow; this is how it gets out. */
   readonly onSelect?: (stepId: string | null) => void;
+  /** What a dry run said, keyed by step id. Empty when no plan has been asked
+   * for — the canvas draws a definition, and a stale plan is worse than none. */
+  readonly planned?: ReadonlyMap<
+    string,
+    { cacheHit: boolean; engineKind: string }
+  >;
+  /** What a run says about each step, keyed by step id. */
+  readonly runStatus?: ReadonlyMap<string, StepStatus>;
   /** The active theme, passed down rather than read here, because the grid and
    * the minimap need RESOLVED colours and resolving depends on which theme is
    * on the document. */
@@ -186,6 +196,8 @@ export function Canvas({
   revisionId,
   variant = "standalone",
   onSelect,
+  planned,
+  runStatus,
   theme = "dark",
 }: CanvasProps) {
   // head is the revision the next edit is based on. It moves with every
@@ -266,6 +278,19 @@ export function Canvas({
       };
       // One comparison, in one place (isGenerator), so the editor and the run
       // view cannot disagree about what a generator is.
+      // A run's verdict wins over a plan's prediction: once something has
+      // actually happened, what would have happened is no longer interesting.
+      const status = runStatus?.get(step.id);
+      const badge =
+        status === undefined
+          ? planBadge(step, planned?.get(step.id))
+          : undefined;
+      const extra = {
+        ...(status === undefined ? {} : { status }),
+        ...(badge === undefined
+          ? {}
+          : { badge: { text: badge.text, token: badge.token } }),
+      };
       return isGenerator(step)
         ? {
             id: step.id,
@@ -279,10 +304,10 @@ export function Canvas({
             type: "step",
             position: { x: at.x, y: at.y },
             ...size,
-            data: { step },
+            data: { step, ...extra },
           };
     });
-  }, [pipeline]);
+  }, [pipeline, planned, runStatus]);
 
   const flowEdges = useMemo<FlowEdge[]>(
     () =>

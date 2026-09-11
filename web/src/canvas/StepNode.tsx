@@ -35,6 +35,10 @@ export type StepStatus =
 export type StepNodeData = {
   readonly step: Step;
   readonly status?: StepStatus;
+  /** What a DRY RUN says would happen to this step. Drawn as a chip above the
+   * node, in the design's wording, and never at the same time as a run status:
+   * a prediction and a result must not be confusable. */
+  readonly badge?: { readonly text: string; readonly token: string };
   /** Set when the step is untrusted or downstream of something untrusted.
    * Drawn as a chip rather than a colour, because "this data came from
    * outside" is the one thing a user must not miss on a glance (ADR 0015). */
@@ -281,6 +285,25 @@ export function StepNode({ data, selected }: NodeProps<StepNodeType>) {
             {step.engineType === "" ? "any engine" : step.engineType}
           </span>
         </div>
+
+        {data.badge !== undefined && (
+          <div
+            style={{
+              position: "absolute",
+              top: -9,
+              right: 8,
+              fontSize: 8,
+              background: "var(--panel)",
+              color: data.badge.token,
+              border: `1px solid ${data.badge.token}`,
+              borderRadius: 3,
+              padding: "1px 5px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {data.badge.text}
+          </div>
+        )}
 
         {data.taint !== undefined && (
           <div

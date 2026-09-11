@@ -107,6 +107,13 @@ export function Editor({
   const [category, setCategory] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
+  // A dry run's answer, held until the definition changes under it. Clearing
+  // it on every edit is the point: a plan describes ONE revision, and a badge
+  // left over from the previous one is a confident wrong answer.
+  const [planned, setPlanned] = useState<ReadonlyMap<
+    string,
+    { cacheHit: boolean; engineKind: string }
+  > | null>(null);
 
   const pipeline = useQuery({
     queryKey: ["pipeline", pipelineId, revisionId],
@@ -127,6 +134,20 @@ export function Editor({
 
   const plan = useMutation({
     mutationFn: () => pipelineClient.plan({ pipelineId, revisionId }),
+    onSuccess: (response) => {
+      setPlanned(
+        new Map(
+          response.steps.map((step) => [
+            step.stepId,
+            { cacheHit: step.cacheHit, engineKind: step.engineKind },
+          ]),
+        ),
+      );
+      const hits = response.steps.filter((step) => step.cacheHit).length;
+      setNotice(
+        `plan: ${response.steps.length - hits} would run · ${hits} from cache`,
+      );
+    },
   });
 
   const start = useMutation({
@@ -195,7 +216,11 @@ export function Editor({
 
   const actions: readonly ToolbarAction[] = [
     { id: "validate", label: "validate", busy: validate.isPending },
-    { id: "plan", label: "plan · dry-run", busy: plan.isPending },
+    {
+      id: "plan",
+      label: planned === null ? "plan · dry-run" : "plan · clear",
+      busy: plan.isPending,
+    },
     { id: "run", label: "run", primary: true, busy: start.isPending },
   ];
 
@@ -203,8 +228,15 @@ export function Editor({
     (id: string) => {
       setNotice("");
       if (id === "validate") validate.mutate();
-      else if (id === "plan") plan.mutate();
-      else if (id === "run") {
+      else if (id === "plan") {
+        // The same button clears it, because a dry run that cannot be
+        // dismissed leaves the canvas showing predictions forever.
+        if (planned === null) plan.mutate();
+        else {
+          setPlanned(null);
+          setNotice("");
+        }
+      } else if (id === "run") {
         start.mutate(undefined, {
           onSuccess: (response) => {
             // A started run is a different thing to look at, and the run view
@@ -214,7 +246,7 @@ export function Editor({
         });
       }
     },
-    [validate, plan, start],
+    [validate, plan, start, planned],
   );
 
   const errors = diagnostics.filter((d) => d.severity === "error").length;
@@ -289,6 +321,7 @@ export function Editor({
           variant="embedded"
           onSelect={setSelected}
           theme={theme}
+          {...(planned === null ? {} : { planned })}
         />
       }
       inspector={
