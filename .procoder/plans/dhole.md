@@ -1292,6 +1292,31 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
 - [x] Write `internal/executor/pool/pool_test.go` asserting `TestPoolReusesSandboxAcrossRuns`: two runs with the same pool key receive the same sandbox id, and a file written by the first is visible to the second. Run — expect FAIL with "undefined: pool.New".
 - [x] Add `TestReapReleasesIdleSandboxes` asserting a sandbox idle beyond the threshold is released and the next acquire creates a new one.
 - [x] Add `TestPooledSandboxIsReportedNonCacheable` asserting Task 16's `cache.Eligible` is consulted and returns false for every step run from the pool.
+- [ ] **The kubernetes executor silently truncates any input bigger than about
+      128 KiB.** Found 2026-09-11 by running a real CI/CD pipeline on kw: a step
+      received a 2 MiB source tarball as 167,323 bytes and `tar` failed with
+      "unexpected end of file". Isolated with a two-step pipeline that writes
+      2 MiB of random bytes and checksums it on the other side — the CAS holds
+      all 2,097,152 bytes, so COLLECTION is correct and MATERIALISATION is what
+      loses them. `sandbox.Put` writes through `sh -c "cat > file"` on an exec
+      stream, and the stream is torn down before the container has drained it.
+      and not a hard cap: plain interactive `kubectl exec`
+      loses the same data on the same cluster over BOTH websocket and SPDY,
+      and the amount that survives varies with size — 64 KiB and 128 KiB arrive
+      whole, 192 KiB arrives as 96 KiB, 512 KiB and 2 MiB both arrive as
+      196,608. That is a race, not a limit.
+      The defect that belongs to Dhole is that NOTHING NOTICES: `cat` exits 0,
+      `Put` returns nil, and the step runs against a truncated input. A step
+      that reads a config file gets half of it and behaves plausibly. The fix
+      has two halves and the first is not optional: VERIFY what landed — size
+      at minimum, digest for preference — and fail the step naming the port,
+      so silent corruption becomes a loud refusal; then make it work, by
+      chunking the write and verifying each chunk, or by not moving bytes
+      through an exec stream at all. The conformance suite does not catch this:
+      `binary-artifact-round-trip` uses a small artifact, and
+      `log-throughput-10mb` exercises stdout, which is the other direction and
+      is fine. Add a case with a multi-megabyte INPUT. The vm and process
+      backends do not use exec streams and are unaffected.
 - [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.
