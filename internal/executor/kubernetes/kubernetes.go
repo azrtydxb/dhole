@@ -14,6 +14,7 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -556,7 +558,28 @@ func signalName(sig executor.Signal) (string, error) {
 	}
 }
 
+// putChunkBytes is how much of an input is handed to one exec.
+//
+// An exec's stdin is not a reliable pipe for a large payload: the API server
+// closes the stream while client-go is still copying, client-go logs
+// "Copying stdin failed ... broken pipe" through klog as an UNHANDLED error,
+// and StreamWithContext returns nil anyway. The write reports success and the
+// file is short. Measured on a live cluster, 64 KiB and 128 KiB arrive whole
+// while 192 KiB arrives as 96 KiB and anything from 512 KiB up arrives as
+// 192 KiB — a race against the teardown, not a fixed ceiling. 64 KiB is the
+// largest size observed to survive with margin.
+const putChunkBytes = 64 << 10
+
 // Put writes a file into the sandbox under a path relative to its root.
+//
+// It writes in chunks and asks for the file's size after each one, because a
+// short write here is otherwise SILENT: on a real cluster a step was handed a
+// 2 MiB source tarball as 167,323 bytes and only `tar` noticed. Anything less
+// self-checking than an archive — a config file, a dataset — would have been
+// read half-complete by a step that then behaved plausibly.
+//
+// The size comes back on the same exec that writes the chunk, so verifying
+// costs no extra round trip.
 func (s *sandbox) Put(ctx context.Context, name string, r io.Reader) error {
 	target, err := resolve(sandboxRoot, name)
 	if err != nil {
@@ -565,15 +588,93 @@ func (s *sandbox) Put(ctx context.Context, name string, r io.Reader) error {
 	if r == nil {
 		r = strings.NewReader("")
 	}
-	script := fmt.Sprintf("mkdir -p %s && cat > %s", shellQuote(path.Dir(target)), shellQuote(target))
-	code, err := s.run(ctx, []string{"sh", "-c", script}, r, nil, nil)
+	// A rewind is only possible for a source that has one. Anything else gets
+	// a single attempt, which is still safe: the size check below refuses a
+	// short write rather than letting it through.
+	seeker, rewindable := r.(io.Seeker)
+	var start int64
+	if rewindable {
+		if start, err = seeker.Seek(0, io.SeekCurrent); err != nil {
+			rewindable = false
+		}
+	}
+	attempts := 1
+	if rewindable {
+		attempts = putAttempts
+	}
+	for attempt := 1; ; attempt++ {
+		err := s.putOnce(ctx, name, target, r)
+		if err == nil || attempt == attempts || !errors.Is(err, errShortWrite) {
+			if err != nil && attempt > 1 {
+				return fmt.Errorf("%w (after %d attempts)", err, attempt)
+			}
+			return err
+		}
+		// The teardown race is probabilistic, so the same bytes usually land
+		// whole on the next try. Rewinding is what makes retrying honest:
+		// half a file plus a fresh attempt would concatenate.
+		if _, serr := seeker.Seek(start, io.SeekStart); serr != nil {
+			return err
+		}
+	}
+}
+
+// putAttempts is how many times a rewindable source is re-sent when the
+// sandbox reports a short write.
+const putAttempts = 3
+
+// errShortWrite marks the one failure worth retrying: the bytes left but did
+// not all arrive.
+var errShortWrite = errors.New("the exec stream dropped part of the write")
+
+func (s *sandbox) putOnce(ctx context.Context, name, target string, r io.Reader) error {
+	// Create or truncate first, so a retry of a partly written file starts
+	// from nothing rather than appending to what is already there.
+	create := fmt.Sprintf("mkdir -p %s && : > %s", shellQuote(path.Dir(target)), shellQuote(target))
+	code, err := s.run(ctx, []string{"sh", "-c", create}, nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("kubernetes executor: put %q: %w", name, err)
 	}
 	if code != 0 {
-		return fmt.Errorf("kubernetes executor: put %q: writer exited %d", name, code)
+		return fmt.Errorf("kubernetes executor: put %q: creating the file exited %d", name, code)
 	}
-	return nil
+
+	appendChunk := fmt.Sprintf("cat >> %s; wc -c < %s", shellQuote(target), shellQuote(target))
+	buf := make([]byte, putChunkBytes)
+	var written int64
+	for {
+		n, readErr := io.ReadFull(r, buf)
+		if n > 0 {
+			var size bytes.Buffer
+			code, err := s.run(ctx, []string{"sh", "-c", appendChunk}, bytes.NewReader(buf[:n]), &size, nil)
+			if err != nil {
+				return fmt.Errorf("kubernetes executor: put %q: %w", name, err)
+			}
+			if code != 0 {
+				return fmt.Errorf("kubernetes executor: put %q: writer exited %d", name, code)
+			}
+			written += int64(n)
+			got, err := strconv.ParseInt(strings.TrimSpace(size.String()), 10, 64)
+			if err != nil {
+				return fmt.Errorf("kubernetes executor: put %q: the sandbox did not report a size: %w", name, err)
+			}
+			if got != written {
+				// The failure this whole function is shaped around. Name both
+				// numbers: "it was truncated" without them sends the reader
+				// looking at their own command.
+				return fmt.Errorf(
+					"kubernetes executor: put %q: the sandbox holds %d bytes after %d were written, "+
+						"so the step would otherwise have run against a truncated file: %w",
+					name, got, written, errShortWrite)
+			}
+		}
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			return nil
+		}
+		if readErr != nil {
+			return fmt.Errorf("kubernetes executor: put %q: reading the source: %w", name, readErr)
+		}
+	}
 }
 
 // Mkdir creates a directory in the sandbox, with its parents. It is idempotent:

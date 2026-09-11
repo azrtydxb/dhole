@@ -10,6 +10,8 @@ package executortest
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"io"
 	"strings"
 	"sync"
@@ -180,6 +182,35 @@ func Contract(t *testing.T, e executor.Executor) {
 		got, err := io.ReadAll(r)
 		require.NoError(t, err)
 		require.Equal(t, payload, got)
+	})
+
+	t.Run("an input far larger than one stream's buffer arrives whole", func(t *testing.T) {
+		// The concrete failure this exists for: on a real cluster a step was
+		// handed a 2 MiB source tarball as 167,323 bytes and `tar` said
+		// "unexpected end of file". Nothing reported an error — the write
+		// returned nil and the step ran against a truncated file, which for
+		// anything less self-checking than a tarball is silent corruption.
+		//
+		// The bytes are not compressible and not uniform, so a short write
+		// cannot coincidentally match: the digest is checked, not just
+		// the length.
+		sb := acquire(t, e)
+		payload := make([]byte, 2<<20)
+		_, err := rand.Read(payload)
+		require.NoError(t, err)
+		want := sha256.Sum256(payload)
+
+		require.NoError(t, sb.Put(t.Context(), "big.bin", bytes.NewReader(payload)))
+
+		r, err := sb.Get(t.Context(), "big.bin")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, r.Close()) }()
+		got, err := io.ReadAll(r)
+		require.NoError(t, err)
+		require.Len(t, got, len(payload),
+			"the sandbox received a different number of bytes than were written")
+		require.Equal(t, want, sha256.Sum256(got),
+			"the sandbox received the right NUMBER of bytes and not the right ones")
 	})
 
 	t.Run("mkdir creates a directory a step can redirect into, and is idempotent", func(t *testing.T) {
