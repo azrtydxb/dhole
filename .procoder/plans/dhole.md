@@ -395,25 +395,70 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `Server.OpenRuns` is how a caller finds a run a trigger started. Tested
       through `server.New`/`Start` alone in
       `internal/server/builtins_e2e_test.go` — no test supplies wiring.
-- [ ] **A definition file is never collected, and ADR 0023 says it is.** That
+- [x] **A definition file is never collected, and ADR 0023 says it is.** That
       record's Consequences claim "a file removed by an operation is not deleted
       from the CAS: it is unreferenced, and the collector reclaims it when
-      nothing points at it". The first half is true and the second is not.
+      nothing points at it". The first half was true and the second was not:
       `cas.GC` enumerates `blob_refs`, and only a step OUTPUT ever writes a row
-      there (`GC.Reference`), so a definition file has no row, is never
-      enumerated, and is retained forever. The current behaviour is
-      safe-but-leaky rather than dangerous — the opposite error, collecting a
-      file a revision still carries, would break a pinned run — but a tenant
-      that replaces a large file on every edit grows without bound against the
-      MaxCASBytes quota those very files are charged to.
-      The fix is to teach the collector what a revision pins: a file carried by
-      SOME revision is retained, one carried by none is collectable. Note the
-      `blob_refs` key is `(tenant_id, digest, run_id)` and a definition file is
-      owned by a revision rather than a run, so this is a schema question, not
-      only a query. ADR 0023 is accepted and immutable; if the answer changes
-      the decision rather than completing it, supersede rather than edit.
-      Found by the agent that implemented 0023, which reported the gap in its
-      own work rather than leaving it to be discovered.
+      there (`GC.Reference`), so a definition file had no row, was never
+      enumerated, and was retained for ever against the MaxCASBytes quota those
+      very files are charged to.
+      Closed by teaching the collector what a REVISION pins. `cas.GC.Collect`
+      now takes its candidates from two tables and its retention from two
+      holders: a blob survives if a run within the retain window references it
+      OR if some revision carries it as a file, because identical bytes are one
+      object and each holder's claim on it is whole
+      (`unpinnedDigests`/`carriedDigests` in `internal/cas/gc.go`).
+      SCHEMA DECISION, recorded at length in migration
+      `0025_definition_blobs.sql`: a SIBLING table `definition_blobs`
+      (tenant_id, digest, uploaded_at), not a widened `blob_refs` key. Widening
+      loses twice — SQLite cannot change a primary key in place, so the one
+      table the collector's safety argument reads would have to be rebuilt by
+      a runner that re-applies every file on every open; and a run reference
+      and an upload candidacy have opposite lifetimes, so every query that ages
+      a row by its run would have to learn to skip the rows that have none, and
+      the one predicate somebody forgets ages a definition file instantly and
+      deletes a file a pinned revision still carries. What the table
+      deliberately does NOT hold is which revision carries which digest: that
+      is derived from the stored definition protobuf on each sweep, because a
+      denormalised copy that a future write path forgets to write is a pinned
+      file the collector believes is an orphan. The cost is decoding a tenant's
+      definitions on a sweep that has candidates to judge, and the sweep skips
+      the read entirely when it has none.
+      RETENTION IS BY REVISION, AND REVISIONS ARE NEVER PRUNED. Detaching a
+      file therefore reclaims nothing: the revision that carried it is
+      immutable and still names the bytes, which is what lets a run pinned to
+      it stay reproducible and what makes the inverse of the detachment work.
+      What this reclaims today is the upload no revision ever carried — the
+      GUI's file picker, an abandoned edit, a push that failed validation — and
+      the same rule reclaims a replaced file unchanged on the day revision
+      retention arrives.
+      An upload younger than the retain window is never collected, because
+      `PutDefinitionFile` is a separate call from the edit that declares the
+      file and in between the bytes are carried by nothing; re-uploading the
+      same bytes restarts that window rather than keeping the first upload's
+      time.
+      EXISTING ROWS: a deployment written before this migration keeps whatever
+      it already leaked, and no backfill is possible. The leaked bytes are
+      precisely the ones no revision carries, so the revisions table cannot
+      name them, and the CAS cannot be walked for them because it also holds
+      plugin artifacts and outputs whose reference has not been written yet.
+      Convergence is from the next write on: an upload of the same bytes
+      records the row, and everything uploaded afterwards is a candidate. The
+      failure direction is the safe one — an unrecorded blob is never examined.
+      Quota: collection credits `MaxCASBytes` back through the existing
+      `GC.Collected` hook (`internal/tenancy`'s Reclaimer), after the COMMIT,
+      because the ledger lives in the same database and a SQLite pool of one
+      connection deadlocks on a read taken inside the collector's transaction.
+      Files: `internal/cas/gc.go`, `internal/cas/definitionfiles.go` (the
+      upload wrapper that records, wired at `Files:` in
+      `internal/server/api.go`), `internal/runstore/migrations/0025_definition_blobs.sql`.
+      Tested in `internal/cas/definition_gc_test.go` — the one that matters is
+      `TestAPinnedRevisionStillResolvesEveryFileItCarriesAfterTheHeadMovedOn` —
+      on BOTH dialects through `internal/cas/dialect_test.go`'s contract
+      against a live Postgres, and through the served contract in
+      `internal/server/files_api_test.go`. ADR 0023 is completed, not changed,
+      so no record supersedes it.
 - [ ] **A parked agent step is not resumed after its gate is decided.** All
       five clauses of the original "what the plane does not host" are closed. (a) is closed by ADR 0025 and
       `internal/steps/agent/contract.go` + `internal/server/agent.go`: an agent

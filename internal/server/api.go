@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/azrtydxb/dhole/internal/api"
+	"github.com/azrtydxb/dhole/internal/cas"
 	"github.com/azrtydxb/dhole/internal/catalog"
 	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/health"
@@ -131,7 +132,13 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// against the tenant's max_cas_bytes like every other stored byte, so
 		// an oversized definition is refused by the limit that already exists
 		// rather than by a ceiling invented for files (ADR 0023).
-		Files: s.infra.cas,
+		//
+		// Wrapped so the upload is RECORDED as well as stored. Without that
+		// row the collector never enumerates the bytes — its candidates come
+		// from blob_refs, which only a step output writes — and a definition
+		// file is retained for ever against the very quota it is charged to,
+		// which is the second half of ADR 0023's Consequences going unkept.
+		Files: cas.NewDefinitionFiles(s.infra.cas, s.infra.db, s.infra.dialect),
 		Cache: s.infra.cache,
 		Fleet: s.fleet,
 		Drain: s.fleet,

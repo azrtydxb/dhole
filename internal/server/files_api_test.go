@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/server"
 )
 
@@ -148,4 +150,39 @@ func blobType() *dholev1.PortType {
 	return &dholev1.PortType{
 		Kind: &dholev1.PortType_Blob{Blob: &dholev1.BlobType{MediaType: "text/plain"}},
 	}
+}
+
+// TestTheServedUploadRecordsTheFileForTheCollector is the wiring half of the
+// leak ADR 0023 promised was not there. The collector's candidates come from
+// tables somebody writes: a step output is Referenced, and until this was
+// wired a definition file was only ever Put. The bytes were then invisible to
+// every sweep and retained for ever against max_cas_bytes — the quota ADR 0023
+// makes the only ceiling on a definition's size.
+//
+// It reads the plane's own database rather than constructing a collector,
+// because what is in doubt here is whether `dhole serve` mounts the upload
+// path that records, not whether the collector works: internal/cas proves
+// that on both dialects.
+func TestTheServedUploadRecordsTheFileForTheCollector(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	srv, dir := startWithAPIIn(ctx, t)
+	client := apiClient(t, srv)
+
+	put, err := client.PutDefinitionFile(ctx, authedFor(&dholev1.PutDefinitionFileRequest{
+		Content: dockerfile, Path: "Dockerfile", MediaType: "text/plain",
+	}, srv.BootstrapToken()))
+	require.NoError(t, err)
+
+	db, err := runstore.OpenSQLite(filepath.Join(dir, "dhole.db"))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM definition_blobs WHERE tenant_id = ? AND digest = ?`,
+		server.DefaultTenant, "sha256:"+put.Msg.GetFile().GetDigest().GetHex()).Scan(&rows))
+	require.Equal(t, 1, rows,
+		"the plane stored the bytes without recording them, so no sweep will ever see them again")
 }
