@@ -44,12 +44,18 @@ export type StepNodeData = {
 /** StepNodeType is this node's type as React Flow sees it. */
 export type StepNodeType = Node<StepNodeData, "step">;
 
-/** The geometry of the ports down each side of a node. Exported because the
- * canvas positions its edges against the same rows: two files disagreeing by
- * four pixels is a wire that visibly misses the port it is connected to. */
-export const firstPortTop = 34;
-export const portSpacing = 15;
+/** The geometry of a node, in the order it stacks: 1px border, 6px padding,
+ * a 16px title row, then one 15px row per declared port, then the footer.
+ *
+ * These are used to declare each node's size to the minimap. The HANDLES do
+ * NOT use them — they are positioned on the glyph itself, because arithmetic
+ * that has to agree with a flex layout is arithmetic that will one day be
+ * twelve pixels out, which is a wire that visibly misses the dot it claims to
+ * connect to. */
 export const nodeWidth = 215;
+export const titleRow = 16;
+export const portSpacing = 15;
+export const nodeChrome = 2 + 12 + titleRow + 22;
 
 const statusRail: Record<StepStatus, string> = {
   none: "var(--ink3)",
@@ -107,12 +113,10 @@ function PortRow({
   step,
   port,
   direction,
-  index,
 }: {
   readonly step: Step;
   readonly port: Port;
   readonly direction: "in" | "out";
-  readonly index: number;
 }) {
   const type = portTypeName(port);
   const glyph = asPortTypeName(type);
@@ -128,26 +132,45 @@ function PortRow({
         flexDirection: direction === "in" ? "row" : "row-reverse",
       }}
     >
-      <Handle
-        type={direction === "in" ? "target" : "source"}
-        position={direction === "in" ? Position.Left : Position.Right}
-        id={port.name}
-        data-testid={`port-${direction}-${step.id}-${port.name}`}
-        title={`${port.name}: ${type}`}
+      {/* The handle sits ON the glyph, not at a computed offset from the top
+          of the node. React Flow takes an edge's endpoint from the handle's
+          real position in the DOM, so anchoring it to the glyph is what makes
+          a wire terminate exactly on the dot it belongs to — at any port
+          count, in any theme, whatever the row height turns out to be. */}
+      <span
         style={{
-          position: "absolute",
-          top: firstPortTop + index * portSpacing + portSpacing / 2,
-          [direction === "in" ? "left" : "right"]: -7,
-          width: 13,
-          height: 13,
-          background: "transparent",
-          border: "none",
-          // The handle is an invisible hit target over the glyph: React Flow
-          // needs something grabbable, and a 13px circle drawn on top of a 9px
-          // shape would hide the type the shape is there to state.
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 11,
+          height: portSpacing,
+          flex: "none",
         }}
-      />
-      <PortGlyph type={glyph} title={type} />
+      >
+        <Handle
+          type={direction === "in" ? "target" : "source"}
+          position={direction === "in" ? Position.Left : Position.Right}
+          id={port.name}
+          data-testid={`port-${direction}-${step.id}-${port.name}`}
+          title={`${port.name}: ${type}`}
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            width: 13,
+            height: 13,
+            minWidth: 0,
+            minHeight: 0,
+            background: "transparent",
+            border: "none",
+            // Invisible: a 13px circle drawn over a 9px shape would hide the
+            // type the shape exists to state.
+          }}
+        />
+        <PortGlyph type={glyph} title={type} />
+      </span>
       <span style={{ pointerEvents: "none" }}>
         {port.name}:{type}
       </span>
@@ -218,22 +241,20 @@ export function StepNode({ data, selected }: NodeProps<StepNodeType>) {
           )}
         </div>
 
-        {step.inputs.map((port, index) => (
+        {step.inputs.map((port) => (
           <PortRow
             key={`in-${port.name}`}
             step={step}
             port={port}
             direction="in"
-            index={index}
           />
         ))}
-        {step.outputs.map((port, index) => (
+        {step.outputs.map((port) => (
           <PortRow
             key={`out-${port.name}`}
             step={step}
             port={port}
             direction="out"
-            index={step.inputs.length + index}
           />
         ))}
 

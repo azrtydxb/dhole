@@ -64,7 +64,7 @@ import {
 import type { Theme } from "../design/useTheme.js";
 import {
   StepNode,
-  firstPortTop,
+  nodeChrome,
   nodeWidth,
   portSpacing,
   type StepNodeType,
@@ -262,9 +262,7 @@ export function Canvas({
       const size = {
         width: nodeWidth,
         height:
-          firstPortTop +
-          (step.inputs.length + step.outputs.length) * portSpacing +
-          18,
+          nodeChrome + (step.inputs.length + step.outputs.length) * portSpacing,
       };
       // One comparison, in one place (isGenerator), so the editor and the run
       // view cannot disagree about what a generator is.

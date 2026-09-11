@@ -263,12 +263,20 @@ export function Editor({
       sidebar={
         <Sidebar
           catalog={[]}
+          catalogIsSample={false}
           categories={categories}
           activeCategory={category}
           onCategory={setCategory}
           query={query}
           onQuery={setQuery}
+          onAdd={() =>
+            setNotice("adding from the catalog needs a plugin list RPC")
+          }
+          onBrowseRegistry={() =>
+            setNotice("the plugin registry has no endpoint in this build")
+          }
           runs={[]}
+          runsAreSample={false}
           onOpenRun={(runId) => {
             globalThis.location.hash = `#/runs/${runId}`;
           }}
