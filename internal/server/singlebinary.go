@@ -15,7 +15,6 @@ import (
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/cache"
 	"github.com/azrtydxb/dhole/internal/cas"
-	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/process"
 	"github.com/azrtydxb/dhole/internal/runstore"
@@ -266,7 +265,13 @@ func (i *infra) openBus(ctx context.Context, cfg Config) error {
 	// Dispatch is a work queue: exactly one engine takes each message, and an
 	// unacknowledged one comes back. Status is durable for the opposite
 	// reason — the plane must not miss one (docs/wire-contract.md).
-	if err := plane.EnsureWorkQueue(ctx, engine.DispatchStream, []string{"job.dispatch.>"}); err != nil {
+	//
+	// One dispatch queue PER TIER, because a consumer is addressed by
+	// `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>` and a permission cannot
+	// narrow the consumer name: with one shared stream, guessing another
+	// tier's consumer name was enough to pull its work. EnsureDispatchStreams
+	// also says what becomes of a pre-split `DISPATCH` stream.
+	if err := plane.EnsureDispatchStreams(ctx, dispatchTiers()); err != nil {
 		return err
 	}
 	if err := plane.EnsureWorkQueue(ctx, StatusStream, []string{"job.status.>"}); err != nil {

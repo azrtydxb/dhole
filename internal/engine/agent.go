@@ -43,11 +43,21 @@ import (
 	"github.com/azrtydxb/dhole/internal/wire"
 )
 
-// DispatchStream is the work-queue stream the control plane publishes
-// dispatches into. An engine only ever binds a consumer on it: engine
-// credentials cannot create a stream, and an engine that could would be able to
-// reshape the plane's queue.
-const DispatchStream = "DISPATCH"
+// DispatchStream names the work-queue stream the control plane publishes this
+// engine's tier's dispatches into. An engine only ever binds a consumer on it:
+// engine credentials cannot create a stream, and an engine that could would be
+// able to reshape the plane's queue.
+//
+// It is per TIER, not one stream for the fleet. A consumer is addressed by
+// `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>`, and a permission cannot
+// narrow the consumer NAME — a wildcard matches a whole token — so while every
+// tier shared one `DISPATCH`, an untrusted connection that guessed the name
+// `engines-trusted-<caps>` pulled trusted work off the consumer a trusted
+// engine had created. The tier has to be in the stream token for the
+// permission to see it.
+func DispatchStream(tier string) (string, error) {
+	return bus.DispatchStreamName(tier)
+}
 
 // subscribeRetry is how long Run waits between attempts to bind its consumers.
 //
@@ -213,6 +223,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.registry.run(ctx)
 	}()
 
+	stream, err := DispatchStream(a.cfg.Tier)
+	if err != nil {
+		return err
+	}
+
 	queues := a.workQueues(hashes)
 
 	subs := make([]bus.Subscription, 0, len(queues))
@@ -224,7 +239,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	errs := make(chan error, len(queues))
 	for _, q := range queues {
-		sub, err := a.subscribe(ctx, q.consumer, q.subject)
+		sub, err := a.subscribe(ctx, stream, q.consumer, q.subject)
 		if err != nil {
 			wg.Wait()
 			return err
@@ -297,14 +312,14 @@ func (a *Agent) workQueues(hashes []string) []workQueue {
 // this engine's id, which is what makes the dispatch subject a work queue:
 // every engine that can serve it pulls from the same consumer, and exactly one
 // of them gets each message.
-func (a *Agent) subscribe(ctx context.Context, consumer, subject string) (bus.Subscription, error) {
+func (a *Agent) subscribe(ctx context.Context, stream, consumer, subject string) (bus.Subscription, error) {
 	backoff := a.cfg.SubscribeBackoff
 	if backoff <= 0 {
 		backoff = subscribeRetry
 	}
 	var lastComplaint time.Time
 	for attempt := 1; ; attempt++ {
-		sub, err := a.cfg.Bus.SubscribePull(ctx, DispatchStream, consumer, subject)
+		sub, err := a.cfg.Bus.SubscribePull(ctx, stream, consumer, subject)
 		if err == nil {
 			return sub, nil
 		}
@@ -317,7 +332,8 @@ func (a *Agent) subscribe(ctx context.Context, consumer, subject string) (bus.Su
 		// reading before the useful line arrives.
 		if attempt == 1 || time.Since(lastComplaint) >= complainEvery {
 			slog.Warn("cannot bind the dispatch consumer yet; retrying",
-				"subject", subject, "consumer", consumer, "attempt", attempt, "error", err)
+				"stream", stream, "subject", subject, "consumer", consumer,
+				"attempt", attempt, "error", err)
 			lastComplaint = time.Now()
 		}
 		select {

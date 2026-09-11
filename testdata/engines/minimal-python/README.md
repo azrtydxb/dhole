@@ -58,7 +58,7 @@ so an engine for a real deployment reads them from there rather than guessing.
 | `DHOLE_BUS_URL`         | Bus to dial. Engines are outbound-only.                    |
 | `DHOLE_ENGINE_ID`       | Identity to register under; names its control subject      |
 | `DHOLE_TIER`            | Trust tier — decides which dispatch subjects it takes      |
-| `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches                    |
+| `DHOLE_DISPATCH_STREAM` | JetStream work queue holding dispatches, `DISPATCH_<tier>` |
 | `DHOLE_SECRET_SUBJECT`  | Request/reply subject that redeems a secret handle         |
 | `DHOLE_SLOTS`           | Jobs to run at once                                        |
 | the store's variables   | per the contract; this engine implements `filesystem` only |

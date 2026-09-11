@@ -84,6 +84,15 @@ const (
 // both halves have to agree on it.
 const DefaultTier = "trusted"
 
+// dispatchTiers is every tier this plane declares a dispatch work queue for.
+//
+// It is a function rather than the bare constant because the streams are now
+// per tier, and this is the single list an added tier has to reach: a tier the
+// plane never declared a stream for has no queue to hold its dispatches, and a
+// tier whose name is not a legal stream name is refused here, at configuration
+// time, with the tier named — not at the first dispatch to it.
+func dispatchTiers() []string { return []string{DefaultTier} }
+
 // StatusStream is the durable stream carrying job.status.>. Status is the one
 // engine-to-plane subject the plane must not miss, so it is a stream with an
 // acknowledged consumer rather than a core subscription that drops what

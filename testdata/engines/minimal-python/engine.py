@@ -447,7 +447,12 @@ class Engine:
         self.engine_id = os.environ.get("DHOLE_ENGINE_ID", "minimal-python")
         self.tier = _env("DHOLE_TIER", "DHOLE_ENGINE_TIER", "trusted")
         self.blob_dir = self._blob_dir()
-        self.stream = os.environ.get("DHOLE_DISPATCH_STREAM", "DISPATCH")
+        # One dispatch stream PER TIER: a consumer is addressed by name in the
+        # JS API and a permission cannot narrow a name, so the tier lives in
+        # the STREAM token. The default is derived from the tier rather than
+        # fixed, or an engine run without the variable would bind a stream that
+        # no longer exists.
+        self.stream = os.environ.get("DHOLE_DISPATCH_STREAM", f"DISPATCH_{self.tier}")
         self.secret_subject = os.environ.get("DHOLE_SECRET_SUBJECT", "")
         self.slots = int(_env("DHOLE_SLOTS", "DHOLE_ENGINE_SLOTS", "2"))
         self.capabilities = [CAPABILITY_NETWORK, CAPABILITY_SECRETS]

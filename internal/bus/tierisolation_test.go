@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 
+	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
 )
 
@@ -34,7 +35,7 @@ func TestAnEngineCannotBindAWorkQueueFilteredToAnotherTier(t *testing.T) {
 	plane, err := bus.Connect(ctx, srv.PlaneURL())
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"trusted", "untrusted"}))
 
 	intruder, err := bus.Connect(ctx, srv.TierURL("untrusted"))
 	require.NoError(t, err)
@@ -42,13 +43,13 @@ func TestAnEngineCannotBindAWorkQueueFilteredToAnotherTier(t *testing.T) {
 
 	// Its own tier first, so a server that refused everything could not pass
 	// this test by accident.
-	own, err := intruder.SubscribePull(ctx, "DISPATCH", "own-tier-probe",
+	own, err := intruder.SubscribePull(ctx, dispatchStream(t, "untrusted"), "own-tier-probe",
 		bus.SubjectDispatchWildcard("untrusted"))
 	require.NoError(t, err, "an engine was refused its own tier's work queue")
 	t.Cleanup(func() { _ = own.Close() })
 
 	// And now the boundary itself.
-	foreign, err := intruder.SubscribePull(ctx, "DISPATCH", "foreign-tier-probe",
+	foreign, err := intruder.SubscribePull(ctx, dispatchStream(t, "trusted"), "foreign-tier-probe",
 		bus.SubjectDispatchWildcard("trusted"))
 	if err == nil {
 		_ = foreign.Close()
@@ -84,7 +85,7 @@ func TestAnEngineCannotReachTheConsumerCreateEndpointsThatHideTheFilterSubject(t
 	plane, err := bus.Connect(ctx, srv.PlaneURL())
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"trusted", "untrusted"}))
 
 	// The server answers a forbidden PUBLISH with an -ERR on the connection
 	// and never replies to the request, so the refusal is read from the async
@@ -101,12 +102,16 @@ func TestAnEngineCannotReachTheConsumerCreateEndpointsThatHideTheFilterSubject(t
 	require.NoError(t, err)
 	t.Cleanup(raw.Close)
 
+	// The target is the TRUSTED tier's stream: an untrusted connection reaching
+	// these endpoints on its own stream would prove nothing about the tier.
+	target := dispatchStream(t, "trusted")
+
 	body := func(name string, cfg map[string]any) []byte {
 		cfg["durable_name"] = name
 		cfg["name"] = name
 		cfg["ack_policy"] = "explicit"
 		encoded, marshalErr := json.Marshal(map[string]any{
-			"stream_name": "DISPATCH",
+			"stream_name": target,
 			"config":      cfg,
 		})
 		require.NoError(t, marshalErr)
@@ -120,28 +125,28 @@ func TestAnEngineCannotReachTheConsumerCreateEndpointsThatHideTheFilterSubject(t
 	}{
 		{
 			name:    "the new endpoint with no filter token",
-			subject: "$JS.API.CONSUMER.CREATE.DISPATCH.body-filter",
+			subject: "$JS.API.CONSUMER.CREATE." + target + ".body-filter",
 			payload: body("body-filter", map[string]any{
 				"filter_subject": bus.SubjectDispatchWildcard("trusted"),
 			}),
 		},
 		{
 			name:    "a multi-filter create, which cannot name its filters in the subject",
-			subject: "$JS.API.CONSUMER.CREATE.DISPATCH.multi-filter",
+			subject: "$JS.API.CONSUMER.CREATE." + target + ".multi-filter",
 			payload: body("multi-filter", map[string]any{
 				"filter_subjects": []string{bus.SubjectDispatchWildcard("trusted")},
 			}),
 		},
 		{
 			name:    "the legacy durable endpoint",
-			subject: "$JS.API.CONSUMER.DURABLE.CREATE.DISPATCH.legacy-durable",
+			subject: "$JS.API.CONSUMER.DURABLE.CREATE." + target + ".legacy-durable",
 			payload: body("legacy-durable", map[string]any{
 				"filter_subject": bus.SubjectDispatchWildcard("trusted"),
 			}),
 		},
 		{
 			name:    "the legacy ephemeral endpoint",
-			subject: "$JS.API.CONSUMER.CREATE.DISPATCH",
+			subject: "$JS.API.CONSUMER.CREATE." + target,
 			payload: body("", map[string]any{
 				"filter_subject": bus.SubjectDispatchWildcard("trusted"),
 			}),
@@ -171,7 +176,7 @@ func TestAnEngineCannotReachTheConsumerCreateEndpointsThatHideTheFilterSubject(t
 	defer cancelList()
 	planeJS, err := jetstream.New(planeConn(t, srv))
 	require.NoError(t, err)
-	stream, err := planeJS.Stream(listCtx, "DISPATCH")
+	stream, err := planeJS.Stream(listCtx, target)
 	require.NoError(t, err)
 	names := stream.ConsumerNames(listCtx)
 	for name := range names.Name() {
@@ -194,4 +199,73 @@ func planeConn(t *testing.T, srv *bus.Embedded) *nats.Conn {
 	require.NoError(t, err)
 	t.Cleanup(conn.Close)
 	return conn
+}
+
+// TestAnEngineCannotPullFromAConsumerAnotherTiersEngineCreated is the attack
+// the consumer-create permission does not touch: the intruder CREATES nothing.
+// It waits for a trusted engine to bind its queue and then publishes to
+// `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>` with that consumer's name,
+// which is guessable — every engine in a tier binds `engines-<tier>-<caps>`.
+//
+// No permission can narrow MSG.NEXT by consumer NAME: a NATS wildcard matches
+// a whole token, so `engines-untrusted-*` is not expressible. The tier has to
+// be in the STREAM token instead, which is why the dispatch stream is one per
+// tier rather than one shared `DISPATCH`.
+func TestAnEngineCannotPullFromAConsumerAnotherTiersEngineCreated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	plane, err := bus.Connect(ctx, srv.PlaneURL())
+	require.NoError(t, err)
+	t.Cleanup(plane.Close)
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"trusted", "untrusted"}))
+
+	// A trusted engine binds its queue, exactly as the agent does.
+	trusted, err := bus.Connect(ctx, srv.TierURL("trusted"))
+	require.NoError(t, err)
+	t.Cleanup(trusted.Close)
+	victim, err := trusted.SubscribePull(ctx, dispatchStream(t, "trusted"), "engines-trusted-abc",
+		bus.SubjectDispatch("trusted", "abc"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = victim.Close() })
+
+	require.NoError(t, plane.Publish(ctx, bus.SubjectDispatch("trusted", "abc"),
+		&dholev1.JobDispatch{RunId: "run-1", StepId: "secret-work"}))
+
+	violations := make(chan error, 4)
+	raw, err := nats.Connect(srv.TierURL("untrusted"),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, handlerErr error) {
+			select {
+			case violations <- handlerErr:
+			default:
+			}
+		}))
+	require.NoError(t, err)
+	t.Cleanup(raw.Close)
+
+	next := "$JS.API.CONSUMER.MSG.NEXT." + dispatchStream(t, "trusted") + ".engines-trusted-abc"
+	stolen, err := raw.Request(next, []byte(`{"batch":1,"expires":1000000000}`), requestWait)
+	if err == nil {
+		t.Fatalf("an untrusted connection pulled %q off the trusted tier's consumer by naming it",
+			string(stolen.Data))
+	}
+
+	select {
+	case violation := <-violations:
+		require.ErrorIs(t, violation, nats.ErrPermissionViolation)
+		require.Contains(t, violation.Error(), next)
+	case <-time.After(requestWait):
+		t.Fatalf("the server did not refuse %s on permissions", next)
+	}
+
+	// The work is still there for the engine it was dispatched to.
+	victimCtx, cancelVictim := context.WithTimeout(ctx, 20*time.Second)
+	defer cancelVictim()
+	msg, err := victim.Next(victimCtx)
+	require.NoError(t, err, "the dispatch did not survive the attempt to steal it")
+	require.NoError(t, msg.Ack())
 }

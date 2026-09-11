@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -183,7 +182,7 @@ func (e *Embedded) Close() {
 // engine's own inbox, so no core SUB on a dispatch subject ever happens and
 // the Subscribe allow-list never sees the consumer's FILTER SUBJECT. With
 // `$JS.API.CONSUMER.>` granted, an untrusted connection created a durable on
-// the DISPATCH stream filtered to `job.dispatch.trusted.>` and was handed
+// the dispatch stream filtered to `job.dispatch.trusted.>` and was handed
 // trusted work — refused at neither the bus nor the application, which is the
 // opposite of what [S-5] requires. See tierPermissionsConsumerAPI.
 //
@@ -192,9 +191,11 @@ func (e *Embedded) Close() {
 // an engine inside a tenant's account (ADR 0014). Two hand-written copies of
 // this table is how one of them stayed open after the other was fixed.
 //
-// tier must be ONE subject token. A tier called `*` or `>` would not narrow
-// anything — it would hand out every tier's work and every tier's consumer
-// API — so it is refused rather than spelled into a permission.
+// tier must be ONE subject token AND a legal stream name (ValidTierToken): it
+// is spelled into both a subject and the name of this tier's dispatch stream.
+// A tier called `*` or `>` would not narrow anything — it would hand out every
+// tier's work and every tier's consumer API — so it is refused rather than
+// spelled into a permission.
 func TierPermissions(tier string) (*server.Permissions, error) {
 	if err := ValidTierToken(tier); err != nil {
 		return nil, err
@@ -202,18 +203,10 @@ func TierPermissions(tier string) (*server.Permissions, error) {
 	return tierPermissions(tier), nil
 }
 
-// ValidTierToken refuses a tier name that is not a single subject token.
-func ValidTierToken(tier string) error {
-	if tier == "" {
-		return fmt.Errorf("bus: tier: empty")
-	}
-	if strings.ContainsAny(tier, ".*> \t") {
-		return fmt.Errorf("bus: tier %q: not a single subject token", tier)
-	}
-	return nil
-}
-
 func tierPermissions(tier string) *server.Permissions {
+	// Safe to ignore: every caller has already been through ValidTierToken,
+	// which is what makes the tier spellable as a stream name at all.
+	stream, _ := DispatchStreamName(tier)
 	publish := []string{
 		"job.status.>",
 		"job.logs.>",
@@ -229,7 +222,7 @@ func tierPermissions(tier string) *server.Permissions {
 		"$JS.ACK.>",
 		"_INBOX.>",
 	}
-	publish = append(publish, tierPermissionsConsumerAPI(tier)...)
+	publish = append(publish, tierPermissionsConsumerAPI(tier, stream)...)
 	return &server.Permissions{
 		Subscribe: &server.SubjectPermission{
 			Allow: []string{
@@ -266,26 +259,28 @@ func tierPermissions(tier string) *server.Permissions {
 //
 // Granting any of them would leave the hole open while looking closed.
 //
-// The stream token is `*` rather than the dispatch stream's name: this package
-// does not name streams (internal/engine does), and the filter subject is the
-// boundary anyway — a consumer on another stream still may not be filtered
-// outside this tier's dispatch subtree.
+// MSG.NEXT and INFO address a consumer by NAME, and no permission can narrow a
+// name: a NATS wildcard matches a whole token, so `engines-<tier>-*` is not
+// expressible. That left the boundary open to a connection that simply GUESSED
+// a name — engines are named `engines-<tier>-<caps>` — and pulled another
+// tier's work off a consumer a trusted engine had created, creating nothing
+// itself and so never meeting the CREATE permission above.
 //
-// KNOWN GAP, not closable by permissions: MSG.NEXT and INFO address a consumer
-// by NAME, and a NATS wildcard matches a whole token, so `engines-<tier>-*` is
-// not expressible. A connection that guesses an existing consumer's name can
-// still pull from a queue another tier's engines created. Closing that needs
-// the tier in a token these subjects carry — a DISPATCH stream per tier — which
-// is a change to what the control plane declares, not to these permissions.
-func tierPermissionsConsumerAPI(tier string) []string {
+// The STREAM token is what closes it, which is why every subject here names
+// this tier's dispatch stream rather than `*`. One stream per tier
+// (DispatchStreamName) puts the tier in a token these subjects already carry,
+// and the consumer name stops mattering. This could not have been fixed inside
+// this table while every tier shared one `DISPATCH` stream — the fix is what
+// the control plane DECLARES, and the permission only follows it.
+func tierPermissionsConsumerAPI(tier, stream string) []string {
 	return []string{
-		"$JS.API.CONSUMER.CREATE.*.*." + SubjectDispatchWildcard(tier),
-		"$JS.API.CONSUMER.MSG.NEXT.*.*",
+		"$JS.API.CONSUMER.CREATE." + stream + ".*." + SubjectDispatchWildcard(tier),
+		"$JS.API.CONSUMER.MSG.NEXT." + stream + ".*",
 		// Metadata only, and the client reaches for it on its own: a pull
 		// consumer whose heartbeats stop asks whether the consumer still
 		// exists before giving up. Without it a deleted consumer becomes a
 		// hung fetch rather than a reported error.
-		"$JS.API.CONSUMER.INFO.*.*",
+		"$JS.API.CONSUMER.INFO." + stream + ".*",
 	}
 }
 

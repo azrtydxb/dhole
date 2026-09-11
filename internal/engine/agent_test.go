@@ -566,7 +566,7 @@ func newHarness(t *testing.T, opts ...bus.Option) *harness {
 	plane, err := bus.Connect(ctx, srv.URL())
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, engine.DispatchStream, []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{tier}))
 
 	engineBus, err := bus.Connect(ctx, srv.URL(), opts...)
 	require.NoError(t, err)

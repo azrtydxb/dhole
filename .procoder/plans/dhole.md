@@ -634,7 +634,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `bus.TierPermissions` and used by `internal/tenant`'s new
       `ProvisionTierUser`, so the two copies cannot drift apart again.
       NOT closed, and carried below: pulling an EXISTING consumer by name.
-- [ ] **A tier boundary an engine can still step over by NAME.** Left open by
+- [x] **A tier boundary an engine can still step over by NAME.** Left open by
       the fix above and demonstrated on 2026-09-11 with a throwaway test: an
       untrusted connection that publishes to
       `$JS.API.CONSUMER.MSG.NEXT.DISPATCH.engines-trusted-<caps>` pulls trusted
@@ -650,6 +650,37 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       `$JS.API.CONSUMER.MSG.NEXT.DISPATCH_<tier>.*` is a tier-scoped
       permission and the name stops mattering. A Go-side check is not the fix:
       an engine in another language would not have it.
+      CLOSED 2026-09-11: one work-queue stream per tier, `DISPATCH_<tier>`
+      (`bus.DispatchStreamName`), and all three consumer-API permissions —
+      CREATE, MSG.NEXT and INFO — now name this tier's stream instead of `*`.
+      The attack is the test: `TestAnEngineCannotPullFromAConsumerAnotherTiersEngineCreated`
+      has an untrusted connection publish to
+      `$JS.API.CONSUMER.MSG.NEXT.<trusted stream>.engines-trusted-abc`, the
+      exact consumer a trusted engine created, and asserts the server refuses
+      it on permissions AND that the dispatch is still there for the engine it
+      was meant for. It failed before the change by pulling the payload out.
+      A STREAM NAME IS NOT A SUBJECT: nats-server refuses `.`, `*`, `>`, `/`,
+      `\` and whitespace in a stream name and caps it at 255 bytes, so
+      `ValidTierToken` now enforces the union of the two rules and every place
+      a tier is configured (`StartEmbeddedWithTiers`, `bus.TierPermissions`
+      and through it `tenant.ProvisionTierUser`, `EnsureDispatchStreams`)
+      refuses `local/dev` by name rather than failing at the first dispatch.
+      UPGRADE ORDER, written into `docs/wire-contract.md`: the PLANE FIRST,
+      the opposite of the kind-token order, because the plane is what declares
+      streams and the old `DISPATCH` covers `job.dispatch.>`, which overlaps
+      every per-tier stream — JetStream refuses that, so the two layouts
+      cannot coexist and one side is briefly wrong either way. Plane first
+      makes the losing side an engine that cannot find `DISPATCH_<tier>` and
+      retries the bind forever (deliberately deadline-free), while its tier's
+      work accumulates in that queue and is taken the moment it is upgraded:
+      HELD, never lost and never misrouted, since a per-tier stream accepts
+      only its own tier's subjects. THE OLD STREAM is handled explicitly by
+      `EnsureDispatchStreams`: empty, it is deleted (it holds nothing and its
+      subjects block every per-tier stream); non-empty, the plane REFUSES TO
+      START, naming the stream and the count, because those messages are
+      dispatches live runs are waiting on and deleting them would strand those
+      runs silently. `bus.TierPermissions` stayed the one table both
+      `internal/bus` and `internal/tenant` build from.
 - [ ] **A distributed deployment hands engines a credential that is not tier
       scoped.** `internal/tenancy`'s provisioner gives out the tenant ACCOUNT
       credential (`tenant.ProvisionAccount`), which reaches the tenant's whole

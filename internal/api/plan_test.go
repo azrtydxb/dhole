@@ -21,7 +21,6 @@ import (
 	"github.com/azrtydxb/dhole/internal/catalog"
 	"github.com/azrtydxb/dhole/internal/dag"
 	"github.com/azrtydxb/dhole/internal/defstore"
-	"github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/outbox"
@@ -476,7 +475,7 @@ func newDispatchHarness(ctx context.Context, t *testing.T) *dispatchHarness {
 	plane, err := bus.Connect(ctx, embedded.URL())
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, engine.DispatchStream, []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{planTier}))
 
 	conn, err := nats.Connect(embedded.URL())
 	require.NoError(t, err)
