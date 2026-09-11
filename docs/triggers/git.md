@@ -50,3 +50,10 @@ nothing downstream can remove one.
 
 What a tainted step may then do is a policy decision, not a hard-coded rule. See
 [policy authoring](../policy.md) for the rules worth writing.
+
+## The inputs it binds
+
+What happens to them after the event arrives — the run log they land in, the
+taint mark they keep, and the two refusals that stop a run starting on a value
+the pipeline cannot use — is the same for every kind:
+[what a trigger's bound inputs become](bound-inputs.md).

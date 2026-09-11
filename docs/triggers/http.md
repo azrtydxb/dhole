@@ -47,3 +47,10 @@ and what may be done with it is a policy decision — see
 [policy authoring](../policy.md). If the source is a forge webhook, use
 [the `git` trigger](git.md) instead: it verifies signatures and taints
 unconditionally.
+
+## The inputs it binds
+
+What happens to them after the event arrives — the run log they land in, the
+taint mark they keep, and the two refusals that stop a run starting on a value
+the pipeline cannot use — is the same for every kind:
+[what a trigger's bound inputs become](bound-inputs.md).

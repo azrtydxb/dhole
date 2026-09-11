@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/api"
@@ -1036,6 +1037,35 @@ const DefaultTenant = "default"
 // flight, it reads back the definition it began with — which is why the
 // RUN_CREATED payload carries the revision id and not just the pipeline's.
 func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipeline) (string, error) {
+	return s.SubmitWithInputs(ctx, tenantID, p, nil, "")
+}
+
+// SubmitWithInputs is Submit for a caller that has the pipeline's DECLARED
+// inputs in hand — today, a trigger (ADR 0007).
+//
+// The values go into the RUN_CREATED payload rather than anywhere new. A
+// trigger's bound inputs used to reach the sink and stop there, so a run that
+// fired was indistinguishable from one somebody pressed the button for and
+// everything the event carried was lost; the run log is where a run's position
+// already lives (ADR 0003), so it is the one place that can still answer what
+// the run was started with once the process that started it is gone. A second
+// channel beside the log would be a second thing to replay and a second thing
+// to get out of step with it.
+//
+// Tainted values are stored WRAPPED, as the trigger produced them: the mark is
+// what records that the value crossed a boundary (ADR 0015), and storing "just
+// the data" would flatten a value a webhook supplied into one a step produced.
+//
+// startedBy is "<kind>:<id>" of the trigger, or empty for a hand-started run.
+//
+// It does NOT validate. Validation belongs to the caller that knows which
+// definition the values were checked against — see triggerSink — because this
+// function is also the one that type-checks and pins the revision, and a check
+// here would be a check against a pipeline the caller may not have seen.
+func (s *Server) SubmitWithInputs(
+	ctx context.Context, tenantID string, p *dholev1.Pipeline,
+	inputs map[string]*structpb.Value, startedBy string,
+) (string, error) {
 	s.mu.Lock()
 	running, sched, defs, store := s.running, s.sched, s.defs, s.storeLocked()
 	parts := s.partitions
@@ -1085,6 +1115,8 @@ func (s *Server) Submit(ctx context.Context, tenantID string, p *dholev1.Pipelin
 	payload, err := scheduler.MarshalRunCreated(scheduler.RunCreated{
 		PipelineID: p.GetId(),
 		RevisionID: revision.ID,
+		Inputs:     inputs,
+		StartedBy:  startedBy,
 	})
 	if err != nil {
 		return "", err

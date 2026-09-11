@@ -24,7 +24,10 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/gen/dhole/v1/dholev1connect"
+	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/server"
+	"github.com/azrtydxb/dhole/internal/trigger"
 )
 
 // webhookPipeline declares one free structured input, which IS the pipeline's
@@ -342,4 +345,147 @@ func TestACreatedTriggerIsRefusedForAnInputThePipelineDoesNotDeclare(t *testing.
 
 	// Nothing was stored, so the refusal is not merely cosmetic.
 	require.Empty(t, listTriggers(ctx, t, srv))
+}
+
+// scheduledPipeline declares one free input whose schema demands an OBJECT.
+//
+// It exists for the schedule trigger, whose event fields are all strings: a
+// binding onto this port passes ValidateBinding (the port IS structured) and
+// can only ever produce a value the port refuses. That is the "wrong type"
+// half of this item, and it is reachable with no forge, no webhook and no
+// revision race.
+func scheduledPipeline(id string) *dholev1.Pipeline {
+	return &dholev1.Pipeline{
+		Id:     id,
+		Tenant: &dholev1.Tenant{Id: tenantID},
+		Steps: []*dholev1.Step{{
+			Id:          "work",
+			PluginRef:   `command:{"args":["/bin/sh","-c","printf %s ok > outputs/out"]}`,
+			EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+			Inputs: []*dholev1.Port{{
+				Name: "event",
+				Type: &dholev1.PortType{Kind: &dholev1.PortType_Structured{
+					Structured: &dholev1.StructType{
+						SchemaId: "dhole:test/occurrence",
+						Schema:   `{"type":"object"}`,
+					},
+				}},
+			}},
+			Outputs: []*dholev1.Port{blobPort("out")},
+		}},
+	}
+}
+
+// runCreated is the payload a run starts from, read back off the run's own log
+// — which is the only place a run's position lives (ADR 0003) and therefore
+// the only honest way to ask what a run was started with.
+func runCreated(
+	ctx context.Context, t *testing.T, srv *server.Server, runID string,
+) scheduler.RunCreated {
+	t.Helper()
+	events, err := srv.Events(ctx, tenantID, runID)
+	require.NoError(t, err)
+	for _, e := range events {
+		if e.Type != runstore.RunCreated {
+			continue
+		}
+		created, err := scheduler.UnmarshalRunCreated(e.Payload)
+		require.NoError(t, err)
+		return created
+	}
+	t.Fatalf("run %q has no %s event", runID, runstore.RunCreated)
+	return scheduler.RunCreated{}
+}
+
+// TestTheRunATriggerStartsCarriesTheValueTheTriggerBoundToItsInput is the
+// clause this item is down to. A trigger's whole purpose is to supply a
+// pipeline's declared inputs (ADR 0007); a trigger that started a run carrying
+// nothing would be indistinguishable from somebody pressing the button, and
+// everything the event carried would be gone.
+func TestTheRunATriggerStartsCarriesTheValueTheTriggerBoundToItsInput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	pipeline := webhookPipeline("carries-its-inputs")
+	srv := startEmbeddedOn(ctx, t, dir)
+	approveThroughTheContract(ctx, t, srv, dir, pipeline)
+
+	_, err := createTrigger(ctx, srv, &dholev1.Trigger{
+		Id:           "hook",
+		Kind:         "http",
+		PipelineId:   pipeline.GetId(),
+		InputMapping: map[string]string{"event": "ref"},
+		Untrusted:    true,
+	})
+	require.NoError(t, err)
+	awaitWebhookServed(ctx, t, srv, "hook", `{"ref":"refs/heads/main"}`)
+
+	runID := awaitAnyRun(ctx, t, srv)
+	created := runCreated(ctx, t, srv, runID)
+
+	require.Contains(t, created.Inputs, "event",
+		"the trigger bound an input and the run it started carries none of it")
+	value := created.Inputs["event"]
+	require.Equal(t, "refs/heads/main", trigger.UntaintedValue(value).GetStringValue(),
+		"the run carries an input under the right name and the wrong value")
+
+	// Provenance, not flattened into "an input": this value came from an
+	// unauthenticated POST, and a run log that forgot that would leave the
+	// taint gate (ADR 0015) with nothing to act on when the run is replayed.
+	require.True(t, trigger.IsTainted(value),
+		"a value an untrusted trigger admitted reached the run log untainted")
+	require.Equal(t, "http:hook", trigger.TaintSource(value),
+		"the run log does not say which boundary the value crossed")
+
+	// And WHO started the run, for the same reason the trigger store keeps
+	// created_by: "why did this run happen" is the first question after one
+	// fires unexpectedly.
+	require.Equal(t, "http:hook", created.StartedBy)
+}
+
+// TestATriggerWhoseBoundValueThePipelineRefusesStartsNoRunAtAll is the failure
+// mode this item is actually about: a trigger that quietly starts a run with
+// an input the pipeline cannot use is worse than one that does not fire,
+// because the run looks like it was meant to happen.
+//
+// The schedule trigger is the sharp case. Every field of its event is a
+// string, so binding one onto a port whose schema demands an object is a
+// mistake ValidateBinding cannot see — it checks names and port kinds, not
+// values — and until the values reached the run there was nothing on the fire
+// path that checked them either.
+func TestATriggerWhoseBoundValueThePipelineRefusesStartsNoRunAtAll(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	pipeline := scheduledPipeline("refuses-the-wrong-type")
+	seed := startEmbeddedOn(ctx, t, dir)
+	approveThroughTheContract(ctx, t, seed, dir, pipeline)
+	stopPlane(t, seed)
+
+	srv := startEmbeddedWith(ctx, t, func(cfg *server.Config) {
+		cfg.StoreDSN = filepath.Join(dir, "dhole.db")
+		cfg.BlobRoot = filepath.Join(dir, "state")
+		cfg.Triggers = []server.TriggerSpec{{
+			ID:         "every-second",
+			Kind:       "schedule",
+			PipelineID: pipeline.GetId(),
+			// Six fields: seconds first, so the boundary is every second and
+			// the test does not sleep past a minute to find out.
+			Expression:   "* * * * * *",
+			InputMapping: map[string]string{"event": "scheduled_for"},
+		}}
+	})
+
+	// Several boundaries, so this is not a test that merely got in before the
+	// first one.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err := srv.OpenRuns(ctx, tenantID)
+		require.NoError(t, err)
+		require.Empty(t, runs,
+			"a schedule bound a string onto a port declaring an object and a run started anyway")
+		time.Sleep(200 * time.Millisecond)
+	}
 }

@@ -624,7 +624,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       server, and to do the same for `internal/tenant`'s account permissions.
       A Go-side check is not the fix: an engine in another language would not
       have it.
-- [ ] **A trigger's bound inputs never reach the run it starts.** (Was: "a
+- [x] **A trigger's bound inputs never reach the run it starts.** (Was: "a
       pipeline cannot name the image its steps run in" — that, the repository
       file reference and the loop body syntax are all closed; see below.) (the executor's pod
       template does) — CLOSED on all three counts it once named.
@@ -638,8 +638,24 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       change at all and the digest lands in the cache key for free. The LOOP
       BODY's syntax is closed by ADR 0022: `config.body` holds a
       `dhole.v1.Pipeline` as JSON and an iteration is spliced into the run
-      under its own id prefix. Still open in this item: a trigger's bound
-      inputs reach the sink and no run carries them.
+      under its own id prefix. CLOSED on the last count too. The seam was
+      `Server.triggerSink`: it called `s.Submit(ctx, tenantID, pipeline)`,
+      which takes no inputs, and put the bound values in a log line. They now
+      travel on the `RUN_CREATED` payload —
+      `scheduler.RunCreated.Inputs`/`.StartedBy`, written through
+      `Server.SubmitWithInputs` — which is the run log `WatchRun` already
+      streams, so nothing new was added to the wire and there is no second
+      channel to replay. A tainted value is stored WRAPPED, so the run log
+      says which boundary the value crossed rather than flattening it into
+      "an input" (ADR 0015). The sink is now also the gate: every fire is
+      checked with `trigger.ValidateInputs` against the ACTIVE revision the
+      run is about to pin — not the pipeline the trigger was configured with —
+      and a binding that supplied nothing is refused by name, so no run starts
+      on bare ports. `schedule` had no value check at all before this.
+      Left open deliberately, and NOT part of this item's text: a step does
+      not yet READ one of these values at its port, which needs the value
+      materialised in the CAS and resolved into the same `InputRef` an edge
+      produces.
 - [x] **The LLM step halts the run it is given** when it gives up, so an
       off-schema answer cannot be asserted within a run that must continue.
       Closed: giving up now records `STEP_FAILED` and nothing else, so whether

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
@@ -2007,6 +2008,27 @@ func executorLeaseScope(s dholev1.LeaseScope) executor.LeaseScope {
 type RunCreated struct {
 	PipelineID string `json:"pipeline_id"`
 	RevisionID string `json:"revision_id"`
+	// Inputs are the values whatever started this run supplied for the
+	// pipeline's DECLARED inputs — the free ports no edge feeds (ADR 0007).
+	//
+	// They live here because a run's log is the only place a run's position
+	// lives (ADR 0003), so it is the only place that can still answer "what
+	// was this started with" after the process that started it is gone. A
+	// trigger used to hand these to the sink and the sink used to log them
+	// and drop them, which made a fired run indistinguishable from one
+	// somebody pressed the button for.
+	//
+	// A tainted value is recorded WRAPPED, exactly as the trigger produced
+	// it: the mark is what says the value came from outside (ADR 0015), and
+	// unwrapping it here to store "just the data" would flatten the one
+	// distinction the taint gate exists to act on.
+	Inputs map[string]*structpb.Value `json:"inputs,omitempty"`
+	// StartedBy names the trigger that supplied those inputs, as
+	// "<kind>:<id>". Empty for a run somebody started through the contract.
+	// It is the run-log half of the question the trigger table's created_by
+	// answers for the trigger itself: after a run fires unexpectedly, the
+	// first thing anyone needs is what put it there.
+	StartedBy string `json:"started_by,omitempty"`
 }
 
 // Dispatched is the payload of a STEP_DISPATCHED event.
