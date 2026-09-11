@@ -459,7 +459,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       against a live Postgres, and through the served contract in
       `internal/server/files_api_test.go`. ADR 0023 is completed, not changed,
       so no record supersedes it.
-- [ ] **A parked agent step is not resumed after its gate is decided.** All
+- [x] **A parked agent step is not resumed after its gate is decided.** All
       five clauses of the original "what the plane does not host" are closed. (a) is closed by ADR 0025 and
       `internal/steps/agent/contract.go` + `internal/server/agent.go`: an agent
       acts ONLY through Dhole's own public API, as a principal of its tenant,
@@ -476,11 +476,38 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       closed in their own entries below, and (c) is closed by ADR 0022 — a
       `builtin:loop` body is a `dhole.v1.Pipeline` fragment in `config.body`,
       spliced into the SAME run under its own id prefix rather than becoming a
-      nested run. All five original clauses are therefore done. WHAT REMAINS,
-      and it is new rather than one of the five: a parked agent is not resumed
-      after a person decides its gate. Re-entering the model's loop at the call
-      it stopped on needs its own task, so the step fails with the gate's own
-      reason and the run stops readably rather than hanging.
+      nested run. All five original clauses are therefore done. THE SIXTH,
+      which was new rather than one of the five, is now closed too: a parked
+      agent IS resumed. It parks rather than failing — the model's loop
+      suspends with the gated batch unexecuted — and `AGENT_PARKED` records
+      the whole conversation, the ids of the calls the person is being asked
+      about and how much of `max_steps` was spent, in the run log and nowhere
+      else (ADR 0003: the plane that parked it may be gone when a person wakes
+      up). The gate records that it PARKS a step rather than IS one
+      (`approval.Request.Parks`, `RequestPark`), so an approval writes
+      `STEP_RESUMED` instead of `STEP_SUCCEEDED` — the scheduler folds that as
+      "out of flight, dispatchable again" — and the step is re-dispatched,
+      reads its own park record and re-enters the loop AT THE CALL IT STOPPED
+      ON. REPLAY SAFETY is the SDK's own suspend/resume and not a skip list:
+      the parked conversation is handed back verbatim with every earlier call
+      already answered in it, so the model is never re-prompted and no earlier
+      action is taken a second time — which for an agent acting through the
+      public API would mean a second run started or a second operation
+      applied. The CEILING is not reset: a resume gets `max_steps` minus what
+      was spent, and a loop that parked on its last step is refused with
+      `ErrCeilingSpent`. A DENIAL ends the step and fails the run naming the
+      approver rather than being handed back to the model as a tool result —
+      an agent told "no" and left running routes around the person who said
+      it, and a gate is keyed on (run, step) so there is no second gate for
+      whatever it tried next. `SweepOrphans` no longer fails a step waiting at
+      a gate: its holder finished and went away, and a lease TTL is not how
+      long a person has to decide. One gate per step per run stands, and a
+      second park is refused by the standing decision with the step failing
+      readably. Proved end to end through the shipping plane in
+      `internal/server/agent_resume_e2e_test.go` — approve and deny — and
+      property by property in `internal/steps/agent/park_test.go`. No ADR: it
+      completes ADR 0025 and ADR 0015 rather than changing either. No
+      migration: the events are rows in `run_events`, which needs no schema.
 - [x] **(b) Nothing leased the PLANE a secret, so `builtin:llm` had no key.**
       `server.Config.Models` was a factory a deployment had to construct with an
       API key in hand, and the CLI passed none — so every `builtin:llm` step

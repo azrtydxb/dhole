@@ -27,7 +27,12 @@
 // An at-most-once action is ROUTED to Task 20's gate, not executed and then
 // reported. The gate is the same one a person's approval queue reads, so an
 // agent asking to deploy appears where a human asking to deploy appears; a
-// separate agent-approval path would be a second queue nobody watches.
+// separate agent-approval path would be a second queue nobody watches. The
+// step PARKS there rather than failing: the loop suspends with the gated
+// batch unexecuted, its whole conversation goes in the run log, and a
+// person's approval resumes it at the call it stopped on — see park.go and
+// Resume. Failing with the gate's own reason was a holding position while
+// that did not exist, and it threw away the work the agent had already done.
 //
 // The loop is bounded by MaxSteps, refused at configuration when it is not
 // positive. A model that always calls a tool never stops on its own, and the
@@ -39,6 +44,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +88,22 @@ var (
 	// approval to. Refused at construction, because discovering it at the
 	// moment of a deploy is discovering it too late.
 	ErrNoGate = errors.New("agent: an at-most-once grant needs an approval gate")
+
+	// ErrDenied: a person refused the gate a parked agent was waiting at.
+	// The step is over; see Resume for why a denial is not handed back to
+	// the model as something it can react to.
+	ErrDenied = errors.New("agent: the gate was denied")
+
+	// ErrCeilingSpent: the loop parked with none of its step ceiling left,
+	// so there is nothing to resume into. A resume that reset the ceiling
+	// would make an approval a way around ADR 0015's bound.
+	ErrCeilingSpent = errors.New("agent: the step ceiling was spent before the gate was decided")
+
+	// ErrUnrecorded: the loop cannot park because nothing would record where
+	// it stopped. A run's position lives in the log and nowhere else
+	// (ADR 0003), so an agent with no store cannot be parked — it would wait
+	// for a person and then have nothing to come back to.
+	ErrUnrecorded = errors.New("agent: a parked agent needs a run store to record its position")
 )
 
 // Invocation is one request to run a granted step.
@@ -109,8 +131,15 @@ type Invoker interface {
 
 // Gate is Task 20's approval step, narrowed to the one thing this package
 // asks of it. *approval.Step satisfies it directly.
+//
+// RequestPark rather than Request, and the difference is the whole of the
+// resume: an approval STEP is the gate, so deciding it decides the step. An
+// agent step is PARKED at a gate it opened in the middle of its own work, so
+// deciding it releases the step to carry on. A gate that could not tell the
+// two apart marked a parked agent succeeded on an answer it never gave —
+// which is what the log showed before this existed.
 type Gate interface {
-	Request(ctx context.Context, runID, stepID, prompt string) error
+	RequestPark(ctx context.Context, runID, stepID, prompt string) error
 }
 
 // Config is the pipeline author's half of an agent step.
@@ -256,6 +285,18 @@ func needsApproval(step *dholev1.Step) bool {
 // place the three rules are enforced. Every refusal below leaves the invoker
 // untouched: nothing ran.
 func (s *Step) Invoke(ctx context.Context, inv Invocation) (json.RawMessage, error) {
+	return s.invoke(ctx, inv, nil)
+}
+
+// invoke is Invoke with the resume window the model's loop carries.
+//
+// The window is not a field of Invocation, and that is deliberate: an
+// exported "this one was approved" flag on a struct any caller can build is a
+// gate anybody can open. It is threaded from the tool the SDK is executing
+// and from nowhere else.
+func (s *Step) invoke(
+	ctx context.Context, inv Invocation, window *resumeWindow,
+) (json.RawMessage, error) {
 	if inv.RunID == "" || inv.StepID == "" {
 		return nil, errors.New("agent: a run and a step are required")
 	}
@@ -277,11 +318,20 @@ func (s *Step) Invoke(ctx context.Context, inv Invocation) (json.RawMessage, err
 		return nil, err
 	}
 
-	// 3. The approval gate. Routed to, not reported after.
+	// 3. The approval gate. Routed to, not reported after — unless a person
+	// has ALREADY decided this exact call, which is the resume: the window
+	// holds the gate's standing decision for the calls the parked loop was
+	// stopped on, and for no others. Asking again here would park a step a
+	// person has just released, forever.
 	if needsApproval(action) {
-		err := s.requestApproval(ctx, inv)
-		s.record(ctx, inv, false, err)
-		return nil, err
+		approver, decided := window.consume(inv.Action)
+		if !decided {
+			err := s.awaitApproval(inv)
+			s.record(ctx, inv, false, err)
+			return nil, err
+		}
+		s.recordApproved(ctx, inv, approver)
+		return s.invoker.Invoke(ctx, inv)
 	}
 
 	// The action is recorded BEFORE it is taken, and the record says it was
@@ -312,6 +362,10 @@ type ActionRecord struct {
 	Allowed bool   `json:"allowed"`
 	// Reason is why a refused action did not happen, and empty otherwise.
 	Reason string `json:"reason,omitempty"`
+	// Approver names the person whose decision let an at-most-once action
+	// through, and is empty for everything else. Without it the log said an
+	// agent had taken a gated action and not on whose authority.
+	Approver string `json:"approver,omitempty"`
 }
 
 // record appends one attempted action to the run log.
@@ -322,10 +376,24 @@ type ActionRecord struct {
 // full disk into an outage. The decisions that must not happen unrecorded are
 // the policy ones, and those already fail closed in internal/policy.
 func (s *Step) record(ctx context.Context, inv Invocation, allowed bool, cause error) {
+	s.appendAction(ctx, inv, ActionRecord{
+		Subject: s.subject, Action: inv.Action, Allowed: allowed,
+	}, cause)
+}
+
+// recordApproved records an action a named person let through.
+func (s *Step) recordApproved(ctx context.Context, inv Invocation, approver string) {
+	s.appendAction(ctx, inv, ActionRecord{
+		Subject: s.subject, Action: inv.Action, Allowed: true, Approver: approver,
+	}, nil)
+}
+
+func (s *Step) appendAction(
+	ctx context.Context, inv Invocation, record ActionRecord, cause error,
+) {
 	if s.store == nil {
 		return
 	}
-	record := ActionRecord{Subject: s.subject, Action: inv.Action, Allowed: allowed}
 	if cause != nil {
 		record.Reason = cause.Error()
 	}
@@ -399,18 +467,16 @@ func (s *Step) checkTaint(ctx context.Context, inv Invocation, action *dholev1.S
 		ErrTainted, inv.StepID, decision.Reason, decision.Rule)
 }
 
-// requestApproval routes the call to Task 20's gate and returns without
-// running anything. The gate's event is the same STEP_AWAITING_APPROVAL a
-// person's queue reads, appended against the AGENT's step: the run is now
-// waiting for somebody, exactly as it would be for a human-authored gate.
-func (s *Step) requestApproval(ctx context.Context, inv Invocation) error {
+// awaitApproval is the refusal the direct Invoke path returns for an
+// at-most-once action.
+//
+// It asks for NOTHING and writes nothing: the gate is opened once, after the
+// model's loop has suspended and the whole batch it suspended on is known
+// (see park). A gate opened from inside the tool loop was how this used to
+// work, and it could only ever name one action of a batch.
+func (s *Step) awaitApproval(inv Invocation) error {
 	if s.gate == nil {
 		return fmt.Errorf("%w: %q", ErrNoGate, inv.Action)
-	}
-	prompt := fmt.Sprintf(
-		"agent step %q wants to invoke the at-most-once step %q; approve?", inv.StepID, inv.Action)
-	if err := s.gate.Request(ctx, inv.RunID, inv.StepID, prompt); err != nil {
-		return fmt.Errorf("agent: requesting approval for %q: %w", inv.Action, err)
 	}
 	return fmt.Errorf("%w: %q is at-most-once; the run is waiting for a decision",
 		ErrApprovalRequired, inv.Action)
@@ -422,10 +488,12 @@ func (s *Step) requestApproval(ctx context.Context, inv Invocation) error {
 // invocation uses, so a tool for an ungranted step cannot be built — and if
 // one somehow were, its Execute would still be refused.
 func (s *Step) AsTool(action string) (ai.Tool, error) {
-	return s.asTool(action, "", "", newGuard())
+	return s.asTool(action, "", "", newGuard(), nil)
 }
 
-func (s *Step) asTool(action, runID, stepID string, g *guard) (ai.Tool, error) {
+func (s *Step) asTool(
+	action, runID, stepID string, g *guard, window *resumeWindow,
+) (ai.Tool, error) {
 	if err := s.actions.Check(action); err != nil {
 		return nil, err
 	}
@@ -442,6 +510,7 @@ func (s *Step) asTool(action, runID, stepID string, g *guard) (ai.Tool, error) {
 		runID:  runID,
 		stepID: stepID,
 		guard:  g,
+		window: window,
 	})
 	if needsApproval(def) {
 		// The SDK's own approval hook, so an at-most-once call is stopped
@@ -455,14 +524,16 @@ func (s *Step) asTool(action, runID, stepID string, g *guard) (ai.Tool, error) {
 // Tools is the action space as the model sees it: granted steps and nothing
 // else.
 func (s *Step) Tools() ([]ai.Tool, error) {
-	return s.toolsFor("", "", newGuard())
+	return s.toolsFor("", "", newGuard(), nil)
 }
 
-func (s *Step) toolsFor(runID, stepID string, g *guard) ([]ai.Tool, error) {
+func (s *Step) toolsFor(
+	runID, stepID string, g *guard, window *resumeWindow,
+) ([]ai.Tool, error) {
 	names := s.actions.Names()
 	tools := make([]ai.Tool, 0, len(names))
 	for _, name := range names {
-		tool, err := s.asTool(name, runID, stepID, g)
+		tool, err := s.asTool(name, runID, stepID, g, window)
 		if err != nil {
 			return nil, err
 		}
@@ -471,7 +542,31 @@ func (s *Step) toolsFor(runID, stepID string, g *guard) ([]ai.Tool, error) {
 	return tools, nil
 }
 
-// Run drives the model's bounded tool-calling loop.
+// Outcome is what one segment of an agent's loop produced.
+//
+// A loop that finished has Text. A loop that PARKED at a gate has Parked, and
+// it is not an error: the step has not failed, it is waiting for a person,
+// and whoever ran it must leave the run exactly where it is.
+type Outcome struct {
+	// Text is the model's final answer, empty when the loop parked.
+	Text string
+	// Parked, when non-nil, is where the loop stopped and everything needed
+	// to re-enter it. It has already been written to the run log.
+	Parked *ParkRecord
+	// Result is the SDK's own result, for anything that wants the steps or
+	// the usage behind the answer.
+	Result *ai.GenerateTextResult
+}
+
+// Decision is a gate's outcome as the step is told it.
+type Decision struct {
+	// Approver is the person the plane authenticated, never a name anyone
+	// supplied.
+	Approver string
+	Approved bool
+}
+
+// Run drives the model's bounded tool-calling loop from a prompt.
 //
 // It returns the SDK's result on success and this package's own refusal when
 // the agent tried something it may not do — including when the SDK's loop was
@@ -479,14 +574,76 @@ func (s *Step) toolsFor(runID, stepID string, g *guard) ([]ai.Tool, error) {
 // a tool error is handed back to the model as a result and the loop continues,
 // so an agent refused a deploy would try something else and the run would end
 // reporting success.
-func (s *Step) Run(
-	ctx context.Context, runID, stepID, prompt string,
-) (*ai.GenerateTextResult, error) {
+func (s *Step) Run(ctx context.Context, runID, stepID, prompt string) (*Outcome, error) {
 	if runID == "" || stepID == "" {
 		return nil, errors.New("agent: a run and a step are required")
 	}
+	return s.generate(ctx, runID, stepID,
+		agent.RunOpts{Prompt: prompt}, nil, s.MaxSteps, ParkRecord{})
+}
+
+// Resume re-enters a parked loop at the call it stopped on.
+//
+// The conversation comes back verbatim out of the park record, so the model is
+// never asked to decide again what it has already decided: every earlier tool
+// call is in the transcript ALREADY ANSWERED, and the SDK answers the one
+// unanswered batch from the person's decision without making a model call
+// first. That is the replay-safety mechanism and it is the only one — nothing
+// here re-invokes anything, because nothing here re-asks for anything.
+//
+// A DENIAL does not come here. It ends the step, and both halves of that are
+// deliberate. Handing the refusal back to the model as a tool result would
+// leave an agent that has just been told "no" running, free to reach the same
+// effect another way, and the person who refused would have no say in what
+// happened next — the same failure the guard exists for. And a gate is keyed
+// on (run, step): there is exactly one per agent step per run, so there is no
+// second gate to route whatever it tried next to. A denial is a decision, not
+// a suggestion.
+func (s *Step) Resume(
+	ctx context.Context, runID, stepID string, park ParkRecord, decision Decision,
+) (*Outcome, error) {
+	if runID == "" || stepID == "" {
+		return nil, errors.New("agent: a run and a step are required")
+	}
+	if !decision.Approved {
+		return nil, fmt.Errorf("%w: %s refused %q for %s/%s",
+			ErrDenied, decision.Approver, strings.Join(park.Actions, ", "), runID, stepID)
+	}
+	if strings.TrimSpace(decision.Approver) == "" {
+		// An approval by nobody is not an approval, and this one is about to
+		// let an at-most-once action through.
+		return nil, fmt.Errorf("%w: %s/%s was resumed with no approver", ErrDenied, runID, stepID)
+	}
+	messages, err := park.Messages()
+	if err != nil {
+		return nil, err
+	}
+	// What is left of the ceiling, not a fresh one. An approval is a person
+	// saying yes to an action; it is not a person doubling the loop bound.
+	ceiling := s.MaxSteps - park.StepsUsed
+	if ceiling <= 0 {
+		return nil, fmt.Errorf("%w: %d of %d steps were spent before the gate opened",
+			ErrCeilingSpent, park.StepsUsed, s.MaxSteps)
+	}
+
+	approvals := make([]ai.ApprovalDecision, 0, len(park.ToolCallIDs))
+	for _, id := range park.ToolCallIDs {
+		approvals = append(approvals, ai.ApprovalDecision{
+			ToolCallID: id, Approved: true, Reason: "approved by " + decision.Approver,
+		})
+	}
+	window := newResumeWindow(decision.Approver, park.Actions)
+	return s.generate(ctx, runID, stepID,
+		agent.RunOpts{Messages: messages, Approvals: approvals}, window, ceiling, park)
+}
+
+// generate runs one segment of the loop: the first one, or a resumed one.
+func (s *Step) generate(
+	ctx context.Context, runID, stepID string,
+	run agent.RunOpts, window *resumeWindow, ceiling int, prior ParkRecord,
+) (*Outcome, error) {
 	g := newGuard()
-	tools, err := s.toolsFor(runID, stepID, g)
+	tools, err := s.toolsFor(runID, stepID, g, window)
 	if err != nil {
 		return nil, err
 	}
@@ -497,16 +654,17 @@ func (s *Step) Run(
 		Tools:        tools,
 		// The ceiling. Not the SDK's default of eight, which is a number
 		// nobody chose for this pipeline.
-		MaxSteps: s.MaxSteps,
+		MaxSteps: ceiling,
 		StopWhen: func([]ai.Step) bool { return g.err() != nil },
 		ApproveToolCall: func(
 			ctx context.Context, req ai.ApprovalRequest,
 		) (ai.ApprovalDecision, bool) {
-			refusal := s.approve(ctx, runID, stepID, req.Call.Name)
-			g.record(refusal)
-			return ai.ApprovalDecision{
-				ToolCallID: req.Call.ID, Approved: false, Reason: refusal.Error(),
-			}, true
+			// No decision is available here, EVER, and the false is the
+			// point: it suspends the loop with the batch unexecuted rather
+			// than denying it. An approval is a person's act, and a hook
+			// that could say yes would be an agent approving itself.
+			s.recordAsked(ctx, runID, stepID, req.Call.Name)
+			return ai.ApprovalDecision{}, false
 		},
 		PrepareOpts: func(opts *ai.GenerateTextOpts) {
 			// The SDK's transport retry is off, for ADR 0002's reason: the
@@ -514,15 +672,20 @@ func (s *Step) Run(
 			// call is safe, and a retry budget hidden in a library is a
 			// second, invisible answer.
 			opts.MaxRetries = new(int)
+			// The resume window closes at the first model call. Everything
+			// before that is the batch the person decided; everything after
+			// is the model asking for something new, which needs a gate of
+			// its own.
+			opts.OnModelCallStart = func(int, provider.Call) { window.close() }
 		},
 	}
 
-	result, genErr := a.Generate(ctx, agent.RunOpts{Prompt: prompt})
+	result, genErr := a.Generate(ctx, run)
 	// The guard first: a refusal recorded by a tool is what actually happened,
 	// and the SDK's own error (or lack of one) is a description of a loop that
 	// carried on around it.
 	if refusal := g.err(); refusal != nil {
-		return result, refusal
+		return nil, refusal
 	}
 	if genErr != nil {
 		// A name the model invented never reached a tool, so it never reached
@@ -536,27 +699,165 @@ func (s *Step) Run(
 		}
 		return nil, fmt.Errorf("agent: %s/%s: %w", runID, stepID, genErr)
 	}
-	return result, nil
+	if len(result.PendingApprovals) > 0 {
+		record, err := s.park(ctx, runID, stepID, result, prior)
+		if err != nil {
+			return nil, err
+		}
+		return &Outcome{Parked: record, Result: result}, nil
+	}
+	return &Outcome{Text: result.Text, Result: result}, nil
 }
 
-// approve is the ApproveToolCall hook: it routes to the gate and refuses. It
-// never approves — an approval is a person's act, and a hook that could say
-// yes would be an agent approving itself.
-func (s *Step) approve(ctx context.Context, runID, stepID, action string) error {
+// park writes down where the loop stopped and opens the gate, in that order.
+//
+// The ORDER is the crash-safety rule. A gate opened before the position was
+// recorded is a run that waits for a person and then has nothing to come back
+// to — it would hang on a decision that could not be acted on. Recorded first,
+// a plane that dies in between leaves a step holding a lease and no gate,
+// which the orphan sweeper finds and fails readably.
+func (s *Step) park(
+	ctx context.Context, runID, stepID string,
+	result *ai.GenerateTextResult, prior ParkRecord,
+) (*ParkRecord, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("%w: %s/%s", ErrUnrecorded, runID, stepID)
+	}
+	if s.gate == nil {
+		return nil, fmt.Errorf("%w: %q", ErrNoGate, strings.Join(pendingNames(result), ", "))
+	}
+	transcript, err := encodeTranscript(result.Messages)
+	if err != nil {
+		return nil, err
+	}
+	record := ParkRecord{
+		Subject:     s.subject,
+		Actions:     pendingNames(result),
+		ToolCallIDs: pendingCallIDs(result),
+		Transcript:  transcript,
+		StepsUsed:   prior.StepsUsed + len(result.Steps),
+		Usage: Usage{
+			InputTokens:  prior.Usage.InputTokens + result.Usage.InputTokens,
+			OutputTokens: prior.Usage.OutputTokens + result.Usage.OutputTokens,
+		},
+	}
+	payload, err := MarshalPark(record)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.Append(ctx, s.tenantID, runstore.Event{
+		RunID:   runID,
+		StepID:  stepID,
+		Type:    EventParked,
+		Payload: payload,
+		At:      time.Now().UTC(),
+	}); err != nil {
+		return nil, fmt.Errorf("agent: recording where %s/%s parked: %w", runID, stepID, err)
+	}
+
+	// One gate for the whole suspended batch, and the prompt names every
+	// action in it: the SDK executes a batch all or not at all, so one
+	// decision is what a person is actually being asked for.
+	prompt := fmt.Sprintf(
+		"agent step %q wants to invoke the at-most-once step %s; approve?",
+		stepID, quoteAll(record.Actions))
+	if err := s.gate.RequestPark(ctx, runID, stepID, prompt); err != nil {
+		return nil, fmt.Errorf("agent: requesting approval for %s: %w",
+			quoteAll(record.Actions), err)
+	}
+	return &record, nil
+}
+
+func pendingNames(result *ai.GenerateTextResult) []string {
+	names := make([]string, 0, len(result.PendingApprovals))
+	for _, p := range result.PendingApprovals {
+		names = append(names, p.Call.Name)
+	}
+	return names
+}
+
+func pendingCallIDs(result *ai.GenerateTextResult) []string {
+	ids := make([]string, 0, len(result.PendingApprovals))
+	for _, p := range result.PendingApprovals {
+		ids = append(ids, p.Call.ID)
+	}
+	return ids
+}
+
+func quoteAll(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, strconv.Quote(n))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// recordAsked puts an at-most-once request in the run log at the moment it was
+// asked for, refused.
+//
+// It is recorded HERE rather than in Invoke, and it is not a duplicate: the
+// SDK's approval hook stops an at-most-once call BEFORE Execute, so an
+// at-most-once action asked for through the model's loop never reaches Invoke
+// at all. Without this the run log held the gate event and no record of which
+// agent asked for what — which is the question the gate exists to put to a
+// person.
+func (s *Step) recordAsked(ctx context.Context, runID, stepID, action string) {
 	inv := Invocation{RunID: runID, StepID: stepID, Action: action}
 	if err := s.actions.Check(action); err != nil {
 		s.record(ctx, inv, false, err)
-		return err
+		return
 	}
-	err := s.requestApproval(ctx, inv)
-	// Recorded HERE as well as in Invoke, and it is not a duplicate: the SDK's
-	// own approval hook stops an at-most-once call BEFORE Execute, so an
-	// at-most-once action asked for through the model's loop never reaches
-	// Invoke at all. Without this the run log held the gate event and no
-	// record of which agent asked for what — which is the question the gate
-	// exists to put to a person.
-	s.record(ctx, inv, false, err)
-	return err
+	s.record(ctx, inv, false, fmt.Errorf(
+		"%w: %q is at-most-once; the run is waiting for a decision",
+		ErrApprovalRequired, action))
+}
+
+// resumeWindow carries a person's standing decision into the one batch it was
+// made about, and no further.
+//
+// Two things bound it, because one would not be enough. The WINDOW closes at
+// the first model call of the resumed segment: everything the SDK runs before
+// that is the batch the loop suspended on, and everything after is the model
+// asking for something new. The COUNT bounds it within that batch: a decision
+// about two `start_run` calls answers two, not every `start_run` the rest of
+// the loop can think of.
+type resumeWindow struct {
+	mu        sync.Mutex
+	open      bool
+	approver  string
+	remaining map[string]int
+}
+
+func newResumeWindow(approver string, actions []string) *resumeWindow {
+	remaining := make(map[string]int, len(actions))
+	for _, a := range actions {
+		remaining[a]++
+	}
+	return &resumeWindow{open: true, approver: approver, remaining: remaining}
+}
+
+// consume reports whether a person has already decided this call, and who.
+// A nil window has decided nothing, which is what the first run of a loop is.
+func (w *resumeWindow) consume(action string) (string, bool) {
+	if w == nil {
+		return "", false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.open || w.remaining[action] <= 0 {
+		return "", false
+	}
+	w.remaining[action]--
+	return w.approver, true
+}
+
+func (w *resumeWindow) close() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.open = false
 }
 
 // guard carries the first refusal out of the SDK's loop.

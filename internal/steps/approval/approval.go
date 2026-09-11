@@ -64,6 +64,14 @@ var (
 // is being asked.
 type Request struct {
 	Prompt string `json:"prompt"`
+	// Parks says the gate is one a step is PARKED at rather than one that IS
+	// a step — an agent that stopped mid-loop to ask (ADR 0025). It changes
+	// what an approval means: an approval step that is approved has
+	// succeeded, and a parked step that is approved has been RELEASED and
+	// must run again to finish what it was doing. Without this distinction a
+	// parked agent was marked succeeded on an answer it never produced, and
+	// the run completed carrying the output of a step that had failed.
+	Parks bool `json:"parks_step,omitempty"`
 }
 
 // Decision is the payload of a STEP_APPROVAL_DECIDED event.
@@ -151,10 +159,26 @@ func New(cfg Config) (*Step, error) {
 // Asking twice is the same question, not two: a redelivered command leaves one
 // outstanding request. Asking after a decision is refused — the gate is over.
 func (s *Step) Request(ctx context.Context, runID, stepID, prompt string) error {
+	return s.request(ctx, runID, stepID, prompt, false)
+}
+
+// RequestPark opens a gate a step is PARKED at: the step asked mid-flight and
+// is waiting to carry on rather than waiting to be finished. See Request.Parks.
+//
+// There is exactly ONE gate per (run, step), so a step can park once per run.
+// A second park in the same run is refused by the standing decision with
+// ErrAlreadyDecided, and the step fails saying so — which is a readable limit
+// rather than a silent one. Widening it means giving a gate an identity of its
+// own, which is a bigger change than this.
+func (s *Step) RequestPark(ctx context.Context, runID, stepID, prompt string) error {
+	return s.request(ctx, runID, stepID, prompt, true)
+}
+
+func (s *Step) request(ctx context.Context, runID, stepID, prompt string, parks bool) error {
 	if runID == "" || stepID == "" {
 		return errors.New("approval: a run and a step are required")
 	}
-	payload, err := json.Marshal(Request{Prompt: prompt})
+	payload, err := json.Marshal(Request{Prompt: prompt, Parks: parks})
 	if err != nil {
 		return fmt.Errorf("approval: request: %w", err)
 	}
@@ -226,7 +250,7 @@ func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, appro
 		if !gate.awaiting {
 			return fmt.Errorf("%w for %s/%s", ErrNotAwaiting, runID, stepID)
 		}
-		events, err := s.decision(runID, stepID, approver, approved)
+		events, err := s.decision(runID, stepID, approver, approved, gate.parks)
 		if err != nil {
 			return err
 		}
@@ -253,7 +277,16 @@ func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, appro
 }
 
 // decision is the event sequence a verdict writes.
-func (s *Step) decision(runID, stepID, approver string, approved bool) ([]runstore.Event, error) {
+//
+// An approved PARKED gate writes no verdict at all. The step is not finished —
+// it is released, and it has to run again to finish the work it stopped in the
+// middle of. STEP_RESUMED is what says so: the scheduler folds it as "this
+// attempt is out of flight and the step may be dispatched again", and the
+// step's own verdict comes from that next attempt. Writing STEP_SUCCEEDED here
+// instead reported an agent's answer that no model had given.
+func (s *Step) decision(
+	runID, stepID, approver string, approved, parks bool,
+) ([]runstore.Event, error) {
 	at := s.now().UTC()
 	decision, err := json.Marshal(Decision{Approver: approver, Approved: approved, At: at})
 	if err != nil {
@@ -262,6 +295,13 @@ func (s *Step) decision(runID, stepID, approver string, approved bool) ([]runsto
 	events := []runstore.Event{{
 		RunID: runID, StepID: stepID, Type: StepApprovalDecided, Payload: decision, At: at,
 	}}
+
+	if approved && parks {
+		return append(events, runstore.Event{
+			RunID: runID, StepID: stepID, Type: scheduler.StepResumed,
+			Payload: decision, At: at,
+		}), nil
+	}
 
 	if approved {
 		// An approval gate produces no artifacts; the status exists because
@@ -311,6 +351,10 @@ type gateState struct {
 	decided  bool
 	approved bool
 	approver string
+	// parks is Request.Parks, read back off the standing request: what an
+	// approval MEANS depends on it, and the request is the only place it was
+	// ever written down.
+	parks bool
 }
 
 // read folds this gate's events. It reads through the transaction rather than
@@ -341,6 +385,11 @@ func (s *Step) read(ctx context.Context, tx runstore.Tx, runID, stepID string) (
 		switch runstore.EventType(kind) {
 		case scheduler.StepAwaitingApproval:
 			state.awaiting = true
+			request, err := UnmarshalRequest(payload)
+			if err != nil {
+				return gateState{}, err
+			}
+			state.parks = request.Parks
 		case StepApprovalDecided:
 			decision, err := UnmarshalDecision(payload)
 			if err != nil {

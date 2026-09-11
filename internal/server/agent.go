@@ -31,6 +31,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/steps/agent"
+	"github.com/azrtydxb/dhole/internal/steps/approval"
 )
 
 // agentTokenTTL is how long an agent's credential lives.
@@ -45,8 +46,24 @@ const agentTokenTTL = 15 * time.Minute
 // bounds is a loopback request to this same process.
 const agentHTTPTimeout = 60 * time.Second
 
+// errStepParked is what runAgent returns when the agent stopped at a gate.
+//
+// It is an error only so that `attempt` writes no verdict: a parked step has
+// neither succeeded nor failed, and the run is waiting for a person. `run`
+// recognises it and records nothing, which is the difference between a run
+// that stops readably and a run that is still going.
+var errStepParked = errors.New("the agent step is parked at an approval gate")
+
 // runAgent is `builtin:agent`. It runs the model's bounded loop and writes the
 // final answer to the step's first output port.
+//
+// It is also the RESUME: a step dispatched again after its gate was decided
+// finds its own park record in the run log and re-enters the model's loop at
+// the call it stopped on, rather than starting a fresh conversation from the
+// prompt. Starting fresh is the failure this path exists to avoid — every tool
+// call the parked loop had already made would be made a second time, and an
+// agent acts through Dhole's public API (ADR 0025), so "a second time" means a
+// second run started, a second gate decided, a second operation applied.
 func (b *builtins) runAgent(
 	ctx context.Context, job builtinJob, _ uint32,
 ) ([]*dholev1.OutputRef, error) {
@@ -116,11 +133,84 @@ func (b *builtins) runAgent(
 		return nil, err
 	}
 
-	result, err := step.Run(ctx, job.runID, job.step.GetId(), prompt)
+	parked, decision, err := b.parkedAt(ctx, job)
 	if err != nil {
 		return nil, err
 	}
-	return b.emit(ctx, job, []byte(result.Text))
+
+	var out *agent.Outcome
+	if parked != nil {
+		out, err = step.Resume(ctx, job.runID, job.step.GetId(), *parked, decision)
+	} else {
+		out, err = step.Run(ctx, job.runID, job.step.GetId(), prompt)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if out.Parked != nil {
+		// The gate is armed and the position is recorded, both by the agent
+		// step itself. Nothing more happens here until a person decides.
+		b.log.Info("agent step parked at an approval gate",
+			"run", job.runID, "step", job.step.GetId(), "actions", out.Parked.Actions)
+		return nil, errStepParked
+	}
+	return b.emit(ctx, job, []byte(out.Text))
+}
+
+// parkedAt reads this step's position out of the run log: the park record it
+// left behind, and the decision a person made about the gate it opened.
+//
+// The log is the only place either lives (ADR 0003). A plane holding a parked
+// agent's conversation in memory would lose it to any restart, and the wait it
+// is holding open is measured in the time it takes a person to wake up.
+func (b *builtins) parkedAt(
+	ctx context.Context, job builtinJob,
+) (*agent.ParkRecord, agent.Decision, error) {
+	events, err := b.store.Replay(ctx, job.tenantID, job.runID)
+	if err != nil {
+		return nil, agent.Decision{}, err
+	}
+	var (
+		park     *agent.ParkRecord
+		decision agent.Decision
+		decided  bool
+	)
+	// In log order, and the LAST of each wins: a step that parked, was
+	// released and parked again is at its most recent position, and folding
+	// the earliest one would resume it into a conversation it has moved past.
+	for _, e := range events {
+		if e.StepID != job.step.GetId() {
+			continue
+		}
+		switch e.Type {
+		case agent.EventParked:
+			record, err := agent.UnmarshalPark(e.Payload)
+			if err != nil {
+				return nil, agent.Decision{}, err
+			}
+			park = &record
+			decided = false
+		case approval.StepApprovalDecided:
+			d, err := approval.UnmarshalDecision(e.Payload)
+			if err != nil {
+				return nil, agent.Decision{}, err
+			}
+			decision = agent.Decision{Approver: d.Approver, Approved: d.Approved}
+			decided = true
+		}
+	}
+	if park == nil {
+		return nil, agent.Decision{}, nil
+	}
+	if !decided {
+		// A parked step was dispatched with its gate still open. Nothing here
+		// may guess a decision, and running the loop again from the prompt is
+		// the replay this whole path exists to refuse.
+		return nil, agent.Decision{}, fmt.Errorf(
+			"agent step %q parked at a gate nobody has decided, and was dispatched anyway",
+			job.step.GetId())
+	}
+	return park, decision, nil
 }
 
 // agentGrants reads the closed set of contract actions this step was given.

@@ -288,6 +288,12 @@ func (b *builtins) run(ctx context.Context, job builtinJob) {
 	if err == nil || ctx.Err() != nil {
 		return
 	}
+	if errors.Is(err, errStepParked) {
+		// Neither succeeded nor failed: the step is waiting for a person, its
+		// gate is in the log, and writing a verdict here would close a run
+		// that has not finished. See runAgent.
+		return
+	}
 	b.log.Error("builtin step failed",
 		"run", job.runID, "step", job.step.GetId(),
 		"plugin_ref", job.step.GetPluginRef(), "error", err)

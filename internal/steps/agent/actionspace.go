@@ -120,6 +120,9 @@ type actionTool struct {
 	runID  string
 	stepID string
 	guard  *guard
+	// window is the gate's standing decision for the calls a parked loop was
+	// stopped on, and nil for a loop that was never parked.
+	window *resumeWindow
 }
 
 // Compile-time proof an action is the Tool the SDK's loop consumes.
@@ -140,9 +143,9 @@ func (t *actionTool) InputCallbacks() ai.ToolInputCallbacks {
 // and carries on: without the guard the agent would be told "no" and left free
 // to try the next thing, and the run would end successfully.
 func (t *actionTool) Execute(ctx context.Context, args json.RawMessage) (any, error) {
-	out, err := t.step.Invoke(ctx, Invocation{
+	out, err := t.step.invoke(ctx, Invocation{
 		RunID: t.runID, StepID: t.stepID, Action: t.action, Args: args,
-	})
+	}, t.window)
 	if err != nil {
 		t.guard.record(err)
 		return nil, err
