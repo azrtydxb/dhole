@@ -3,6 +3,8 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/engine"
+	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/process"
 )
 
@@ -349,4 +352,70 @@ func TestAnEngineWithFewerSlotsThanCapabilitySetsStillServesEveryOne(t *testing.
 
 	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, plain).GetPhase())
 	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, guarded).GetPhase())
+}
+
+// strictExecutor refuses any capability it does not advertise, which is what
+// the vm and containerd backends do and what process and kubernetes do not.
+// The difference is why this bug survived every unit test and both local
+// conformance runs: the two backends that check are the two nobody ran the
+// suite against.
+type strictExecutor struct {
+	executor.Executor
+	advertises []dholev1.Capability
+}
+
+func (strictExecutor) Capabilities() []dholev1.Capability { return nil }
+
+func (e strictExecutor) Acquire(ctx context.Context, spec executor.Spec) (executor.Sandbox, error) {
+	for _, want := range spec.Requirements.Capabilities {
+		if want == dholev1.Capability_CAPABILITY_UNSPECIFIED {
+			continue
+		}
+		if !slices.Contains(e.advertises, want) {
+			return nil, fmt.Errorf("strict executor: %s: capability not advertised by this backend", want)
+		}
+	}
+	return e.Executor.Acquire(ctx, spec)
+}
+
+// TestASandboxIsNotAskedForACapabilityTheAgentItselfSatisfies is the test whose
+// absence let this ship. CAPABILITY_SECRETS describes the AGENT — it redeems a
+// reference over the bus before any sandbox exists — and
+// `advertisedCapabilities` says so in as many words. But the agent handed the
+// executor the step's WHOLE capability set, secrets included, so a backend that
+// checks what it was asked for refused a step it was perfectly able to run.
+//
+// Found on kw on 2026-09-11 by running the engine conformance suite against the
+// vm executor on real KVM hardware: 10 passed, 1 failed, and the failure was
+// "vm executor: CAPABILITY_SECRETS: capability not advertised by this backend
+// (it advertises [CAPABILITY_PRIVILEGED])". The same step passes on the process
+// and kubernetes backends, which never check — so every local run was green.
+func TestASandboxIsNotAskedForACapabilityTheAgentItselfSatisfies(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	statuses := h.statuses(ctx, t, "run-secrets-sandbox", "secretive")
+
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-secrets-sandbox",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: strictExecutor{Executor: process.New()},
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+		Secrets:  &fakeRedeemer{value: secretValue},
+	})
+
+	d := newDispatch("run-secrets-sandbox", "secretive", "/bin/sh", "-c", "test -n \"$TOKEN\"")
+	d.Step.Capabilities = []dholev1.Capability{dholev1.Capability_CAPABILITY_SECRETS}
+	d.Secrets = []*dholev1.SecretRef{{
+		Name: "TOKEN", Handle: "handle-1", ExpiresAt: time.Now().Add(time.Minute).Unix(),
+	}}
+	h.publishDispatch(ctx, t, d)
+
+	status := awaitTerminal(ctx, t, statuses)
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, status.GetPhase(),
+		"the agent asked the sandbox for a capability only the agent can satisfy: %s", status.GetError())
 }

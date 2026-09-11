@@ -507,6 +507,25 @@ func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobSta
 	return status
 }
 
+// sandboxCapabilities drops the members a sandbox backend cannot answer for,
+// leaving what it genuinely decides: the isolation guarantees of the sandbox
+// itself.
+//
+// It is the mirror of advertisedCapabilities, which adds SECRETS on the
+// strength of the agent holding a redeemer rather than the backend claiming
+// anything. The two must stay mirrors: a member that is advertised by the
+// agent and demanded of the backend is a step no engine can run.
+func sandboxCapabilities(want []dholev1.Capability) []dholev1.Capability {
+	out := make([]dholev1.Capability, 0, len(want))
+	for _, c := range want {
+		if c == dholev1.Capability_CAPABILITY_SECRETS {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // checkSecrets refuses a secret this engine could not redeem. The refusal names
 // the binding, never the handle: a status is durable and archived, and a handle
 // in one is a credential at rest in the run history.
@@ -577,7 +596,19 @@ func (a *Agent) execute(ctx context.Context, d *dholev1.JobDispatch) *dholev1.Jo
 		Env:   d.GetEnv(),
 		Lease: leaseScopeFrom(d.GetStep().GetLeaseScope()),
 		Requirements: executor.Requirements{
-			Capabilities: d.GetStep().GetCapabilities(),
+			// SANDBOX capabilities only. CAPABILITY_SECRETS describes this
+			// AGENT — it redeems a reference over the bus, in this process,
+			// before any sandbox exists — and asking a backend for it asks a
+			// question the backend has no way to answer yes to.
+			//
+			// Found on kw by running the conformance suite against the vm
+			// executor: "vm executor: CAPABILITY_SECRETS: capability not
+			// advertised by this backend (it advertises
+			// [CAPABILITY_PRIVILEGED])". The vm and containerd backends refuse
+			// what they do not advertise; process and kubernetes do not check,
+			// so the same step passed everywhere the suite had been run and
+			// failed on the two backends it had not.
+			Capabilities: sandboxCapabilities(d.GetStep().GetCapabilities()),
 		},
 	})
 	if err != nil {
