@@ -29,6 +29,22 @@ Engines, one Deployment per tier:
   - {{ .name }} (tier {{ .tier }}, {{ .replicas | default 1 }} replica(s), {{ .slots | default 1 }} slot(s))
 {{- end }}
 
+{{- $unscoped := list }}
+{{- range .Values.engines }}
+{{- if not .busCredentialsSecret }}
+{{- $unscoped = append $unscoped .name }}
+{{- end }}
+{{- end }}
+{{- if $unscoped }}
+
+WARNING: these engines dial the shared bus URL rather than a credential scoped
+to their tier: {{ join ", " $unscoped }}. That URL reaches every tier's
+job.dispatch.> subjects, so what keeps an untrusted engine out of trusted work
+is its own choice of filter subject and not the bus. Issue each tier its own
+credential, put it in a Secret, and set engines[].busCredentialsSecret — see
+docs/deployment.md, "Giving an engine its tier's credential".
+{{- end }}
+
 {{- $store := .Values.objectStore | default dict }}
 {{- if ne ($store.kind | default "filesystem") "s3" }}
 

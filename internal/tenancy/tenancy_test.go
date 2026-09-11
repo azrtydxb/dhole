@@ -120,8 +120,8 @@ func TestProvisionCreatesIsolatedTenant(t *testing.T) {
 
 		require.Equal(t, tenant.AccountName(idA), a.NATSAccount)
 		require.Equal(t, tenant.AccountName(idB), b.NATSAccount)
-		require.NotEmpty(t, a.Credentials)
-		require.NotEqual(t, a.Credentials, b.Credentials,
+		require.NotEmpty(t, a.PlaneCredentials)
+		require.NotEqual(t, a.PlaneCredentials, b.PlaneCredentials,
 			"both tenants were given the same credentials")
 		require.False(t, a.CreatedAt.IsZero())
 
@@ -138,9 +138,9 @@ func TestProvisionCreatesIsolatedTenant(t *testing.T) {
 		require.Equal(t, tenancy.DefaultQuota(), q)
 
 		// Task 22's isolation assertions, against a tenant this package made.
-		connA := dial(t, a.Credentials)
-		watcherA := dial(t, a.Credentials)
-		connB := dial(t, b.Credentials)
+		connA := dial(t, a.PlaneCredentials)
+		watcherA := dial(t, a.PlaneCredentials)
+		connB := dial(t, b.PlaneCredentials)
 
 		subject := bus.SubjectDispatch("trusted", "capsdeadbeef")
 		inA := subscribe(t, watcherA, subject)
@@ -168,6 +168,105 @@ func TestProvisionCreatesIsolatedTenant(t *testing.T) {
 		for _, bad := range []string{"", "a>", "a*", "a.b", "../etc"} {
 			_, err := p.Provision(ctx, bad)
 			require.Error(t, err, "Provision accepted the tenant id %q", bad)
+		}
+	})
+}
+
+// TestAnEngineCredentialTheProvisionerIssuesCannotReachAnotherTier is the
+// property a distributed deployment needs and the one the account credential
+// cannot give it.
+//
+// Provisioning used to return ONE credential, the tenant's account, and that
+// is what a deployment handed an engine. It reaches the tenant's whole subject
+// space — `job.dispatch.>`, every tier of it — because it is also the identity
+// the control plane's own components connect as. An engine holding it is
+// separated from other tiers by nothing but its own choice of filter subject,
+// which is the arrangement [S-5] refuses: the refusal must come from the bus,
+// not from application code.
+//
+// tenant.ProvisionTierUser proved the mechanism; this proves the DEPLOYMENT
+// PATH uses it. Both halves are asserted — the tier's own two work queues
+// still bind, and another tier's does not — because a credential that reached
+// nothing at all would pass the second half on its own.
+func TestAnEngineCredentialTheProvisionerIssuesCannotReachAnotherTier(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, h harness) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		srv, err := bus.StartEmbedded(t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(srv.Close)
+
+		p, err := tenancy.NewProvisioner(tenancy.ProvisionerConfig{Store: h.store, Bus: srv})
+		require.NoError(t, err)
+
+		id := uniqueTenant(t)
+		provisioned, err := p.Provision(ctx, id)
+		require.NoError(t, err)
+
+		// The plane declares both tiers' streams inside the tenant's account,
+		// with the account credential it keeps. That is the other half of the
+		// property: narrowing what an ENGINE gets must not narrow what the
+		// PLANE connects as — it publishes to every tier.
+		plane, err := bus.Connect(ctx, provisioned.PlaneCredentials)
+		require.NoError(t, err)
+		t.Cleanup(plane.Close)
+		require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"trusted", "untrusted"}))
+
+		engineCreds, err := p.EngineCredentials(ctx, id, "untrusted")
+		require.NoError(t, err)
+		require.NotEqual(t, provisioned.PlaneCredentials, engineCreds,
+			"the deployment path handed an engine the tenant's ACCOUNT credential, "+
+				"which reaches every tier's job.dispatch.> — tier isolation is then "+
+				"the engine's own choice of filter subject, not a boundary")
+
+		untrustedStream, err := bus.DispatchStreamName("untrusted")
+		require.NoError(t, err)
+		trustedStream, err := bus.DispatchStreamName("trusted")
+		require.NoError(t, err)
+
+		engine, err := bus.Connect(ctx, engineCreds)
+		require.NoError(t, err)
+		t.Cleanup(engine.Close)
+
+		// Both of its own queues: an engine binds the tier's unrestricted
+		// subject AND the subject naming its executor kind, so a credential
+		// that allowed only one of them would stop kind-targeted work reaching
+		// anybody in the tier.
+		for name, subject := range map[string]string{
+			"engines-untrusted-abc":    bus.SubjectDispatch("untrusted", "abc"),
+			"engines-untrusted-abc-vm": bus.SubjectDispatchKind("untrusted", "abc", "vm"),
+		} {
+			sub, subErr := engine.SubscribePull(ctx, untrustedStream, name, subject)
+			require.NoError(t, subErr, "an engine was refused its own tier's queue %q", subject)
+			t.Cleanup(func() { _ = sub.Close() })
+		}
+
+		_, err = engine.SubscribePull(ctx, trustedStream, "engines-trusted-abc",
+			bus.SubjectDispatch("trusted", "abc"))
+		require.ErrorIs(t, err, bus.ErrPermissionDenied,
+			"the credential the deployment path issued an untrusted engine bound a work "+
+				"queue filtered to the trusted tier")
+
+		// Idempotent, for the reason provisioning is: an operator re-runs it,
+		// a controller reconciles, and a second call that issued a new
+		// password would lock out every engine already holding the old one.
+		again, err := p.EngineCredentials(ctx, id, "untrusted")
+		require.NoError(t, err)
+		require.Equal(t, engineCreds, again,
+			"re-issuing an engine credential replaced it, locking out the engines holding it")
+
+		// A tenant nobody provisioned gets no credential at all: issuing one
+		// would create an account out of a typo in a tenant id.
+		_, err = p.EngineCredentials(ctx, "no-such-tenant", "untrusted")
+		require.ErrorIs(t, err, tenancy.ErrUnknownTenant)
+
+		// And a tier that cannot be spelled as a subject token is refused
+		// rather than spelled into a permission: a tier of `>` would widen the
+		// credential to everything it exists to exclude.
+		for _, bad := range []string{"", "*", ">", "a.b", "a b"} {
+			_, err = p.EngineCredentials(ctx, id, bad)
+			require.Error(t, err, "EngineCredentials issued a credential for the tier %q", bad)
 		}
 	})
 }
@@ -201,7 +300,7 @@ func TestProvisioningIsIdempotentAndDoesNotResetTheTenant(t *testing.T) {
 		require.Equal(t, first.ID, second.ID)
 		require.Equal(t, first.NATSAccount, second.NATSAccount,
 			"re-provisioning moved the tenant to a different NATS account")
-		require.Equal(t, first.Credentials, second.Credentials,
+		require.Equal(t, first.PlaneCredentials, second.PlaneCredentials,
 			"re-provisioning issued new credentials, locking out everything holding the old ones")
 		require.Equal(t, first.CreatedAt.UTC(), second.CreatedAt.UTC(),
 			"re-provisioning rewrote the tenant's creation time")

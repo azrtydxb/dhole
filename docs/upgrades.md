@@ -68,6 +68,24 @@ with a plane that is a different deployment. An outbox row is addressed to one
 plane's bus; a claim that does not name the plane makes each publish the other's
 dispatches to engines that never heard of the run.
 
+## Engines holding the tenant's account credential
+
+A deployment built before engines had tier-scoped credentials handed every
+engine the tenant's **account** credential — the same one the control plane
+uses, which reaches every tier's `job.dispatch.>`.
+
+This is a rotation, not a flag day. Both credentials keep working: the account
+credential cannot be revoked because the plane connects as it, so no engine is
+locked out by the upgrade. The corollary is the part to act on — **upgrading
+changes nothing on its own**, and an engine still holding the account credential
+still reaches every tier after it.
+
+The operator path is in
+[deployment.md](deployment.md#migrating-a-deployment-that-already-hands-engines-the-account-credential):
+issue one credential per tier, put each in a Secret, roll that tier's engines.
+Do it per tenant; there is no global switch, and there is no check that refuses
+an engine on the account credential.
+
 ## What survives a restart
 
 A control-plane restart is a non-event for work already in flight. Runs are

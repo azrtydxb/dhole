@@ -60,12 +60,27 @@ controlPlane:
   affinity: {}
 
 engines:
-  # One entry per trust tier. An engine's bus credentials permit its own tier
-  # only, so a tier is a deployment decision rather than a label.
+  # One entry per trust tier. A tier is a deployment decision rather than a
+  # label — but only if the engine's bus credential says so. See
+  # busCredentialsSecret below.
   - name: trusted
     tier: trusted
     replicas: 1
     slots: 2
+    # The Secret holding this tier's own bus URL, issued by the control plane
+    # for one tenant and one tier (`dhole` tenancy provisioning —
+    # Provisioner.EngineCredentials; see docs/deployment.md).
+    #
+    # UNSET means this engine dials the shared nats.external / in-chart URL,
+    # which reaches every tier's job.dispatch.> — the tier is then nothing but
+    # this engine's own choice of filter subject. That is the default because
+    # the chart cannot mint a credential before the plane is running, not
+    # because it is safe; the install notes warn for every tier without one.
+    #
+    #   busCredentialsSecret:
+    #     name: dhole-engine-trusted-bus
+    #     key: bus-url
+    busCredentialsSecret: {}
     # kubernetes | process. The default is not the binary's default, and the
     # difference is the point: the engine image is distroless, so it has no
     # shell and no interpreter, and the process backend can therefore execute

@@ -47,11 +47,11 @@ var ErrUnknownTenant = errors.New("tenancy: unknown tenant")
 // password lives on the bus server rather than in the control plane's
 // database. It is empty when the provisioner was built without a bus.
 type Tenant struct {
-	ID          string
-	DisplayName string
-	NATSAccount string
-	CreatedAt   time.Time
-	Credentials string
+	ID               string
+	DisplayName      string
+	NATSAccount      string
+	CreatedAt        time.Time
+	PlaneCredentials string
 }
 
 // Store is the tenancy tables — `tenants`, `quotas` and `usage_records` —
@@ -198,7 +198,61 @@ func (p *Provisioner) Provision(ctx context.Context, id string) (Tenant, error) 
 		if err != nil {
 			return Tenant{}, fmt.Errorf("tenancy: provisioning tenant %q: %w", id, err)
 		}
-		t.Credentials = creds
+		t.PlaneCredentials = creds
 	}
 	return t, nil
+}
+
+// EngineCredentials is the credential an ENGINE of tier connects with, inside
+// tenantID's account. It is NOT the credential Provision returns.
+//
+// The split is the point, and it is why there are two named accessors rather
+// than one Tenant field. Tenant.PlaneCredentials is the tenant's ACCOUNT
+// credential: it reaches the tenant's whole subject space, every tier of
+// job.dispatch.> included, because the control plane publishes to every tier
+// and declares every tier's stream. Handing that to an engine — which is what
+// this package did until now — leaves an engine separated from other tiers by
+// nothing but its own choice of filter subject, the arrangement [S-5] refuses.
+// This one carries bus.TierPermissions and is refused another tier's work
+// queue by the SERVER.
+//
+// THE TIER IS A PARAMETER, not something read from the engine's own
+// configuration, and that is the whole boundary. An engine knows its tier as
+// DHOLE_TIER, but a credential whose scope its holder chooses is not a
+// boundary — it is a request the holder can revise. So the issuer names the
+// tier, and DHOLE_TIER only decides which queue the engine tries to pull:
+// an engine configured for a tier its credential does not carry gets a
+// permissions error from the bus rather than another tier's work.
+//
+// Idempotent, for the same reason Provision is: an operator re-runs the
+// command, a controller reconciles, and a second issue that minted a new
+// password would lock out every engine already holding the old one.
+func (p *Provisioner) EngineCredentials(ctx context.Context, tenantID, tier string) (string, error) {
+	if err := tenant.Validate(tenantID); err != nil {
+		return "", fmt.Errorf("tenancy: engine credentials: %w", err)
+	}
+	if p.bus == nil {
+		return "", fmt.Errorf("tenancy: engine credentials for tenant %q: "+
+			"this provisioner has no bus, so accounts are the external cluster's "+
+			"operator tooling to issue", tenantID)
+	}
+	// Registered first. Provisioning an account as a side effect of asking for
+	// an engine's credential would turn a typo in a tenant id into a live
+	// account with a live credential, and the typo would look like it worked.
+	if _, err := p.store.Tenant(ctx, tenantID); err != nil {
+		return "", err
+	}
+	// The tier user lives INSIDE the tenant's account, so the account has to
+	// exist. ProvisionAccount is idempotent and returns the existing
+	// credential; that credential is deliberately dropped here and never
+	// returned to a caller asking for an engine's.
+	if _, err := tenant.ProvisionAccount(ctx, p.bus, tenantID); err != nil {
+		return "", fmt.Errorf("tenancy: engine credentials for tenant %q: %w", tenantID, err)
+	}
+	creds, err := tenant.ProvisionTierUser(ctx, p.bus, tenantID, tier)
+	if err != nil {
+		return "", fmt.Errorf("tenancy: engine credentials for tenant %q tier %q: %w",
+			tenantID, tier, err)
+	}
+	return creds, nil
 }
