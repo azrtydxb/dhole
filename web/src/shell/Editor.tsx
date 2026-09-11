@@ -21,6 +21,7 @@ import { Shell } from "./Shell.js";
 import { Sidebar } from "./Sidebar.js";
 import { StatusBar, type EngineStatus } from "./StatusBar.js";
 import { Toolbar, type ToolbarAction } from "./Toolbar.js";
+import { ApprovalGate, AssistantPanel } from "./assistant/index.js";
 import { asPortTypeName } from "../design/PortGlyph.js";
 import { statusOf } from "../canvas/stepStatus.js";
 import { useRunModel } from "../run/useRunModel.js";
@@ -117,6 +118,9 @@ export function Editor({
   // A dry run's answer, held until the definition changes under it. Clearing
   // it on every edit is the point: a plan describes ONE revision, and a badge
   // left over from the previous one is a confident wrong answer.
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantInput, setAssistantInput] = useState("");
+  const [gateFor, setGateFor] = useState<string | null>(null);
   const [planned, setPlanned] = useState<ReadonlyMap<
     string,
     { cacheHit: boolean; engineKind: string }
@@ -178,6 +182,24 @@ export function Editor({
     [steps, selected],
   );
 
+  // A gate the plane is waiting on. The editor finds it in the run rather than
+  // being told: a step that is blocked IS the approval request, and a separate
+  // notification would be a second source of truth for the same fact.
+  const blocked = run.nodes.find((node) => statusOf(node) === "blocked");
+
+  const decide = useMutation({
+    mutationFn: (approved: boolean) =>
+      pipelineClient.decideApproval({
+        runId: run.runId,
+        stepId: gateFor ?? "",
+        approved,
+      }),
+    onSuccess: (_response, approved) => {
+      setGateFor(null);
+      setNotice(approved ? "gate approved" : "gate denied");
+    },
+  });
+
   /** Diagnostics come from Validate, plus the one thing validate cannot know:
    * whether the engines a step is pinned to are actually up. */
   const diagnostics: readonly Diagnostic[] = useMemo(() => {
@@ -204,8 +226,20 @@ export function Editor({
         text: `engine ${engine.id} stopped heartbeating · steps pinned to it will queue until it comes back rather than fail`,
         source: "registry",
       }));
-    return [...fromValidate, ...offline];
-  }, [validate.data, engines.data]);
+    const gates: Diagnostic[] =
+      blocked === undefined
+        ? []
+        : [
+            {
+              id: `gate-${blocked.id}`,
+              severity: "warning" as const,
+              text: `${blocked.id} is waiting for a decision — click to open the gate`,
+              source: "approval",
+              stepId: blocked.id,
+            },
+          ];
+    return [...gates, ...fromValidate, ...offline];
+  }, [validate.data, engines.data, blocked]);
 
   const engineStatuses: readonly EngineStatus[] = useMemo(
     () =>
@@ -302,9 +336,7 @@ export function Editor({
           }
           agentEditsPending={0}
           onOpenAgentEdits={() => setNotice("no agent edits are pending")}
-          onOpenAssistant={() =>
-            setNotice("the assistant has no endpoint in this build")
-          }
+          onOpenAssistant={() => setAssistantOpen((open) => !open)}
         />
       }
       sidebar={
@@ -378,8 +410,48 @@ export function Editor({
           diagnostics={diagnostics}
           open={diagnosticsOpen}
           onToggle={() => setDiagnosticsOpen((open) => !open)}
-          onSelectStep={setSelected}
+          onSelectStep={(stepId) => {
+            setSelected(stepId);
+            if (blocked?.id === stepId) setGateFor(stepId);
+          }}
         />
+      }
+      overlays={
+        <>
+          {assistantOpen && (
+            <AssistantPanel
+              messages={[]}
+              busy={false}
+              input={assistantInput}
+              onInput={setAssistantInput}
+              onSend={() => {
+                setAssistantInput("");
+                setNotice("no assistant endpoint — nothing was sent");
+              }}
+              onClose={() => setAssistantOpen(false)}
+              onApplyOps={() =>
+                setNotice("no assistant endpoint — nothing to apply")
+              }
+            />
+          )}
+          {gateFor !== null && (
+            <ApprovalGate
+              run={{
+                id: run.runId,
+                pipelineName: pipeline.data?.pipeline?.id ?? pipelineId,
+                revisionId,
+              }}
+              step={{
+                id: gateFor,
+                name: gateFor,
+                effect: "at-most-once",
+              }}
+              busy={decide.isPending}
+              onDecide={(approved) => decide.mutate(approved)}
+              onClose={() => setGateFor(null)}
+            />
+          )}
+        </>
       }
       statusBar={
         <StatusBar

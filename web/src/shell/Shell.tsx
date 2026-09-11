@@ -19,6 +19,7 @@ export function Shell({
   inspector,
   diagnostics,
   statusBar,
+  overlays,
   sidebarWidth = 285,
   inspectorWidth = 370,
 }: {
@@ -29,6 +30,11 @@ export function Shell({
   readonly inspector: React.ReactNode;
   readonly diagnostics: React.ReactNode;
   readonly statusBar: React.ReactNode;
+  /** Things that float above the whole shell — modals, the assistant rail, a
+   * gate. They sit outside the grid so a modal is not clipped by the pane it
+   * was opened from, which is what happens when a dialog is rendered inside a
+   * scrolling column. */
+  readonly overlays?: React.ReactNode;
   readonly sidebarWidth?: number;
   readonly inspectorWidth?: number;
 }) {
@@ -71,6 +77,7 @@ export function Shell({
         {inspector}
       </div>
       {statusBar}
+      {overlays}
     </div>
   );
 }
