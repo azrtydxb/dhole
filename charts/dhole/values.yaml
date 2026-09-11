@@ -78,6 +78,19 @@ engines:
     # from here; see docs/executors/vm.md. Empty for the kubernetes backend,
     # which needs only the sandbox block below.
     env: {}
+    # The gid of the node's `kvm` group, for a vm-backed engine only.
+    #
+    # The kvm device plugin hands the pod /dev/kvm and says nothing about who
+    # may open it: the device is root:kvm 0660 and the engine runs as 65532:0,
+    # so firecracker fails with "Permission denied ... configured on the
+    # /dev/kvm file's ACL" and every step on that engine fails to acquire a
+    # sandbox. This adds the group so the open succeeds.
+    #
+    # It is the NODE's gid and distributions disagree — 994 on Armbian noble,
+    # 108 on Debian, 36 on Fedora — so there is no safe default: a wrong number
+    # grants nothing and fails exactly as before. Read it on a node with
+    # `stat -c %g /dev/kvm`.
+    kvmGroup: null
     sandbox:
       # Where sandbox pods are created. Empty means the release namespace.
       namespace: ""

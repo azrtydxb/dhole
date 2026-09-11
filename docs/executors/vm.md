@@ -19,10 +19,10 @@ from.
 
 ## Two hypervisors, one guest
 
-| Backend                | When                                                         |
-| ---------------------- | ------------------------------------------------------------ |
+| Backend                 | When                                                               |
+| ----------------------- | ------------------------------------------------------------------ |
 | `firecracker` (default) | linux/amd64 and linux/arm64 with `/dev/kvm` — the one worth having |
-| `qemu`                  | the portable fallback, wherever KVM runs and Firecracker does not |
+| `qemu`                  | the portable fallback, wherever KVM runs and Firecracker does not  |
 
 The guest is identical either way: same kernel, same rootfs, same agent, same
 protocol. Only the machine model and the route to the guest's vsock differ,
@@ -40,20 +40,45 @@ see "Building a rootfs" below for exactly what is missing.
 
 ## Configuration
 
-| Field         | Meaning                                                                    |
-| ------------- | -------------------------------------------------------------------------- |
-| `Backend`     | `firecracker` or `qemu`; empty means `firecracker`                          |
-| `BinaryPath`  | the hypervisor executable; empty means PATH                                 |
-| `KernelImage` | the guest kernel every sandbox boots                                        |
-| `RootfsImage` | the default rootfs snapshot — an initramfs whose init is the guest agent    |
-| `SnapshotDir` | where snapshots are written; empty disables snapshotting                    |
-| `VCPUs`       | guest vcpus; zero means 1                                                   |
-| `MemMiB`      | guest memory; zero means 256                                                |
-| `KernelArgs`  | replaces the default kernel command line                                    |
+| Field         | Meaning                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| `Backend`     | `firecracker` or `qemu`; empty means `firecracker`                       |
+| `BinaryPath`  | the hypervisor executable; empty means PATH                              |
+| `KernelImage` | the guest kernel every sandbox boots                                     |
+| `RootfsImage` | the default rootfs snapshot — an initramfs whose init is the guest agent |
+| `SnapshotDir` | where snapshots are written; empty disables snapshotting                 |
+| `VCPUs`       | guest vcpus; zero means 1                                                |
+| `MemMiB`      | guest memory; zero means 256                                             |
+| `KernelArgs`  | replaces the default kernel command line                                 |
 
 As engine environment variables: `DHOLE_EXECUTOR=vm`, `DHOLE_VM_BACKEND`,
 `DHOLE_VM_HYPERVISOR`, `DHOLE_VM_KERNEL`, `DHOLE_VM_ROOTFS`,
 `DHOLE_VM_SNAPSHOT_DIR`, `DHOLE_VM_VCPUS`, `DHOLE_VM_MEM_MIB`.
+
+## On Kubernetes, the device is not the permission
+
+A vm engine in a pod needs two separate things, and asking for the first does
+not give the second:
+
+1. The device. `devices.kubevirt.io/kvm: "1"` in the container's resources,
+   served by KubeVirt's kvm device plugin.
+2. Permission to OPEN it. `/dev/kvm` is `root:kvm 0660` on every distribution,
+   and the engine image runs as uid 65532 in group 0 — so the open fails with
+   EACCES and firecracker reports it in its own words: `Error creating KVM
+object: Permission denied (os error 13) Make sure the user launching the
+firecracker process is configured on the /dev/kvm file's ACL`. Every step on
+   that engine then fails to acquire a sandbox, which reads as a broken engine
+   rather than a missing group.
+
+The chart's `engines[].kvmGroup` supplies the second: it adds the node's `kvm`
+gid to the pod's `supplementalGroups`. That gid belongs to the NODE and
+distributions disagree — 994 on Armbian noble, 108 on Debian, 36 on Fedora —
+so the chart defaults it to nothing rather than guessing, because a wrong gid
+grants nothing and fails exactly as it did before. Read it on a node:
+
+```bash
+stat -c %g /dev/kvm
+```
 
 ## The guest agent
 

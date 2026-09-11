@@ -39,7 +39,26 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       securityContext:
-        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+        {{- $podSecurity := deepCopy $.Values.podSecurityContext }}
+        {{- /*
+          A vm engine opens /dev/kvm, and on every distribution that device is
+          root:kvm 0660 — the engine runs as 65532:0 and gets EACCES. On kw the
+          step failed with firecracker's own words: "Error creating KVM object:
+          Permission denied (os error 13) Make sure the user launching the
+          firecracker process is configured on the /dev/kvm file's ACL". The
+          kvm device plugin hands the pod the DEVICE and says nothing about who
+          may open it, so this group is what closes the gap.
+
+          The gid is the NODE's, not the container's, and distributions differ
+          (994 on Armbian noble, 108 on Debian, 36 on Fedora), so it cannot be
+          defaulted here — a wrong gid silently grants nothing. `kvmGroup` on
+          the tier is where an operator says which one, and an engine that is
+          not vm-backed never needs it.
+        */}}
+        {{- if .kvmGroup }}
+        {{- $podSecurity = merge (dict "supplementalGroups" (append (default list $podSecurity.supplementalGroups) (int .kvmGroup))) $podSecurity }}
+        {{- end }}
+        {{- toYaml $podSecurity | nindent 8 }}
       # An engine stopped mid-step leaves its dispatch unacknowledged, and it
       # comes back to somebody else. Long enough for the step to finish is
       # better for everyone than long enough for nothing.
