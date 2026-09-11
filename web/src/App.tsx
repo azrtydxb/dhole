@@ -6,13 +6,59 @@
  * plan has not reached. A revision is REQUIRED rather than defaulted: every
  * edit is applied against a base revision, and a canvas that guessed one would
  * be guessing whose work it is about to overwrite.
+ *
+ * The three screens below are the three states this app has: signed out, a run
+ * to read, and a revision to edit. Each renders the editor's typography and
+ * tokens rather than the browser's defaults, so the signed-out screen looks
+ * like the same product as the editor behind it.
  */
-import { Canvas } from "./canvas/Canvas.js";
+import { Editor } from "./shell/Editor.js";
 import { RunView } from "./run/RunView.js";
 import { getToken } from "./api/client.js";
 import { useLocationKey } from "./useLocation.js";
 
-/** App picks the pipeline to edit and hands it to the canvas. */
+/** Frame is the plain, centred page the two non-editor states use. */
+function Frame({ children }: { readonly children: React.ReactNode }) {
+  return (
+    <main
+      style={{
+        height: "100vh",
+        background: "var(--bg)",
+        color: "var(--ink)",
+        fontFamily: "var(--font)",
+        padding: "48px 32px",
+        boxSizing: "border-box",
+        overflowY: "auto",
+      }}
+    >
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 9,
+            marginBottom: 24,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 11,
+              height: 11,
+              background: "var(--rust)",
+              transform: "rotate(45deg)",
+              borderRadius: 2,
+            }}
+          />
+          <h1 style={{ fontSize: 16, margin: 0 }}>Dhole</h1>
+        </div>
+        {children}
+      </div>
+    </main>
+  );
+}
+
+/** App picks the pipeline to edit and hands it to the editor. */
 export function App() {
   // Subscribed to rather than read: see useLocationKey. Its value is not used
   // directly — reading it is what makes this component re-render when the URL
@@ -31,41 +77,46 @@ export function App() {
 
   if (!signedIn) {
     return (
-      <main>
-        <h1>Dhole</h1>
-        <p>No API token stored - sign in to load pipelines.</p>
-      </main>
+      <Frame>
+        <p style={{ fontSize: 12, color: "var(--ink2)", lineHeight: 1.7 }}>
+          No API token stored — sign in to load pipelines.
+        </p>
+      </Frame>
     );
   }
 
   // A run is a different thing to look at, not a different app: the run view
-  // reads the realised graph and the logs, and the canvas edits a definition.
+  // reads the realised graph and the logs, and the editor edits a definition.
   if (runId !== "") {
     return (
-      <main>
-        <h1>Dhole</h1>
+      <Frame>
         <RunView runId={runId} />
-      </main>
+      </Frame>
     );
   }
 
   if (pipelineId === "" || revisionId === "") {
     return (
-      <main>
-        <h1>Dhole</h1>
-        <p>
+      <Frame>
+        <p style={{ fontSize: 12, color: "var(--ink2)", lineHeight: 1.7 }}>
           Signed in. Open a pipeline with{" "}
           <code>?pipeline=ID&amp;revision=REV</code>, or a run with{" "}
           <code>?run=ID</code>.
         </p>
-      </main>
+      </Frame>
     );
   }
 
   return (
-    <main>
-      <h1>Dhole</h1>
-      <Canvas pipelineId={pipelineId} revisionId={revisionId} />
-    </main>
+    <Editor
+      pipelineId={pipelineId}
+      revisionId={revisionId}
+      // The tenant and the person are the credential's, not the URL's. Until
+      // the token carries them in a form this app can read, they are shown as
+      // unknown rather than guessed: a breadcrumb naming the wrong tenant is
+      // worse than one naming none.
+      tenant={parameters.get("tenant") ?? "default"}
+      user={parameters.get("as") ?? "me"}
+    />
   );
 }

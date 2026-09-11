@@ -18,7 +18,7 @@ import {
 } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 
-import { PipelineService } from "../gen/dhole/v1/api_pb.js";
+import { EngineService, PipelineService } from "../gen/dhole/v1/api_pb.js";
 
 const tokenStorageKey = "dhole.token";
 
@@ -97,5 +97,14 @@ export const transport = createConnectTransport({
 /** pipelineClient is the generated client for the whole dhole.v1 contract. */
 export const pipelineClient: Client<typeof PipelineService> = createClient(
   PipelineService,
+  transport,
+);
+
+/** engineClient is the fleet half of the same contract. It is a separate
+ * client because it is a separate service, not because it is a separate
+ * server: the status bar asking who is online goes to the same plane over the
+ * same transport, carrying the same credential. */
+export const engineClient: Client<typeof EngineService> = createClient(
+  EngineService,
   transport,
 );

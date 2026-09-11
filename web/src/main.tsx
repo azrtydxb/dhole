@@ -3,6 +3,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
+import "./design/theme.css";
+import "@xyflow/react/dist/style.css";
 
 const queryClient = new QueryClient();
 

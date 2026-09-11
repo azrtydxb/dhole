@@ -11,107 +11,274 @@
  * shape: a step declaring no ports draws no handles and is perfectly valid -
  * a step nobody has wired up yet, which is what every step is for a moment
  * after it is added.
+ *
+ * The visual language is the editor's, from the Dhole Editor design: a status
+ * rail down the left edge, ports as type-shaped glyphs with the label reading
+ * `name:type`, and a footer carrying the two facts that decide what the
+ * scheduler may do with this step — its effect class and where it will run.
+ * Every colour is a token so the node follows the theme without knowing there
+ * is one.
  */
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
+import { PortGlyph, asPortTypeName } from "../design/PortGlyph.js";
+import { EffectClass } from "../gen/dhole/v1/common_pb.js";
 import type { Port, Step } from "../gen/dhole/v1/pipeline_pb.js";
 
-/** StepNodeData is what the canvas hands each node: the step itself. */
-export type StepNodeData = { readonly step: Step };
+/** StepStatus is what a run says about this step right now. `none` is the
+ * editing state: no run is attached and the node is just a definition. */
+export type StepStatus =
+  "none" | "queued" | "running" | "succeeded" | "failed" | "cached" | "blocked";
+
+/** StepNodeData is what the canvas hands each node: the step itself, plus
+ * whatever a run has said about it. */
+export type StepNodeData = {
+  readonly step: Step;
+  readonly status?: StepStatus;
+  /** Set when the step is untrusted or downstream of something untrusted.
+   * Drawn as a chip rather than a colour, because "this data came from
+   * outside" is the one thing a user must not miss on a glance (ADR 0015). */
+  readonly taint?: "untrusted" | "tainted";
+};
 
 /** StepNodeType is this node's type as React Flow sees it. */
 export type StepNodeType = Node<StepNodeData, "step">;
 
-/** The geometry of the ports down each side of a node. */
-const firstPortTop = 44;
-const portSpacing = 24;
+/** The geometry of the ports down each side of a node. Exported because the
+ * canvas positions its edges against the same rows: two files disagreeing by
+ * four pixels is a wire that visibly misses the port it is connected to. */
+export const firstPortTop = 34;
+export const portSpacing = 15;
+export const nodeWidth = 215;
 
-/** describePort is the port's type in a word, for the label beside it. Its
- * only job is to make a mistyped wire obvious BEFORE it is attempted. */
-function describePort(port: Port): string {
+const statusRail: Record<StepStatus, string> = {
+  none: "var(--ink3)",
+  queued: "var(--ink3)",
+  running: "var(--accent)",
+  succeeded: "var(--ok)",
+  failed: "var(--err)",
+  cached: "var(--ok)",
+  blocked: "var(--err)",
+};
+
+const statusLabel: Record<StepStatus, string> = {
+  none: "",
+  queued: "QUEUED",
+  running: "RUN",
+  succeeded: "✓",
+  failed: "FAILED",
+  cached: "HIT",
+  blocked: "GATE",
+};
+
+/** portTypeName is the port's declared type in the word the glyphs are keyed
+ * on. Its only job is to make a mistyped wire obvious BEFORE it is attempted. */
+function portTypeName(port: Port): string {
   switch (port.type?.kind.case) {
     case "blob":
       return "blob";
     case "structured":
-      return `structured ${port.type.kind.value.schemaId}`;
+      return port.type.kind.value.schemaId;
     default:
-      return "untyped";
+      return "unknown";
   }
 }
 
+/** effectLabel spells the wire enum the way the editor talks about it.
+ *
+ * It switches on the generated enum rather than its numbers: a step whose
+ * effect class the editor mislabels is a step whose retry and cache behaviour
+ * the user has been told wrongly, and a bare `case 2` is one renumbering away
+ * from saying that with a straight face. */
+function effectLabel(step: Step): string {
+  switch (step.effectClass) {
+    case EffectClass.PURE:
+      return "pure";
+    case EffectClass.IDEMPOTENT:
+      return "idempotent";
+    case EffectClass.AT_MOST_ONCE:
+      return "at-most-once";
+    default:
+      return "unspecified";
+  }
+}
+
+function PortRow({
+  step,
+  port,
+  direction,
+  index,
+}: {
+  readonly step: Step;
+  readonly port: Port;
+  readonly direction: "in" | "out";
+  readonly index: number;
+}) {
+  const type = portTypeName(port);
+  const glyph = asPortTypeName(type);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        height: portSpacing,
+        fontSize: 9,
+        color: "var(--ink2)",
+        flexDirection: direction === "in" ? "row" : "row-reverse",
+      }}
+    >
+      <Handle
+        type={direction === "in" ? "target" : "source"}
+        position={direction === "in" ? Position.Left : Position.Right}
+        id={port.name}
+        data-testid={`port-${direction}-${step.id}-${port.name}`}
+        title={`${port.name}: ${type}`}
+        style={{
+          position: "absolute",
+          top: firstPortTop + index * portSpacing + portSpacing / 2,
+          [direction === "in" ? "left" : "right"]: -7,
+          width: 13,
+          height: 13,
+          background: "transparent",
+          border: "none",
+          // The handle is an invisible hit target over the glyph: React Flow
+          // needs something grabbable, and a 13px circle drawn on top of a 9px
+          // shape would hide the type the shape is there to state.
+        }}
+      />
+      <PortGlyph type={glyph} title={type} />
+      <span style={{ pointerEvents: "none" }}>
+        {port.name}:{type}
+      </span>
+    </div>
+  );
+}
+
 /** StepNode renders one step and its ports. */
-export function StepNode({ data }: NodeProps<StepNodeType>) {
+export function StepNode({ data, selected }: NodeProps<StepNodeType>) {
   const { step } = data;
-  const height =
-    firstPortTop +
-    portSpacing * Math.max(step.inputs.length, step.outputs.length, 1);
+  const status = data.status ?? "none";
+  const rail = statusRail[status];
+  const label = statusLabel[status];
 
   return (
     <div
       data-testid={`step-node-${step.id}`}
       style={{
         position: "relative",
-        width: 220,
-        minHeight: height,
-        padding: "8px 10px",
-        border: "1px solid #4a5568",
+        width: nodeWidth,
+        display: "flex",
+        background: "var(--panel)",
+        border: `1px solid ${selected === true ? "var(--accent)" : "var(--line)"}`,
         borderRadius: 6,
-        background: "#ffffff",
-        fontSize: 12,
+        boxShadow:
+          selected === true
+            ? "0 0 0 3px var(--accent-soft)"
+            : "0 2px 8px rgba(0,0,0,0.25)",
+        fontFamily: "var(--font)",
+        opacity: status === "cached" ? 0.72 : 1,
       }}
     >
-      <strong>{step.name === "" ? step.id : step.name}</strong>
-      <div style={{ color: "#718096" }}>{step.pluginRef || "no plugin"}</div>
-
-      {step.inputs.map((port, index) => (
-        <Handle
-          key={`in-${port.name}`}
-          type="target"
-          position={Position.Left}
-          id={port.name}
-          data-testid={`port-in-${step.id}-${port.name}`}
-          title={`${port.name}: ${describePort(port)}`}
+      <div
+        aria-hidden
+        style={{
+          width: 4,
+          flex: "none",
+          background: rail,
+          borderRadius: "5px 0 0 5px",
+        }}
+      />
+      <div style={{ flex: 1, padding: "6px 9px", minWidth: 0 }}>
+        <div
           style={{
-            top: firstPortTop + index * portSpacing,
-            width: 14,
-            height: 14,
-            background: "#2b6cb0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            gap: 6,
+            fontSize: 11,
+            height: 16,
           }}
-        />
-      ))}
-
-      {step.outputs.map((port, index) => (
-        <Handle
-          key={`out-${port.name}`}
-          type="source"
-          position={Position.Right}
-          id={port.name}
-          data-testid={`port-out-${step.id}-${port.name}`}
-          title={`${port.name}: ${describePort(port)}`}
-          style={{
-            top: firstPortTop + index * portSpacing,
-            width: 14,
-            height: 14,
-            background: "#2f855a",
-          }}
-        />
-      ))}
-
-      <ul style={{ margin: "6px 0 0", padding: 0, listStyle: "none" }}>
-        {step.inputs.map((port) => (
-          <li key={`label-in-${port.name}`} style={{ color: "#2b6cb0" }}>
-            {port.name}: {describePort(port)}
-          </li>
-        ))}
-        {step.outputs.map((port) => (
-          <li
-            key={`label-out-${port.name}`}
-            style={{ color: "#2f855a", textAlign: "right" }}
+        >
+          <span
+            style={{
+              fontWeight: 700,
+              color: "var(--ink)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
           >
-            {port.name}: {describePort(port)}
-          </li>
+            {step.name === "" ? step.id : step.name}
+          </span>
+          {label !== "" && (
+            <span style={{ color: rail, fontSize: 9, whiteSpace: "nowrap" }}>
+              {label}
+            </span>
+          )}
+        </div>
+
+        {step.inputs.map((port, index) => (
+          <PortRow
+            key={`in-${port.name}`}
+            step={step}
+            port={port}
+            direction="in"
+            index={index}
+          />
         ))}
-      </ul>
+        {step.outputs.map((port, index) => (
+          <PortRow
+            key={`out-${port.name}`}
+            step={step}
+            port={port}
+            direction="out"
+            index={step.inputs.length + index}
+          />
+        ))}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 8,
+            fontSize: 8,
+            color: "var(--ink3)",
+            borderTop: "1px solid var(--line2)",
+            marginTop: 4,
+            paddingTop: 4,
+          }}
+        >
+          <span>{effectLabel(step)}</span>
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {step.engineType === "" ? "any engine" : step.engineType}
+          </span>
+        </div>
+
+        {data.taint !== undefined && (
+          <div
+            style={{
+              position: "absolute",
+              top: -9,
+              left: 8,
+              fontSize: 8,
+              background: "var(--panel)",
+              color: "var(--err)",
+              border: "1px solid var(--err)",
+              borderRadius: 3,
+              padding: "1px 5px",
+            }}
+          >
+            ⚠ {data.taint}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

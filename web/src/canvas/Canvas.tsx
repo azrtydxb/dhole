@@ -53,7 +53,17 @@ import {
 } from "./GeneratorNode.js";
 import { Presence, RebasePrompt, rebaseNotice } from "./Presence.js";
 import { autoLayout } from "./layout.js";
-import { StepNode, type StepNodeType } from "./StepNode.js";
+import { asPortTypeName, portTypeColour } from "../design/PortGlyph.js";
+import { createPortal } from "react-dom";
+
+import { CanvasMiniMap, HintBar, ZoomControl } from "./CanvasChrome.js";
+import {
+  StepNode,
+  firstPortTop,
+  nodeWidth,
+  portSpacing,
+  type StepNodeType,
+} from "./StepNode.js";
 
 /** CanvasProps names the revision being edited. Both are required: an edit
  * without a base revision cannot conflict, and one that cannot conflict
@@ -61,6 +71,17 @@ import { StepNode, type StepNodeType } from "./StepNode.js";
 export interface CanvasProps {
   readonly pipelineId: string;
   readonly revisionId: string;
+  /** Where this canvas is being drawn.
+   *
+   * `standalone` keeps its own side panel — the operation controls and the
+   * conflict notice — and is what the component's own tests drive. `embedded`
+   * draws only the graph, because the editor shell around it already provides
+   * a catalog on the left and an inspector on the right, and two panels
+   * offering the same thing is how a user learns to trust neither. */
+  readonly variant?: "standalone" | "embedded";
+  /** Told which step the user selected, so the shell's inspector can follow
+   * the canvas. Selection lives in React Flow; this is how it gets out. */
+  readonly onSelect?: (stepId: string | null) => void;
 }
 
 /** nodeTypes is module-level because React Flow re-mounts every node when the
@@ -151,7 +172,12 @@ function edgeKey(edge: Edge): string {
 }
 
 /** Canvas draws one revision of one pipeline and edits it in place. */
-export function Canvas({ pipelineId, revisionId }: CanvasProps) {
+export function Canvas({
+  pipelineId,
+  revisionId,
+  variant = "standalone",
+  onSelect,
+}: CanvasProps) {
   // head is the revision the next edit is based on. It moves with every
   // applied operation, because every operation produces a revision: there is
   // no separate save, and nothing here holds unsaved state.
@@ -218,6 +244,18 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
     const positions = autoLayout(drawn, pipeline?.edges ?? []);
     return drawn.map((step): StepNodeType | GeneratorNodeType => {
       const at = positions.get(step.id) ?? { x: 0, y: 0 };
+      // Declared width and height, not only measured ones. The MINIMAP
+      // projects nodes before React Flow has measured them and draws nothing
+      // for a node whose size it does not know yet — which is why the map was
+      // an empty rectangle. The height is the node's real geometry: a title
+      // row, one row per declared port, and the footer.
+      const size = {
+        width: nodeWidth,
+        height:
+          firstPortTop +
+          (step.inputs.length + step.outputs.length) * portSpacing +
+          18,
+      };
       // One comparison, in one place (isGenerator), so the editor and the run
       // view cannot disagree about what a generator is.
       return isGenerator(step)
@@ -225,12 +263,14 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
             id: step.id,
             type: "generator",
             position: { x: at.x, y: at.y },
+            ...size,
             data: { step },
           }
         : {
             id: step.id,
             type: "step",
             position: { x: at.x, y: at.y },
+            ...size,
             data: { step },
           };
     });
@@ -238,13 +278,33 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
 
   const flowEdges = useMemo<FlowEdge[]>(
     () =>
-      (pipeline?.edges ?? []).map((edge) => ({
-        id: edgeKey(edge),
-        source: edge.fromStep,
-        sourceHandle: edge.fromPort,
-        target: edge.toStep,
-        targetHandle: edge.toPort,
-      })),
+      (pipeline?.edges ?? []).map((edge) => {
+        // A wire takes its colour from the port it LEAVES, so the line says
+        // what travels along it rather than only where it goes. A grey graph
+        // makes the reader open both ends to learn what a connection carries.
+        const from = (pipeline?.steps ?? []).find(
+          (step) => step.id === edge.fromStep,
+        );
+        const port = from?.outputs.find((out) => out.name === edge.fromPort);
+        const type =
+          port?.type?.kind.case === "structured"
+            ? port.type.kind.value.schemaId
+            : port?.type?.kind.case === "blob"
+              ? "blob"
+              : undefined;
+        return {
+          id: edgeKey(edge),
+          source: edge.fromStep,
+          sourceHandle: edge.fromPort,
+          target: edge.toStep,
+          targetHandle: edge.toPort,
+          style: {
+            stroke: portTypeColour(asPortTypeName(type)),
+            strokeWidth: 1.5,
+            opacity: 0.75,
+          },
+        };
+      }),
     [pipeline],
   );
 
@@ -347,130 +407,196 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
     );
   }
 
-  return (
-    <div style={{ display: "flex", gap: 16, height: "90vh" }}>
-      <section style={{ width: 300 }}>
-        <h2>{pipelineId}</h2>
-        <p>
-          saved as <code data-testid="revision-id">{head}</code>
-        </p>
-        <p style={{ color: "#718096" }}>
-          Every edit is one operation; there is nothing to save separately, and
-          nothing on this screen holds a position the pipeline will remember.
-        </p>
+  // The authoring controls — add a step, set a property — as one block, so
+  // both layouts show the SAME controls rather than two that drift. In the
+  // editor shell they are portalled into the left rail, which is where the
+  // design puts "add something to this pipeline"; standalone they stay beside
+  // the graph.
+  const authoringHost =
+    globalThis.document?.getElementById("dh-authoring") ?? null;
 
-        <fieldset>
-          <legend>add a step</legend>
-          <input
-            data-testid="step-id"
-            aria-label="step id"
-            value={newStepId}
-            onChange={(event) => setNewStepId(event.target.value)}
-          />
-          <select
-            data-testid="step-kind"
-            aria-label="step kind"
-            value={newStepKind}
-            onChange={(event) => setNewStepKind(event.target.value)}
-          >
-            {Object.entries(stepKinds).map(([value, kind]) => (
-              <option key={value} value={value}>
-                {kind.label}
-              </option>
-            ))}
-          </select>
-          <button data-testid="add-step" type="button" onClick={addStep}>
-            add step
-          </button>
-        </fieldset>
+  const authoring = (
+    <section className="dh-authoring" style={{ width: 300 }}>
+      <h2>{pipelineId}</h2>
+      <p>
+        saved as <code data-testid="revision-id">{head}</code>
+      </p>
+      <p style={{ color: "#718096" }}>
+        Every edit is one operation; there is nothing to save separately, and
+        nothing on this screen holds a position the pipeline will remember.
+      </p>
 
-        <fieldset>
-          <legend>set a property</legend>
-          <select
-            data-testid="property-step"
-            aria-label="step"
-            value={propertyStep}
-            onChange={(event) => setPropertyStep(event.target.value)}
-          >
-            <option value="">choose a step</option>
-            {steps.map((step) => (
-              <option key={step.id} value={step.id}>
-                {step.id}
-              </option>
-            ))}
-          </select>
-          <select
-            data-testid="property-name"
-            aria-label="property"
-            value={propertyName}
-            onChange={(event) => setPropertyName(event.target.value)}
-          >
-            {properties.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <input
-            data-testid="property-value"
-            aria-label="value"
-            value={propertyValue}
-            onChange={(event) => setPropertyValue(event.target.value)}
-          />
-          <button
-            data-testid="set-property"
-            type="button"
-            onClick={setProperty}
-          >
-            set property
-          </button>
-        </fieldset>
-
-        <h3>wires</h3>
-        <ul data-testid="edge-list">
-          {edges.map((edge) => (
-            <li key={edgeKey(edge)} data-testid={`edge-${edgeKey(edge)}`}>
-              {edge.fromStep}.{edge.fromPort} to {edge.toStep}.{edge.toPort}
-            </li>
+      <fieldset>
+        <legend>add a step</legend>
+        <input
+          data-testid="step-id"
+          aria-label="step id"
+          value={newStepId}
+          onChange={(event) => setNewStepId(event.target.value)}
+        />
+        <select
+          data-testid="step-kind"
+          aria-label="step kind"
+          value={newStepKind}
+          onChange={(event) => setNewStepKind(event.target.value)}
+        >
+          {Object.entries(stepKinds).map(([value, kind]) => (
+            <option key={value} value={value}>
+              {kind.label}
+            </option>
           ))}
-        </ul>
+        </select>
+        <button data-testid="add-step" type="button" onClick={addStep}>
+          add step
+        </button>
+      </fieldset>
 
-        <Presence pipelineId={pipelineId} selection={propertyStep} />
+      <fieldset>
+        <legend>set a property</legend>
+        <select
+          data-testid="property-step"
+          aria-label="step"
+          value={propertyStep}
+          onChange={(event) => setPropertyStep(event.target.value)}
+        >
+          <option value="">choose a step</option>
+          {steps.map((step) => (
+            <option key={step.id} value={step.id}>
+              {step.id}
+            </option>
+          ))}
+        </select>
+        <select
+          data-testid="property-name"
+          aria-label="property"
+          value={propertyName}
+          onChange={(event) => setPropertyName(event.target.value)}
+        >
+          {properties.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <input
+          data-testid="property-value"
+          aria-label="value"
+          value={propertyValue}
+          onChange={(event) => setPropertyValue(event.target.value)}
+        />
+        <button data-testid="set-property" type="button" onClick={setProperty}>
+          set property
+        </button>
+      </fieldset>
 
-        {movedTo !== null && (
-          <RebasePrompt
-            revision={movedTo}
-            onRebase={(revisionId) => {
-              // A read, and only a read. The canvas moves onto the revision
-              // the pipeline is actually at and shows it; whether the refused
-              // edit is worth making again is its author's decision.
-              void pipelineClient
-                .getPipeline({ pipelineId, revisionId })
-                .then((response) => {
-                  if (response.pipeline !== undefined) {
-                    setEdited(response.pipeline);
-                  }
-                  setHead(response.revision?.id ?? revisionId);
-                  setMovedTo(null);
-                })
-                .catch((error: Error) => setRefusal(error.message));
-            }}
-          />
-        )}
+      <h3>wires</h3>
+      <ul data-testid="edge-list">
+        {edges.map((edge) => (
+          <li key={edgeKey(edge)} data-testid={`edge-${edgeKey(edge)}`}>
+            {edge.fromStep}.{edge.fromPort} to {edge.toStep}.{edge.toPort}
+          </li>
+        ))}
+      </ul>
 
-        {refusal !== null && (
-          <p data-testid="edge-error" role="alert" style={{ color: "#c53030" }}>
-            {refusal}
-          </p>
-        )}
-      </section>
+      <Presence pipelineId={pipelineId} selection={propertyStep} />
 
-      <div style={{ flex: 1, border: "1px solid #cbd5e0" }}>
+      {movedTo !== null && (
+        <RebasePrompt
+          revision={movedTo}
+          onRebase={(revisionId) => {
+            // A read, and only a read. The canvas moves onto the revision
+            // the pipeline is actually at and shows it; whether the refused
+            // edit is worth making again is its author's decision.
+            void pipelineClient
+              .getPipeline({ pipelineId, revisionId })
+              .then((response) => {
+                if (response.pipeline !== undefined) {
+                  setEdited(response.pipeline);
+                }
+                setHead(response.revision?.id ?? revisionId);
+                setMovedTo(null);
+              })
+              .catch((error: Error) => setRefusal(error.message));
+          }}
+        />
+      )}
+
+      {refusal !== null && (
+        <p data-testid="edge-error" role="alert" style={{ color: "#c53030" }}>
+          {refusal}
+        </p>
+      )}
+    </section>
+  );
+
+  if (variant === "embedded") {
+    // Read on render rather than held in state: the host is rendered by the
+    // shell in the same commit, and a ref would be null on the first pass.
+    return (
+      <div style={{ position: "absolute", inset: 0 }}>
         <ReactFlow
           nodes={nodes}
           edges={flowEdges}
           nodeTypes={nodeTypes}
           onConnect={onConnect}
+          onSelectionChange={({ nodes: picked }) => {
+            onSelect?.(picked[0]?.id ?? null);
+          }}
+          nodesDraggable={false}
+          nodesConnectable
+          fitView
+          fitViewOptions={{ maxZoom: 1, padding: 0.12 }}
+          proOptions={{ hideAttribution: false }}
+        >
+          <Background color="var(--grid)" gap={24} />
+          <ZoomControl />
+          <CanvasMiniMap />
+        </ReactFlow>
+        <HintBar />
+        {/* The authoring controls belong in the left rail, which this
+            component does not own. A portal puts them there without lifting
+            the whole edit state out of this file: the controls and the
+            mutations they drive stay together, which is what keeps a refused
+            operation reported next to the button that caused it. */}
+        {authoringHost !== null && createPortal(authoring, authoringHost)}
+        {refusal !== null && (
+          <p
+            data-testid="edge-error"
+            role="alert"
+            style={{
+              position: "absolute",
+              top: 12,
+              left: "50%",
+              transform: "translateX(-50%)",
+              margin: 0,
+              padding: "7px 14px",
+              fontSize: 10,
+              color: "var(--err)",
+              background: "var(--panel)",
+              border: "1px solid var(--err)",
+              borderRadius: 5,
+            }}
+          >
+            {refusal}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 16, height: "90vh" }}>
+      {authoring}
+
+      <div style={{ flex: 1, border: "1px solid var(--line2)" }}>
+        <ReactFlow
+          nodes={nodes}
+          edges={flowEdges}
+          nodeTypes={nodeTypes}
+          onConnect={onConnect}
+          onSelectionChange={({ nodes: picked }) => {
+            onSelect?.(picked[0]?.id ?? null);
+          }}
           // Not draggable, and this is the point rather than an omission: a
           // position has nowhere to be stored, so offering the gesture would
           // promise something the document cannot keep.
@@ -482,7 +608,7 @@ export function Canvas({ pipelineId, revisionId }: CanvasProps) {
           // pane, which is neither readable nor droppable.
           fitViewOptions={{ maxZoom: 1, padding: 0.1 }}
         >
-          <Background />
+          <Background color="var(--grid)" gap={24} />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>

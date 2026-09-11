@@ -1,0 +1,244 @@
+/*
+ * The editor's visual system, from the Dhole Editor design.
+ *
+ * Every colour is a token and nothing below this file names a hex value, so
+ * the light theme is a different set of values for the SAME names rather than
+ * a second stylesheet that drifts. The theme is an attribute on the root
+ * element (`data-theme`) rather than a class, because it is one of two states
+ * and a class would invite a third that only half the rules understand.
+ *
+ * The type is monospace throughout, and that is a decision rather than a
+ * default: this editor shows identifiers, digests, port types and durations
+ * beside each other, and a proportional face makes `sha256:9c2e41` and
+ * `src:git-tree` harder to scan than the thing they name.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap");
+
+:root {
+  --bg: #101318;
+  --panel: #151a21;
+  --panel2: #0d1117;
+  --line: #262f3d;
+  --line2: #1c2430;
+  --ink: #e8edf5;
+  --ink2: #8a97ab;
+  --ink3: #5d6b80;
+  --grid: rgba(140, 160, 190, 0.06);
+  --accent: #3d7fd9;
+  --accent-soft: rgba(61, 127, 217, 0.14);
+  --ok: #2fa06a;
+  --warn: #d9993d;
+  --err: #d94f3d;
+  --rust: #c96f3a;
+
+  /* The port-type palette. A type is a colour AND a shape (see PortGlyph):
+     colour alone fails for the eight percent of men who would then see two
+     identical dots where the editor means two incompatible types. */
+  --type-git-tree: #3d7fd9;
+  --type-blob: #8a6bdb;
+  --type-oci-image: #2f9ba3;
+  --type-report: #d9993d;
+  --type-approval: #d95f8a;
+
+  --font: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #c6c9cf;
+  --panel: #dfe1e6;
+  --panel2: #d3d6dc;
+  --line: #aab0ba;
+  --line2: #b9bec7;
+  --ink: #171c24;
+  --ink2: #414d5e;
+  --ink3: #5d6878;
+  --grid: rgba(30, 50, 80, 0.09);
+  --accent: #2b62b4;
+  --accent-soft: rgba(43, 98, 180, 0.14);
+  --ok: #1e7a4e;
+  --warn: #8f6314;
+  --err: #b23a2b;
+  --rust: #a5501f;
+
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  overflow: hidden;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* The editor is a direct-manipulation surface: a drag that selects the label
+   of the node it is dragging looks like a bug. Text the user may actually want
+   to copy — a digest, a log line — opts back in with .dh-selectable. */
+.dh-app {
+  user-select: none;
+}
+
+.dh-selectable {
+  user-select: text;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input,
+select,
+button,
+textarea {
+  font-family: inherit;
+}
+
+@keyframes dh-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Edges into a running step march, so "this one is live" is legible from
+   across the room without reading a single label. */
+@keyframes dh-dash {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * The authoring controls, wherever they are rendered.
+ *
+ * They are shared between the standalone canvas and the editor's left rail,
+ * and the rail is 285px wide — so the styling lives here, keyed on one class,
+ * rather than as inline styles that would have to know which layout they are
+ * in. Without it the block kept its browser defaults and overflowed the rail,
+ * which is how a 32px `<h2>` ends up sitting on top of a pipeline.
+ */
+.dh-authoring {
+  width: auto !important;
+  padding: 0 14px 14px;
+  font-size: 10px;
+  color: var(--ink2);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.dh-authoring h2 {
+  font-size: 11px;
+  margin: 12px 0 6px;
+  color: var(--ink);
+}
+
+.dh-authoring h3 {
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  color: var(--ink3);
+  margin: 12px 0 6px;
+  text-transform: uppercase;
+}
+
+.dh-authoring p {
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--ink3);
+  margin: 4px 0;
+}
+
+.dh-authoring code {
+  font-size: 9px;
+  word-break: break-all;
+  color: var(--ink2);
+}
+
+.dh-authoring fieldset {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 8px 10px 10px;
+  margin: 10px 0 0;
+  min-width: 0;
+}
+
+.dh-authoring legend {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  color: var(--ink3);
+  padding: 0 4px;
+}
+
+.dh-authoring input,
+.dh-authoring select {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 10px;
+  padding: 5px 7px;
+  margin: 3px 0;
+}
+
+.dh-authoring button {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink2);
+  font-size: 10px;
+  padding: 5px 11px;
+  margin-top: 5px;
+  cursor: pointer;
+}
+
+.dh-authoring button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dh-authoring ul {
+  margin: 4px 0;
+  padding-left: 14px;
+  font-size: 9px;
+}
+
+.dh-authoring li {
+  margin: 2px 0;
+}
