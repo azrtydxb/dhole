@@ -21,11 +21,19 @@ var ErrPermissionDenied = errors.New("bus: permission denied")
 // ErrSubscriptionClosed is returned by Next after its Subscription is closed.
 var ErrSubscriptionClosed = errors.New("bus: subscription closed")
 
+// DefaultAckWait is the ack wait a subscription gets when the caller names
+// none. It is exported because an engine has to divide it to decide how often
+// to renew a delivery it is still working on.
+const DefaultAckWait = 30 * time.Second
+
 const (
 	// defaultAckWait is how long a dispatch may sit unacknowledged before the
-	// server hands it to somebody else. It has to outlast a step's runtime plus
-	// the terminal status publish, so engines renew it while they work.
-	defaultAckWait = 30 * time.Second
+	// server hands it to somebody else. A step's runtime is unbounded and this
+	// is not, so an engine RENEWS the delivery while it works — see
+	// bus.Message.InProgress and engine.Agent.renewDelivery. Nothing renewed
+	// it until 2026-09-11, and every step longer than this window was
+	// redelivered and run a second time.
+	defaultAckWait = DefaultAckWait
 	// fetchWait bounds one Fetch so a cancelled context is noticed promptly
 	// rather than at the caller's deadline.
 	fetchWait = 2 * time.Second
@@ -461,9 +469,10 @@ type jsMessage struct {
 	msg jetstream.Msg
 }
 
-func (m *jsMessage) Data() []byte { return m.msg.Data() }
-func (m *jsMessage) Ack() error   { return m.msg.Ack() }
-func (m *jsMessage) Nak() error   { return m.msg.Nak() }
+func (m *jsMessage) Data() []byte      { return m.msg.Data() }
+func (m *jsMessage) Ack() error        { return m.msg.Ack() }
+func (m *jsMessage) Nak() error        { return m.msg.Nak() }
+func (m *jsMessage) InProgress() error { return m.msg.InProgress() }
 
 // Health reports whether this connection can carry a message right now.
 //

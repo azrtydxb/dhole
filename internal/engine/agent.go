@@ -142,6 +142,13 @@ type Config struct {
 	// consumer. Zero means subscribeRetry; a test sets it small so it can
 	// exercise many attempts without waiting for them.
 	SubscribeBackoff time.Duration
+
+	// AckWait is the delivery's ack wait, which this engine divides to decide
+	// how often to renew a dispatch it is still working on. Zero means
+	// defaultRenewInterval. It is configuration rather than a constant because
+	// the bus is what actually sets the window, and an engine renewing on a
+	// schedule of its own invention would drift away from it.
+	AckWait time.Duration
 }
 
 // Agent is one running engine.
@@ -385,6 +392,45 @@ func (a *Agent) pump(ctx context.Context, sub bus.Subscription) error {
 	}
 }
 
+// renewDelivery keeps a delivery from being redelivered while its step runs,
+// and returns the function that stops it.
+//
+// The interval is a third of the ack wait so a single missed renewal is not a
+// redelivery. A failed renewal is not fatal: the remedy is the same as for a
+// failed heartbeat — the server redelivers, the plane re-dispatches, and the
+// fence tells the two attempts apart.
+func (a *Agent) renewDelivery(ctx context.Context, msg bus.Message) func() {
+	interval := a.cfg.AckWait / 3
+	if interval <= 0 {
+		interval = defaultRenewInterval
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := msg.InProgress(); err != nil && ctx.Err() == nil {
+					slog.Warn("renewing a delivery while the step runs", "error", err)
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// defaultRenewInterval is how often a delivery is renewed when the engine was
+// given no ack wait to divide.
+const defaultRenewInterval = 10 * time.Second
+
 // handle takes one dispatch from delivery to acknowledgement.
 func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 	var d dholev1.JobDispatch
@@ -395,6 +441,14 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 		_ = msg.Ack()
 		return
 	}
+
+	// Renew the delivery for as long as this step runs. Without it the server
+	// hands the same dispatch to somebody else after the ack wait and the step
+	// runs TWICE: observed on kw, where `go test` took 2m37s against a 30s ack
+	// wait and the engine logged "step accepted" for the same attempt twice.
+	// Every step of a real build outlasts that window.
+	stopRenew := a.renewDelivery(ctx, msg)
+	defer stopRenew()
 
 	// The span continues the RUN's trace, taken from the dispatch itself: the
 	// scheduler that sent this message is in another process, and a span

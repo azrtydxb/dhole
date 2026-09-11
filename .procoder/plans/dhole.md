@@ -1317,6 +1317,24 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       `log-throughput-10mb` exercises stdout, which is the other direction and
       is fine. Add a case with a multi-megabyte INPUT. The vm and process
       backends do not use exec streams and are unaffected.
+- [x] **Every step longer than the ack wait ran twice.** Found 2026-09-11 by
+      running a real CI/CD pipeline on kw: `go test` took 2m37s against a 30
+      second ack wait, the server handed the same dispatch out again, and the
+      engine logged "step accepted" for the same run, step AND attempt twice —
+      two sandboxes running one command. `defaultAckWait`'s own comment said
+      "engines renew it while they work" and nothing did: `InProgress` was not
+      on `bus.Message` and no caller existed. For an IDEMPOTENT step that is a
+      wasted build; for an AT_MOST_ONCE step it is the guarantee broken, which
+      is what a deploy step is. It also fed a second symptom — an attempt the
+      plane had already declared lost went on running, so the run thrashed
+      between redelivery and re-dispatch. CLOSED: `bus.Message.InProgress`
+      renews a delivery, `Agent.renewDelivery` calls it every `AckWait/3` for
+      as long as the step runs, and `engine.Config.AckWait` is the window the
+      bus actually set rather than one the engine invented.
+      `TestAStepLongerThanTheAckWaitIsNotDeliveredTwice` sleeps past a short
+      ack wait and asserts ONE sandbox acquisition; removing the renewal fails
+      it with "the dispatch was delivered more than once while the step was
+      still running".
 - [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.

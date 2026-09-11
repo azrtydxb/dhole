@@ -129,6 +129,7 @@ func run() error {
 		CAS:      cas.NewOverBlobs(blobs),
 		Slots:    slots,
 		Secrets:  redeemer,
+		AckWait:  bus.DefaultAckWait,
 	})
 	if err != nil {
 		return err

@@ -958,3 +958,65 @@ func TestTheImageAPipelineNamedReachesTheSandboxSpec(t *testing.T) {
 	require.Equal(t, d.GetStep().GetImage(), specs[0].Image,
 		"the engine must acquire the sandbox the pipeline asked for, not the one its backend defaults to")
 }
+
+// TestAStepLongerThanTheAckWaitIsNotDeliveredTwice is the test whose absence
+// let a step run twice on every real build.
+//
+// `defaultAckWait` is 30 seconds and its comment said engines renew the
+// delivery while they work. Nothing did: `InProgress` was not on the bus's
+// Message interface and nothing called it. On kw, `go test` took 2m37s, the
+// server handed the same dispatch out again at 30s, and the engine logged
+// "step accepted" for the same run, step AND attempt twice — two sandboxes
+// running the same command, and for an IDEMPOTENT step that is a wasted
+// build, while for an AT_MOST_ONCE one it is the guarantee broken.
+//
+// The ack wait here is small so the case takes seconds rather than minutes;
+// the step outlasts it by several multiples, which is the shape of every real
+// step.
+func TestAStepLongerThanTheAckWaitIsNotDeliveredTwice(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const ackWait = 1 * time.Second
+
+	h := newHarness(t, bus.WithAckWait(ackWait))
+	statuses := h.statuses(ctx, t, "run-ack", "slow")
+
+	accepted := make(chan struct{}, 8)
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-ack",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: acceptCounter{Executor: process.New(), accepted: accepted},
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    2,
+		AckWait:  ackWait,
+	})
+
+	d := newDispatch("run-ack", "slow", "/bin/sh", "-c", "sleep 5")
+	h.publishDispatch(ctx, t, d)
+
+	status := awaitTerminal(ctx, t, statuses)
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, status.GetPhase())
+
+	// One acquisition, not two. A redelivery would have started a second
+	// sandbox for the same attempt while the first was still sleeping.
+	require.Len(t, accepted, 1,
+		"the dispatch was delivered more than once while the step was still running")
+}
+
+// acceptCounter records every sandbox acquisition so a case can tell one
+// delivery from two.
+type acceptCounter struct {
+	executor.Executor
+	accepted chan struct{}
+}
+
+func (e acceptCounter) Acquire(ctx context.Context, spec executor.Spec) (executor.Sandbox, error) {
+	select {
+	case e.accepted <- struct{}{}:
+	default:
+	}
+	return e.Executor.Acquire(ctx, spec)
+}

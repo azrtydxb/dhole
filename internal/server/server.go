@@ -674,6 +674,7 @@ func (s *Server) startEngine(ctx context.Context) error {
 		// redeem — while its process backend goes on advertising nothing,
 		// which is the honest answer for both of them.
 		Secrets: secrets.NewBusRedeemer(s.infra.engineBus, bus.SubjectSecretRedeem()),
+		AckWait: bus.DefaultAckWait,
 	})
 	if err != nil {
 		return err

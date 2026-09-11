@@ -187,6 +187,11 @@ type boundedMessage struct {
 
 func (m *boundedMessage) Data() []byte { return m.msg.Data() }
 
+// InProgress renews the ack wait without settling the message, so the slot is
+// deliberately NOT returned: the work is still outstanding and still counts
+// against the bound.
+func (m *boundedMessage) InProgress() error { return m.msg.InProgress() }
+
 func (m *boundedMessage) Ack() error {
 	err := m.msg.Ack()
 	// The slot is returned even when the ack was refused: the delivery is

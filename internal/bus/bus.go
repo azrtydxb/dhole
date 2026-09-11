@@ -53,4 +53,14 @@ type Message interface {
 	Ack() error
 	// Nak returns the message for immediate redelivery.
 	Nak() error
+	// InProgress tells the server this delivery is still being worked on, so
+	// the ack wait starts again rather than handing the message to somebody
+	// else.
+	//
+	// It is on this interface because nothing called it and the gap was
+	// invisible: defaultAckWait is 30 seconds and its own comment said
+	// "engines renew it while they work", but no engine did. Every step that
+	// ran longer than the ack wait — which in CI is every step — was
+	// redelivered and RUN A SECOND TIME while the first was still going.
+	InProgress() error
 }
