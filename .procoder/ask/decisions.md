@@ -389,6 +389,13 @@ for the vm backend. The images are built the way `docs/executors/vm.md` describe
 
 ### ANSWERED (2026-09-11)
 
+- **truenas-csi CI/CD: push to Harbor (192.168.10.123), deploy by upgrading the
+  LIVE release.** Nothing is published to a public registry. The deploy stage
+  runs `helm upgrade` against the real `truenas-csi` release in its own
+  namespace, restarting the controller Deployment and the node DaemonSet. Blast
+  radius accepted: 6 StorageClasses on `csi.truenas.watteel.com` and 2 bound
+  PVs, both in the `fsgcheck` namespace.
+
 - **Push 275 commits to `origin/main` now.** Nothing on the branch is
   known-broken and 275 commits on one laptop is a single point of failure.
 
