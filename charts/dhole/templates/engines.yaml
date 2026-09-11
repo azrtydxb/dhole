@@ -2,10 +2,22 @@
 One Deployment per trust tier.
 
 An engine dials the bus and opens no port, so there is no Service here and
-nothing to expose. Its bus credentials permit its own tier only — an engine in
-the untrusted tier that subscribes to the trusted tier's dispatch subjects
-receives a permissions error from the server, not a polite refusal from the
-control plane.
+nothing to expose.
+
+BUS CREDENTIALS. This comment used to claim an engine's credentials permit its
+own tier only. They did not: the chart handed every engine the same
+`dhole.busURL`, which for the in-chart NATS carries no credentials at all and
+for an external cluster carried whatever the operator put in `nats.external` —
+in practice the tenant's ACCOUNT credential, which reaches every tier's
+`job.dispatch.>` because the control plane publishes to all of them. Tier
+isolation was then the engine's own choice of filter subject.
+
+`busCredentialsSecret` on a tier is where the real thing goes: a Secret holding
+the tier-scoped URL the control plane issues for that tenant and tier (see
+docs/deployment.md). With it set, an engine in the untrusted tier that binds
+the trusted tier's dispatch subjects gets a permissions error from the server.
+Without it the engine falls back to the shared URL and the tier is a label —
+the install notes say so.
 */}}
 {{- range .Values.engines }}
 ---
@@ -71,8 +83,24 @@ spec:
           securityContext:
             {{- toYaml $.Values.securityContext | nindent 12 }}
           env:
+            {{- /*
+              The tier's OWN credential when the operator has issued one. It is
+              a Secret rather than a value because it carries a password, and
+              it is per tier because a credential whose scope the holder
+              chooses is not a boundary — the plane names the tier when it
+              issues this, and DHOLE_TIER below only decides which queue this
+              engine tries to pull.
+            */}}
+            {{- if .busCredentialsSecret }}
+            - name: DHOLE_BUS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .busCredentialsSecret.name | required (printf "engines[%s].busCredentialsSecret.name is required when busCredentialsSecret is set" .name) }}
+                  key: {{ .busCredentialsSecret.key | default "bus-url" | quote }}
+            {{- else }}
             - name: DHOLE_BUS_URL
               value: {{ include "dhole.busURL" $ | quote }}
+            {{- end }}
             # The engine id must be unique per process: it is the subject its
             # control messages arrive on. The pod name is the one identifier
             # Kubernetes guarantees is unique and stable for a pod's life.

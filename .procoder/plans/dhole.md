@@ -726,7 +726,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       dispatches live runs are waiting on and deleting them would strand those
       runs silently. `bus.TierPermissions` stayed the one table both
       `internal/bus` and `internal/tenant` build from.
-- [ ] **A distributed deployment hands engines a credential that is not tier
+- [x] **A distributed deployment hands engines a credential that is not tier
       scoped.** `internal/tenancy`'s provisioner gives out the tenant ACCOUNT
       credential (`tenant.ProvisionAccount`), which reaches the tenant's whole
       subject space including every tier's `job.dispatch.>` — it is also what
@@ -736,9 +736,36 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       tenant's account, carrying `bus.TierPermissions`, and
       `TestAnEngineInATenantAccountIsLimitedToItsOwnTier` proves an engine
       holding one binds BOTH of its own tier's queues and is refused another
-      tier's. Nothing calls it yet: provisioning still returns only the account
-      credential, so this is closed in the mechanism and open in the
-      deployment until the provisioner hands engines their tier's user.
+      tier's. Nothing called it: provisioning returned only the account
+      credential, so this was closed in the mechanism and open in the
+      deployment.
+      CLOSED. The deployment path now has TWO named credentials instead of one
+      field a later edit could hand to either caller: `Tenant.PlaneCredentials`
+      is the account credential the control plane keeps — unnarrowed, because
+      the plane publishes to every tier and declares every tier's stream — and
+      `Provisioner.EngineCredentials(ctx, tenant, tier)` issues the tier user
+      an engine gets. THE TIER IS A PARAMETER OF ISSUING, not something read
+      from the engine's `DHOLE_TIER`: a credential whose scope its holder
+      chooses is a request, not a boundary, so `DHOLE_TIER` now only decides
+      which queue an engine tries to pull and the credential decides which it
+      may. `EngineCredentials` refuses a tenant that is not registered (a typo
+      would otherwise mint a live account), is idempotent so a re-run does not
+      lock out the engines holding the old credential, and inherits
+      `bus.TierPermissions`' refusal of a tier that is not a legal subject
+      token. `TestAnEngineCredentialTheProvisionerIssuesCannotReachAnotherTier`
+      asserts it through the deployment path, both halves: the engine binds its
+      own tier's two queues and is refused the trusted tier's.
+      AN EXISTING DEPLOYMENT ROTATES; nothing is refused and nothing breaks.
+      The account credential stays valid because the plane connects as it, so
+      engines still holding it keep running — which also means upgrading fixes
+      nothing by itself and such an engine still reaches every tier until an
+      operator acts. Per tenant: issue a credential per tier, put each in a
+      Secret, point that tier's engines at it
+      (`engines[].busCredentialsSecret`, new in the chart; the install notes
+      now WARN for every tier without one), roll the engines. The chart and
+      docs/deployment.md both claimed the tier boundary already existed while
+      the chart handed every engine one shared unauthenticated URL; both are
+      corrected, and docs/upgrades.md carries the operator path.
 - [x] **One tier holding two engine kinds turns its whole cache off.** Found
       2026-09-11 on kw, in the plane's own log, which says in as many words
       that the engines of tier `trusted` disagree about their environment

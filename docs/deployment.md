@@ -52,10 +52,59 @@ dhole-engine
 ```
 
 `DHOLE_ENGINE_ID` must be unique per process — it is the subject its control
-messages arrive on. `DHOLE_TIER` is the trust tier whose work it takes, and its
-bus credentials permit that tier only: an engine in the untrusted tier that
-subscribes to the trusted tier's dispatch subjects gets a permissions error from
-the server, not a polite refusal from the control plane.
+messages arrive on. `DHOLE_TIER` is the trust tier whose work it takes.
+
+`DHOLE_BUS_URL` is where the tier boundary actually lives, and it is not
+`DHOLE_TIER`. See below.
+
+### Giving an engine its tier's credential
+
+A tenant has one NATS **account**, and the credential for that account reaches
+the tenant's whole subject space — every tier's `job.dispatch.>` — because it is
+also what the control plane's own components connect as: the plane publishes to
+every tier and declares every tier's stream. An engine holding it is separated
+from other tiers by nothing but its own choice of filter subject, which is not a
+boundary at all.
+
+So an engine gets a **tier-scoped user inside that account** instead:
+
+| Credential                                         | Who holds it       | Reaches                                        |
+| -------------------------------------------------- | ------------------ | ---------------------------------------------- |
+| `Tenant.PlaneCredentials`                          | the control plane  | the tenant's whole subject space               |
+| `Provisioner.EngineCredentials(ctx, tenant, tier)` | one tier's engines | that tier's dispatch stream and consumers only |
+
+**The tier is named by the issuer, not by the engine.** `DHOLE_TIER` only decides
+which queue the engine tries to pull from; the credential decides which it may.
+An engine configured for a tier its credential does not carry gets a permissions
+error from the server, not a polite refusal from the control plane. A credential
+whose scope its holder chooses would be a request, not a boundary.
+
+Issuing one is idempotent: an operator re-running the command, or a controller
+reconciling, gets back the credential that already exists rather than minting a
+new one and locking out the engines holding the old one.
+
+### Migrating a deployment that already hands engines the account credential
+
+Both credentials are accepted, by construction and deliberately: the account
+credential is what the control plane connects as, so it cannot be revoked, and
+an engine still holding it keeps running. Nothing breaks on upgrade — and
+nothing is fixed by upgrading either. **Until an operator rotates, an engine
+holding the account credential still reaches every tier.**
+
+The rotation, per tenant:
+
+1. Issue a credential for each tier: `EngineCredentials(ctx, tenant, tier)`.
+2. Put each in a Secret and point that tier's engines at it
+   (`engines[].busCredentialsSecret` in the chart, `DHOLE_BUS_URL` otherwise).
+3. Roll the engines. An engine restarts, renegotiates, and binds the same
+   queues — its work queue is durable, so nothing in flight is lost.
+4. Confirm no engine is still on the account credential before treating the
+   tier as a boundary. The plane's own connection is the only one that should
+   remain on it.
+
+There is no step that revokes the account credential, and that is not an
+oversight: the plane needs it. What the rotation buys is that no _engine_ has
+one.
 
 ## Distributed (cluster)
 
@@ -98,14 +147,15 @@ for each of them.
 
 The values worth knowing:
 
-| Value                              | Default  | What it decides                                      |
-| ---------------------------------- | -------- | ---------------------------------------------------- |
-| `postgres.external`                | `""`     | a DSN the chart does not manage. Set it.             |
-| `nats.external`                    | `""`     | a `nats://` URL the chart does not manage. Set it.   |
-| `controlPlane.replicas`            | `1`      | planes sharing one database and one deployment id    |
-| `controlPlane.persistence.enabled` | `false`  | whether the CAS survives a reschedule                |
-| `engines`                          | one tier | a list; one Deployment per trust tier                |
-| `image.tag`                        | `""`     | empty means the chart's `appVersion`, never `latest` |
+| Value                              | Default  | What it decides                                                                                  |
+| ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `postgres.external`                | `""`     | a DSN the chart does not manage. Set it.                                                         |
+| `nats.external`                    | `""`     | a `nats://` URL the chart does not manage. Set it.                                               |
+| `controlPlane.replicas`            | `1`      | planes sharing one database and one deployment id                                                |
+| `controlPlane.persistence.enabled` | `false`  | whether the CAS survives a reschedule                                                            |
+| `engines`                          | one tier | a list; one Deployment per trust tier                                                            |
+| `engines[].busCredentialsSecret`   | unset    | the Secret holding that tier's own bus URL. Unset means the shared URL, which reaches every tier |
+| `image.tag`                        | `""`     | empty means the chart's `appVersion`, never `latest`                                             |
 
 `engines` is a list because a tier is a deployment decision, not a label:
 
