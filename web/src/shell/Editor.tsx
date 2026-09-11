@@ -9,7 +9,7 @@
  * editor somebody runs a deploy from is not.
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { engineClient, pipelineClient } from "../api/client.js";
 import { useTheme } from "../design/useTheme.js";
@@ -22,6 +22,19 @@ import { Sidebar } from "./Sidebar.js";
 import { StatusBar, type EngineStatus } from "./StatusBar.js";
 import { Toolbar, type ToolbarAction } from "./Toolbar.js";
 import { ApprovalGate, AssistantPanel } from "./assistant/index.js";
+import {
+  CommandPalette,
+  EnginesModal,
+  GitModal,
+  ImportModal,
+  RegistryModal,
+  SettingsModal,
+  Toasts,
+  type Command,
+  type FleetEngine,
+  type Toast,
+  type ToastTone,
+} from "./panels/index.js";
 import { asPortTypeName } from "../design/PortGlyph.js";
 import { statusOf } from "../canvas/stepStatus.js";
 import { useRunModel } from "../run/useRunModel.js";
@@ -121,6 +134,13 @@ export function Editor({
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantInput, setAssistantInput] = useState("");
   const [gateFor, setGateFor] = useState<string | null>(null);
+  // Which modal is open, by the menu id that opens it. One at a time: two
+  // stacked dialogs is two Escape presses to get back to the canvas.
+  const [modal, setModal] = useState<
+    "settings" | "engines" | "registry" | "git" | "import" | null
+  >(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toasts, setToasts] = useState<readonly Toast[]>([]);
   const [planned, setPlanned] = useState<ReadonlyMap<
     string,
     { cacheHit: boolean; engineKind: string }
@@ -241,6 +261,48 @@ export function Editor({
     return [...gates, ...fromValidate, ...offline];
   }, [validate.data, engines.data, blocked]);
 
+  const fleet: readonly FleetEngine[] = useMemo(
+    () =>
+      (engines.data?.engines ?? []).map((engine) => ({
+        id: engine.id,
+        state:
+          engine.state === "ready" ||
+          engine.state === "draining" ||
+          engine.state === "registering"
+            ? engine.state
+            : "offline",
+        capabilities: engine.capabilities.map((capability) =>
+          String(capability),
+        ),
+        os: engine.os,
+        arch: engine.arch,
+        slots: engine.slots,
+        protocolVersions: engine.protocolVersions,
+        inFlight: engine.inFlight.length,
+      })),
+    [engines.data],
+  );
+
+  const drain = useMutation({
+    mutationFn: (engineId: string) => engineClient.drainEngine({ engineId }),
+    onSuccess: () => say("drain requested — the engine finishes what it holds"),
+  });
+
+  const busUrl = globalThis.location?.origin ?? "";
+
+  const commands: readonly Command[] = useMemo(
+    () => [
+      { id: "validate", label: "validate this revision" },
+      { id: "plan", label: "plan · dry-run" },
+      { id: "run", label: "start a run" },
+      { id: "theme", label: "toggle theme" },
+      { id: "engines", label: "engines…" },
+      { id: "registry", label: "browse plugin registry…" },
+      { id: "settings", label: "settings…" },
+    ],
+    [],
+  );
+
   const engineStatuses: readonly EngineStatus[] = useMemo(
     () =>
       (engines.data?.engines ?? []).map((engine) => ({
@@ -252,14 +314,42 @@ export function Editor({
     [engines.data],
   );
 
+  const say = useCallback((text: string, tone: ToastTone = "info") => {
+    const id = `${Date.now()}-${text}`;
+    setToasts((current) => [...current, { id, text, tone }]);
+  }, []);
+
   const onCommand = useCallback(
-    (menuId: string, itemId: string) => {
+    (_menuId: string, itemId: string) => {
       if (itemId === "theme") toggleTheme();
       else if (itemId === "diagnostics") setDiagnosticsOpen((open) => !open);
-      else setNotice(`${menuId}: ${itemId} is not wired up yet`);
+      else if (
+        itemId === "settings" ||
+        itemId === "engines" ||
+        itemId === "registry" ||
+        itemId === "git" ||
+        itemId === "import"
+      ) {
+        setModal(itemId);
+      } else if (itemId === "palette") setPaletteOpen(true);
+      else say(`${itemId} is not wired up yet`, "warning");
     },
-    [toggleTheme],
+    [toggleTheme, say],
   );
+
+  // ⌘K anywhere. It is on the window rather than on an input, because the
+  // whole point of a palette is that you reach it without first clicking the
+  // thing that would have focused it.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    globalThis.addEventListener("keydown", onKey);
+    return () => globalThis.removeEventListener("keydown", onKey);
+  }, []);
 
   const actions: readonly ToolbarAction[] = [
     { id: "validate", label: "validate", busy: validate.isPending },
@@ -351,9 +441,7 @@ export function Editor({
           onAdd={() =>
             setNotice("adding from the catalog needs a plugin list RPC")
           }
-          onBrowseRegistry={() =>
-            setNotice("the plugin registry has no endpoint in this build")
-          }
+          onBrowseRegistry={() => setModal("registry")}
           runs={[]}
           runsAreSample={false}
           onOpenRun={(runId) => {
@@ -418,6 +506,60 @@ export function Editor({
       }
       overlays={
         <>
+          <Toasts
+            toasts={toasts}
+            onDismiss={(id) =>
+              setToasts((current) => current.filter((t) => t.id !== id))
+            }
+          />
+          <CommandPalette
+            open={paletteOpen}
+            onClose={() => setPaletteOpen(false)}
+            commands={commands}
+            onRun={(id) => {
+              setPaletteOpen(false);
+              if (id === "theme") toggleTheme();
+              else if (id === "validate" || id === "plan" || id === "run")
+                onAction(id);
+              else onCommand("palette", id);
+            }}
+          />
+          {modal === "settings" && (
+            <SettingsModal
+              tenant={tenant}
+              onClose={() => setModal(null)}
+              onRevokeToken={() =>
+                say("no token RPC in this contract", "warning")
+              }
+            />
+          )}
+          {modal === "engines" && (
+            <EnginesModal
+              engines={fleet}
+              busUrl={busUrl}
+              onDrain={(id) => drain.mutate(id)}
+              onClose={() => setModal(null)}
+            />
+          )}
+          {modal === "registry" && (
+            <RegistryModal
+              onClose={() => setModal(null)}
+              onInstall={() => say("no registry endpoint", "warning")}
+            />
+          )}
+          {modal === "git" && (
+            <GitModal
+              onClose={() => setModal(null)}
+              onConnect={() => say("no git endpoint", "warning")}
+            />
+          )}
+          {modal === "import" && (
+            <ImportModal
+              onClose={() => setModal(null)}
+              onImport={() => say("no import endpoint", "warning")}
+              onPickSource={() => undefined}
+            />
+          )}
           {assistantOpen && (
             <AssistantPanel
               messages={[]}
