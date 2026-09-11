@@ -99,7 +99,20 @@ const complainEvery = 30 * time.Second
 // Yielding turns starvation into a turn each. The cost is latency when slots
 // are scarce, and only then: a consumer that holds a slot and gets a message
 // keeps it for the job.
-const slotYield = 3 * time.Second
+//
+// The wait has to be SMALL, because the worst case is one turn for every other
+// consumer before the one holding work gets a slot, and the plane is not
+// waiting patiently: a dispatch nobody has accepted within the lease TTL is
+// declared lost and re-dispatched. At three seconds and eight consumers — the
+// four subsets of {NETWORK, SECRETS}, each with a plain and a kind-targeted
+// queue — that worst case is 24 seconds against a 30 second lease, and on kw
+// it lost steps: dispatched at 08:18:37, declared lost at 08:19:10, accepted
+// by the engine at 08:19:13, three seconds after the plane gave up.
+//
+// This is a mitigation and not the cure. The structural fault is that a slot
+// is taken BEFORE anyone knows whether a message exists, so consumers of empty
+// queues spend the concurrency budget — see the open plan item.
+const slotYield = 250 * time.Millisecond
 
 // releaseTimeout bounds sandbox teardown. It runs on a context detached from
 // the job's, because a cancelled job still has to leave nothing behind.

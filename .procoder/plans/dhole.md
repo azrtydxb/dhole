@@ -1335,6 +1335,27 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       ack wait and asserts ONE sandbox acquisition; removing the renewal fails
       it with "the dispatch was delivered more than once while the step was
       still running".
+- [ ] **A consumer of an empty queue spends the engine's concurrency budget.**
+      Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
+      its queue has a message, waits `slotYield` for one, and gives the slot
+      back if none came. An engine subscribes to every satisfiable subset of
+      what it advertises, and each subset now has a plain and a kind-targeted
+      queue: with `{NETWORK, SECRETS}` that is eight consumers sharing, on kw,
+      two slots. Seven of them are usually empty, and the one holding work
+      waits its turn behind them. At the original three-second yield the worst
+      case was 24 seconds; the plane declares a dispatch nobody accepted lost
+      after 30. Observed: a step dispatched at 08:18:37, declared lost at
+      08:19:10, accepted by the engine at 08:19:13 — three seconds after the
+      plane gave up, and it then ran to completion for nobody.
+      Mitigated by dropping `slotYield` to 250ms, which puts the worst case at
+      about two seconds, and that is what unblocked the pipeline. It is not the
+      cure: the bound scales with the number of queues, so a richer capability
+      set walks back into it. The fix is to stop coupling the two — fetch
+      first and take a slot only once there is something to run, which is safe
+      now that a delivery is renewed while it is held (`bus.Message.InProgress`),
+      as long as renewal starts at FETCH rather than at handle. Alternatively
+      one consumer with several filter subjects, which is one pump and no
+      competition at all.
 - [ ] **A sandbox pod has no resources, and a heavy step starves its own
       engine.** Found 2026-09-11 running a real CI/CD pipeline on kw. Sandbox
       pods are created with no requests and no limits — `executor.Spec` has no
