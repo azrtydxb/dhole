@@ -17,6 +17,7 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/cache"
 	"github.com/azrtydxb/dhole/internal/cas"
+	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
@@ -214,6 +215,36 @@ func collectorContract(t *testing.T, c collector) {
 		require.Equal(t, 1, freed, "a collection must never reach into another tenant's bytes")
 		require.False(t, has(t, mine, ours))
 		require.True(t, has(t, theirs, hers))
+	})
+
+	t.Run("ADefinitionFileIsPinnedByItsRevisionAndReclaimedWhenNoneCarriesIt", func(t *testing.T) {
+		// The dialect half of ADR 0023's promise. Both statements this adds
+		// are hand-written with `?` placeholders — the upsert that records an
+		// upload and the read that ages it — so a Postgres deployment either
+		// runs them rebound or does not run them at all, and "does not run
+		// them" is a collector that never reclaims a definition file on the
+		// tuned target while reclaiming them in every SQLite test.
+		scope := uniqueTenant(t)
+		files := cas.NewDefinitionFiles(c.store, c.gc.DB, c.gc.Dialect)
+		defs := defstore.NewWithDialect(c.gc.DB, c.gc.Dialect)
+
+		carried, err := files.Put(ctx, scope, strings.NewReader("FROM scratch "+scope))
+		require.NoError(t, err)
+		orphan, err := files.Put(ctx, scope, strings.NewReader("nothing carries me "+scope))
+		require.NoError(t, err)
+
+		_, err = defs.Save(ctx, scope, &dholev1.Pipeline{
+			Id:    "ci",
+			Files: []*dholev1.File{{Path: "Dockerfile", Digest: carried}},
+		}, "author")
+		require.NoError(t, err)
+
+		freed, err := c.gc.Collect(ctx, scope, -time.Second)
+		require.NoError(t, err)
+		require.Equal(t, 1, freed, "only the upload no revision carries is collectable")
+		require.True(t, has(t, scope, carried),
+			"a run pinned to this revision must still resolve the file it carries")
+		require.False(t, has(t, scope, orphan))
 	})
 
 	t.Run("AnUnscopedCollectionIsRefused", func(t *testing.T) {

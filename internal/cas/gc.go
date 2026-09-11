@@ -1,11 +1,13 @@
 package cas
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -147,7 +149,13 @@ func (g *GC) Reference(ctx context.Context, tenantID string, d *dholev1.Digest, 
 //
 //  1. Compute the retained run set FIRST, from the run event log.
 //  2. Only then read the references and delete the ones whose runs expired.
-//  3. Delete a blob only if no reference to it remained after step 2.
+//  3. Delete a blob only if nothing pinned it after step 2 — neither a
+//     reference from a retained run, nor a revision carrying it as a file.
+//
+// A definition's files are pinned by the REVISION that carries them rather
+// than by a run (ADR 0023), and revisions are immutable: the bytes a
+// superseded revision names are still the bytes a run pinned to it must
+// resolve, however far the pipeline's head has moved on.
 //
 // Deleting first and reconciling afterwards — or classifying runs from a
 // snapshot taken after references were already dropped — loses bytes a running
@@ -183,7 +191,7 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 	// between step 1 and here is unknown to the expired set and therefore
 	// counts as retained — the conservative direction is the only one that
 	// cannot delete live bytes.
-	collectable, err := unreferencedDigests(ctx, tx, g.Dialect, tenantID, expired)
+	collectable, err := unpinnedDigests(ctx, tx, g.Dialect, tenantID, expired, time.Now().UTC().Add(-retain))
 	if err != nil {
 		return 0, err
 	}
@@ -210,6 +218,7 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 	freed := 0
 	var deleteErr error
 	var collected []*dholev1.Digest
+	var reclaimed []string
 	for _, text := range collectable {
 		d, err := parseDigestText(text)
 		if err != nil {
@@ -220,9 +229,11 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 		case errors.Is(err, ErrNotFound):
 			// Already collected: the row outlived its bytes, which is exactly
 			// the state this sweep exists to tidy up.
+			reclaimed = append(reclaimed, text)
 		case err != nil:
 			deleteErr = err
 		default:
+			reclaimed = append(reclaimed, text)
 			freed++
 			// Remembered here and credited after the COMMIT, never inside the
 			// transaction. The credit reads the ledger, which lives in this
@@ -235,6 +246,20 @@ func (g *GC) Collect(ctx context.Context, tenantID string, retain time.Duration)
 		}
 		if deleteErr != nil {
 			break
+		}
+	}
+
+	// The definition-file rows of the bytes that are now gone. Dropped only
+	// for the digests this loop actually reclaimed, never for the whole
+	// candidate set: a row kept beside bytes that survived costs one more
+	// examination next sweep, while a row dropped beside bytes that are still
+	// there is a blob nothing enumerates again — the very defect this table
+	// was added to close.
+	const dropDefinitionBlobs = `DELETE FROM definition_blobs WHERE tenant_id = ? AND digest = ?`
+	for _, text := range reclaimed {
+		if _, err := tx.ExecContext(ctx,
+			g.Dialect.Rebind(dropDefinitionBlobs), tenantID, text); err != nil {
+			return freed, fmt.Errorf("cas: drop collected definition file: %w", err)
 		}
 	}
 
@@ -310,14 +335,29 @@ func (g *GC) expiredRuns(ctx context.Context, tenantID string, retain time.Durat
 	return expired, nil
 }
 
-// unreferencedDigests returns the tenant's digests whose every remaining
-// reference belongs to an expired run — the only blobs that may be deleted.
-func unreferencedDigests(
-	ctx context.Context, tx *sql.Tx, dialect runstore.Dialect, tenantID string, expired []string,
+// unpinnedDigests returns the tenant's digests that nothing pins any more —
+// the only blobs that may be deleted.
+//
+// Two things pin a blob, and a digest survives if EITHER does, because the
+// store is content-addressed: identical bytes are one object, so a file a
+// definition carries and an output a run produced may be the same blob, and
+// each holder's claim on it is whole.
+//
+//  1. A run within the retain window that referenced it (blob_refs).
+//  2. A revision that carries it as a file (ADR 0023). Revisions are immutable
+//     and a run pins one, so the bytes a superseded revision names are the
+//     bytes that revision still runs, however far the pipeline's head has
+//     moved on.
+//
+// Candidates come from the two tables that record that a blob was ever stored
+// on purpose: blob_refs and definition_blobs. A blob in neither is not
+// examined at all — the store also holds plugin artifacts and outputs whose
+// reference has not been written yet, and treating an unrecognised blob as an
+// orphan would delete those.
+func unpinnedDigests(
+	ctx context.Context, tx *sql.Tx, dialect runstore.Dialect,
+	tenantID string, expired []string, cutoff time.Time,
 ) ([]string, error) {
-	if len(expired) == 0 {
-		return nil, nil
-	}
 	rows, err := tx.QueryContext(ctx,
 		dialect.Rebind(`SELECT digest, run_id FROM blob_refs WHERE tenant_id = ?`), tenantID)
 	if err != nil {
@@ -348,13 +388,126 @@ func unreferencedDigests(
 		return nil, fmt.Errorf("cas: read blob references: %w", err)
 	}
 
+	if err := definitionCandidates(ctx, tx, dialect, tenantID, cutoff, retainedBy, &order); err != nil {
+		return nil, err
+	}
+
 	var collectable []string
 	for _, digest := range order {
 		if !retainedBy[digest] {
 			collectable = append(collectable, digest)
 		}
 	}
-	return collectable, nil
+	if len(collectable) == 0 {
+		// Nothing to judge, so the revisions are not read at all: decoding
+		// every definition this tenant ever saved is the expensive half of a
+		// sweep, and the common sweep finds nothing collectable.
+		return nil, nil
+	}
+
+	carried, err := carriedDigests(ctx, tx, dialect, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(collectable, func(digest string) bool { return carried[digest] }), nil
+}
+
+// definitionCandidates adds the tenant's uploaded definition files to the
+// candidate set, marking as retained every upload younger than the cutoff.
+//
+// The age guard is not politeness, it is the upload path's own race:
+// PutDefinitionFile stores the bytes and the edit that declares them is a
+// SEPARATE call, so between the two the file is carried by no revision and is
+// indistinguishable from an orphan. A sweep landing in that window would
+// delete the file the next save is about to name, and the failure would
+// surface on an engine fetching an input, minutes later and a long way from
+// here.
+//
+// A row whose timestamp cannot be parsed is retained. Unknown age means
+// retained everywhere in this collector — a collector must never guess in the
+// direction that deletes.
+func definitionCandidates(
+	ctx context.Context, tx *sql.Tx, dialect runstore.Dialect,
+	tenantID string, cutoff time.Time, retainedBy map[string]bool, order *[]string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		dialect.Rebind(`SELECT digest, uploaded_at FROM definition_blobs WHERE tenant_id = ?`), tenantID)
+	if err != nil {
+		return fmt.Errorf("cas: read definition files: %w", err)
+	}
+	for rows.Next() {
+		var digest, uploadedAt string
+		if err := rows.Scan(&digest, &uploadedAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("cas: read definition files: %w", err)
+		}
+		if _, seen := retainedBy[digest]; !seen {
+			*order = append(*order, digest)
+			retainedBy[digest] = false
+		}
+		at, err := time.Parse(definitionFileTimeFormat, uploadedAt)
+		if err != nil || !at.Before(cutoff) {
+			retainedBy[digest] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("cas: read definition files: %w", err)
+	}
+	return nil
+}
+
+// carriedDigests returns every digest some revision of this tenant carries as
+// a file.
+//
+// It is DERIVED from the stored definitions rather than read from a table of
+// its own, and that is the decision migration 0025 records: the definition
+// protobuf is what a run reads back and therefore the only authority on what a
+// revision pins. A denormalised "revision X carries digest Y" table would be a
+// copy, and the day a write path forgets to write into it, this collector
+// believes a file a pinned revision still names is an orphan and deletes it.
+// The cost is decoding the tenant's definitions on a sweep that has candidates
+// to judge; the ceiling is that this scan grows with the revision history, and
+// the answer when it bites is a cache keyed on the revision id, not a second
+// source of truth.
+//
+// It reads the revisions table directly for the same reason dropCacheEntries
+// reads the cache's: the two tables share this database so that one
+// transaction can span them, and internal/defstore exports no way to ask this
+// question. debt: the coupling holds only while that stays true.
+func carriedDigests(
+	ctx context.Context, tx *sql.Tx, dialect runstore.Dialect, tenantID string,
+) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx,
+		dialect.Rebind(`SELECT definition FROM revisions WHERE tenant_id = ?`), tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("cas: read revisions: %w", err)
+	}
+	carried := map[string]bool{}
+	for rows.Next() {
+		var definition []byte
+		if err := rows.Scan(&definition); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("cas: read revisions: %w", err)
+		}
+		p := &dholev1.Pipeline{}
+		if err := proto.Unmarshal(definitionBody(definition), p); err != nil {
+			// A definition this build cannot decode is a definition whose
+			// files this build cannot enumerate, and deleting on that basis
+			// would reclaim the bytes of every revision written by a version
+			// it does not understand.
+			_ = rows.Close()
+			return nil, fmt.Errorf("cas: decode revision to read the files it carries: %w", err)
+		}
+		for _, f := range p.GetFiles() {
+			if text, err := digestText(f.GetDigest()); err == nil {
+				carried[text] = true
+			}
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("cas: read revisions: %w", err)
+	}
+	return carried, nil
 }
 
 // dropCacheEntries removes every cache entry naming one of the digests about
@@ -454,6 +607,26 @@ func entryDigests(encoded []byte) []string {
 		}
 	}
 	return digests
+}
+
+// definitionHashDomain is the prefix internal/defstore puts in front of the
+// stored definition, separating its content hash from any other sha256 in the
+// system. It is duplicated here rather than imported because internal/defstore
+// reaches internal/plugins, which reaches this package: importing it back
+// would be a cycle.
+//
+// A copy of a constant is a thing that drifts, so the drift is made loud
+// instead of silent. Getting it wrong does not mis-read the files a revision
+// carries — it fails to parse at all, carriedDigests returns the error, and
+// the sweep stops without deleting anything. TestAPinnedRevisionStillResolves-
+// EveryFileItCarriesAfterTheHeadMovedOn saves through defstore and would fail
+// on the next build that changed this encoding.
+const definitionHashDomain = "dhole.v1.Pipeline\x00"
+
+// definitionBody strips that prefix, tolerating a stored definition that does
+// not carry one.
+func definitionBody(definition []byte) []byte {
+	return bytes.TrimPrefix(definition, []byte(definitionHashDomain))
 }
 
 // digestText renders a digest in the "<algo>:<hex>" form the reference index

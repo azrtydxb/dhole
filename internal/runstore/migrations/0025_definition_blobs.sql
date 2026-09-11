@@ -1,0 +1,68 @@
+-- The bytes uploaded as a file a DEFINITION carries, so the collector can see
+-- them at all.
+--
+-- ADR 0023 says a file an edit detaches "is unreferenced, and the collector
+-- reclaims it when nothing points at it". The second half was not true: the
+-- collector enumerates its candidates from blob_refs, whose only writer is
+-- cas.GC.Reference, and Reference is called for a step OUTPUT. A file uploaded
+-- by PutDefinitionFile got no row, so it was never a candidate and was
+-- retained for ever — while being charged against max_cas_bytes, which is the
+-- only ceiling a definition has.
+--
+-- WHY A SIBLING TABLE RATHER THAN WIDENING blob_refs' KEY, which was the other
+-- candidate: blob_refs is keyed (tenant_id, digest, run_id), so carrying a
+-- revision-owned row there means an owner-kind column and a new primary key.
+-- Two things argue against it, and the second is the deciding one.
+--
+--   * SQLite cannot change a primary key in place. The migration would have to
+--     create a table, copy, drop and rename — on the one table the collector's
+--     entire safety argument reads, in a runner that re-applies every file on
+--     every open.
+--   * The two facts have OPPOSITE lifetimes and opposite safe directions. A
+--     run reference is dropped when the run ages out, and forgetting one is
+--     safe: it can only make a blob collectable sooner. This row is a
+--     CANDIDACY that lasts until the bytes go, and forgetting it is also safe:
+--     the blob is never examined. But mixing them means every query that ages
+--     a row by its run (`SELECT DISTINCT run_id FROM blob_refs`, and the
+--     retained-set scan beside it) must learn to skip the rows that have no
+--     run — and the one predicate somebody forgets treats a definition file as
+--     a reference from a run that never existed, ages it instantly, and
+--     deletes a file a pinned revision still carries. That is the failure this
+--     whole task exists to avoid, reintroduced by a WHERE clause. A table with
+--     no run column cannot be misread as a run reference.
+--
+-- What is deliberately NOT here is which revision carries which digest. That
+-- would be a second copy of a fact the revisions table already holds
+-- authoritatively — the definition protobuf itself — and a copy some future
+-- write path forgets to write is a file a pinned revision still names and the
+-- collector believes is orphaned. Retention is therefore DERIVED from the
+-- revisions table on every sweep (internal/cas.carriedDigests) and cannot
+-- drift; this table only answers "were these bytes ever uploaded as a
+-- definition file", which nothing else records.
+--
+-- EXISTING ROWS: none, and no backfill is possible. The bytes leaked by the
+-- defect are precisely the ones no revision carries, so the revisions table
+-- cannot name them and the CAS cannot be walked for them — it also holds step
+-- outputs and plugin artifacts, and collecting an unrecognised blob out of it
+-- would delete those. A deployment written before this migration therefore
+-- keeps whatever it already leaked, which is exactly today's behaviour, and
+-- converges from the next upload on: an upload of the same bytes records the
+-- row, and everything uploaded afterwards is a candidate.
+--
+-- Dialect-neutral: every column is TEXT, so both runners apply this one file.
+-- uploaded_at is RFC3339 with nanoseconds in UTC, and is compared in Go rather
+-- than in SQL.
+CREATE TABLE IF NOT EXISTS definition_blobs (
+    tenant_id   TEXT NOT NULL,
+    -- The digest in its "<algo>:<hex>" text form, the same shape blob_refs and
+    -- the cache both store.
+    digest      TEXT NOT NULL,
+    -- When these bytes were last uploaded, NOT when they were first: the
+    -- collector refuses to collect a candidate younger than its retain window,
+    -- because an upload is a separate call from the edit that declares the
+    -- file and the bytes sit carried by nothing in between. Keeping the first
+    -- upload's time would let a sweep delete a file somebody re-uploaded
+    -- seconds ago and is about to save a revision naming.
+    uploaded_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, digest)
+);
