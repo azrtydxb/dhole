@@ -109,19 +109,22 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      # The Go engine is NOT run here yet, deliberately, and this comment is
-      # the reason rather than an oversight.
+      # Both engines run here, and the Go one is the point: it is the engine
+      # the product ships, so a suite it does not pass is a suite that proves
+      # nothing about what users get.
       #
-      # It is the engine the product ships and it does not pass its own suite:
-      # no executor advertises CAPABILITY_SECRETS, so `engine.checkSecrets`
-      # refuses every dispatch carrying one and the secret-redemption case can
-      # never be reached. That is a real defect — it is recorded as an open
-      # item in .procoder/plans/dhole.md — and the honest response is to fix it
-      # and then turn this on, not to ship a job that is red every night until
-      # somebody stops reading it.
+      # It was disabled until 2026-09-11 for a stated reason — no executor
+      # advertised CAPABILITY_SECRETS, `engine.checkSecrets` refused every
+      # dispatch carrying one, and `secret-redemption` could not be reached.
+      # That defect is fixed, and the run that turned this back on was
+      # 11 passed, 0 failed, 0 skipped for BOTH engines.
       #
-      # Add back when secret redemption lands:
-      #   - run: go build -o "$RUNNER_TEMP/dhole-engine" ./cmd/dhole-engine
-      #   - run: make conformance ENGINE="$RUNNER_TEMP/dhole-engine"
+      # The python engine stays, and is not redundant: it is the only check
+      # that the wire contract is implementable without reading Go. It is what
+      # caught a stream name an engine in another language had no way to know.
       - name: conformance (python reference engine)
         run: make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
+      - name: build the go engine
+        run: go build -o "$RUNNER_TEMP/dhole-engine" ./cmd/dhole-engine
+      - name: conformance (go engine, the one that ships)
+        run: make conformance ENGINE="$RUNNER_TEMP/dhole-engine"
