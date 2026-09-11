@@ -130,12 +130,11 @@ func TestAnAgentAskingToStartARunIsRoutedToTheSameGateAPersonWouldBe(t *testing.
 	// The gate is armed against the AGENT's own step, which is what puts an
 	// agent asking to deploy in the same queue as a person asking to deploy.
 	//
-	// What happens AFTER a person decides is deliberately not asserted, and
-	// deliberately not built: resuming a parked agent means re-entering the
-	// model's loop at the call it was stopped on, which this build cannot do,
-	// so the step fails with the gate's own reason and the run stops. A run
-	// that stops with a readable explanation is the right failure to leave
-	// behind; a run that hangs on a gate nothing will ever release is not.
+	// Nobody decides it here, and the assertions below are about the state
+	// that leaves: the step has PARKED. It has not succeeded, it has not
+	// failed, and the action it asked for has not happened. What a decision
+	// does to a parked step is
+	// TestAParkedAgentStepResumesAtTheCallItStoppedOnAfterAPersonApprovesItsGate.
 	awaitStepEvent(ctx, t, srv, runID, "triage", scheduler.StepAwaitingApproval)
 
 	events, err := srv.Events(ctx, tenantID, runID)
@@ -147,6 +146,8 @@ func TestAnAgentAskingToStartARunIsRoutedToTheSameGateAPersonWouldBe(t *testing.
 	for _, e := range events {
 		require.NotEqual(t, runstore.StepSucceeded, e.Type,
 			"the agent step reported success on an action nobody approved")
+		require.NotEqual(t, runstore.StepFailed, e.Type,
+			"a step waiting for a person is not a step that failed")
 	}
 }
 

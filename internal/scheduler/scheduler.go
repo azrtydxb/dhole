@@ -98,6 +98,18 @@ const StepAwaitingReplay runstore.EventType = "STEP_AWAITING_REPLAY"
 const (
 	StepAwaitingTimer    runstore.EventType = "STEP_AWAITING_TIMER"
 	StepAwaitingApproval runstore.EventType = "STEP_AWAITING_APPROVAL"
+
+	// StepResumed lifts a gate a step was PARKED at without deciding the
+	// step: whoever decided the gate is saying the step may carry on, not
+	// that it is finished.
+	//
+	// It exists because the two were the same event and could not be. A gate
+	// that IS a step (`builtin:approval`) is finished by its own verdict, and
+	// writing one for an agent that stopped mid-loop marked it succeeded on
+	// an answer no model had given — the run completed carrying the output of
+	// a step that had failed. Folded below as "out of flight, and dispatchable
+	// again", which is the only state a parked-then-released step can be in.
+	StepResumed runstore.EventType = "STEP_RESUMED"
 )
 
 // RunFailed closes a run whose step used up its attempts. A run that failed is
@@ -1106,6 +1118,15 @@ func (s *Scheduler) recordOrphan(ctx context.Context, orphan lease.Orphan) (bool
 	if state.attempts[orphan.StepID] != orphan.Attempt {
 		return false, nil
 	}
+	// A step stopped at a gate is waiting for a PERSON, not for a process
+	// that could die: whatever held the lease finished its part and went
+	// away. Failing it here would give a parked agent a lease TTL to be
+	// approved in, and a person asleep for the night would come back to a run
+	// that had already given up on them. `resumed` closes the same hole for
+	// the instant between a decision and the dispatch it releases.
+	if state.gated[orphan.StepID] || state.resumed[orphan.StepID] {
+		return false, nil
+	}
 
 	payload, err := MarshalAttemptLost(AttemptLost{
 		Attempt: orphan.Attempt,
@@ -1259,8 +1280,13 @@ type runState struct {
 	cacheHit map[string]bool
 	// gated is the set of steps stopped at a durable gate — a timer that has
 	// not come due, an approval nobody has decided. The gate is lifted by the
-	// step's own terminal event, written by whoever owns the gate.
+	// step's own terminal event, written by whoever owns the gate, or by
+	// StepResumed for a step that was parked at it rather than being it.
 	gated map[string]bool
+	// resumed is the set of steps whose gate was lifted by StepResumed: they
+	// have a dispatch behind them and no verdict, and they are to be
+	// dispatched again rather than counted as in flight forever.
+	resumed map[string]bool
 	// fragments are the subgraphs this run's generators realised, in the order
 	// the log recorded them. They are part of the run's GRAPH rather than of
 	// its progress: see spliceRealised.
@@ -1283,6 +1309,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		awaiting:      map[string]bool{},
 		cacheHit:      map[string]bool{},
 		gated:         map[string]bool{},
+		resumed:       map[string]bool{},
 	}
 	for _, e := range events {
 		switch e.Type {
@@ -1310,6 +1337,8 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			// in flight again, and its earlier verdict no longer describes
 			// where it stands.
 			delete(state.terminal, e.StepID)
+			// And it supersedes a release: the resumed step is running.
+			delete(state.resumed, e.StepID)
 		case runstore.StepSucceeded:
 			state.terminal[e.StepID] = e.Type
 			status := &dholev1.JobStatus{}
@@ -1334,6 +1363,9 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			state.awaiting[e.StepID] = true
 		case StepAwaitingTimer, StepAwaitingApproval:
 			state.gated[e.StepID] = true
+		case StepResumed:
+			delete(state.gated, e.StepID)
+			state.resumed[e.StepID] = true
 		case RunFailed:
 			state.completed = true
 		case runstore.RunCompleted, runstore.RunCancelled:
@@ -1416,6 +1448,14 @@ func plan(p *dholev1.Pipeline, g *dag.Graph, state *runState, now time.Time) pla
 		// here would throw the wait away.
 		if state.gated[id] {
 			out.waiting++
+			continue
+		}
+		// A step released from a gate it was PARKED at is ready again, and
+		// this check has to come before the in-flight one: it has a dispatch
+		// behind it, so the attempt count alone says it is still running when
+		// the attempt that parked it finished and went away.
+		if state.resumed[id] {
+			out.ready = append(out.ready, step)
 			continue
 		}
 		if state.attempts[id] > 0 {

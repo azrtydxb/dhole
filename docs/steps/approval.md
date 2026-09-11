@@ -25,6 +25,25 @@ The approver must be a principal of the tenant. However plausible the string, a
 subject this tenant does not know is refused — the same subject in another
 tenant is a different person.
 
+## A gate that IS a step, and a gate a step is PARKED at
+
+`builtin:approval` is a step that is nothing but a gate: approving it means the
+step is done, so the approval writes the step's own `STEP_SUCCEEDED`.
+
+An agent step (see [the `agent` step](agent.md)) opens a gate in the **middle
+of its own work** and parks there. Approving that one means the step may carry
+on — it has not produced anything yet — so the approval writes `STEP_RESUMED`
+instead, which the scheduler folds as "out of flight, and dispatchable again".
+The step's verdict comes from the attempt that follows.
+
+`Request.Parks` is what tells the two apart, and it is recorded when the gate is
+opened (`RequestPark` rather than `Request`) because it is a fact about who
+opened it. Without it a parked agent was marked succeeded on an answer no model
+had given, and the run completed carrying the output of a step that had failed.
+
+A **denial** is the same either way: the decision, the step's `STEP_FAILED` and
+a `RUN_FAILED` naming the approver. A refusal is a decision, not a pause.
+
 ## A second decision is refused, not swallowed
 
 Approvals get double-clicked. An idempotent no-op would answer "done" to a
@@ -37,11 +56,12 @@ something to show.
 
 ## Events and payloads
 
-| Event                    | Payload    | Carries                              |
-| ------------------------ | ---------- | ------------------------------------ |
-| `STEP_AWAITING_APPROVAL` | `Request`  | the prompt the person is being asked |
-| `STEP_APPROVAL_DECIDED`  | `Decision` | approver, approved, time             |
-| `RUN_FAILED`             | `Denial`   | steps, approver, step id, reason     |
+| Event                    | Payload    | Carries                                 |
+| ------------------------ | ---------- | --------------------------------------- |
+| `STEP_AWAITING_APPROVAL` | `Request`  | the prompt, and whether it parks a step |
+| `STEP_APPROVAL_DECIDED`  | `Decision` | approver, approved, time                |
+| `STEP_RESUMED`           | `Decision` | the approval that released a parked step |
+| `RUN_FAILED`             | `Denial`   | steps, approver, step id, reason        |
 
 `Denial` names its steps field exactly as `scheduler.RunFailure` does, so a
 refusal reads as an ordinary run failure to the scheduler's own reader as well

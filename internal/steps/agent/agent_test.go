@@ -105,7 +105,12 @@ func TestAgentCannotInvokeAtMostOnceStepWithoutApproval(t *testing.T) {
 	eachStore(t, func(t *testing.T, open storeOpener) {
 		ctx := testContext(t)
 
-		t.Run("direct invocation parks at the gate", func(t *testing.T) {
+		// Invoke is not the model's loop, and it arms NO gate. A gate exists
+		// to be decided, and a decision releases a PARKED loop back into the
+		// conversation it stopped in; there is no such loop behind a direct
+		// call, so arming one would leave a run waiting on a decision nothing
+		// could ever act on. It refuses instead, by name.
+		t.Run("direct invocation is refused without arming a gate", func(t *testing.T) {
 			h := newHarnessWith(ctx, t, open, config(deploy), nil)
 
 			_, err := h.step.Invoke(ctx, agent.Invocation{
@@ -116,6 +121,19 @@ func TestAgentCannotInvokeAtMostOnceStepWithoutApproval(t *testing.T) {
 			require.Contains(t, err.Error(), deploy)
 			require.Zero(t, h.invoker.count(),
 				"an at-most-once step that ran and then asked has already happened")
+			require.Empty(t, h.eventsOfType(ctx, t, scheduler.StepAwaitingApproval),
+				"a gate nothing can release is a run that hangs")
+		})
+
+		t.Run("the model's own tool call parks at the gate", func(t *testing.T) {
+			h := newHarnessWith(ctx, t, open, config(deploy), nil)
+			h.model.script(toolCall("c1", deploy, `{"env":"prod"}`))
+
+			out, err := h.step.Run(ctx, testRun, agentStep, "ship it")
+			require.NoError(t, err, "parking is not a failure; the run is waiting for a person")
+			require.NotNil(t, out.Parked)
+			require.Equal(t, []string{deploy}, out.Parked.Actions)
+			require.Zero(t, h.invoker.count())
 
 			// The gate is Task 20's, and its event is in the run log: the run
 			// is now waiting for a person, exactly as any other approval.
@@ -126,17 +144,8 @@ func TestAgentCannotInvokeAtMostOnceStepWithoutApproval(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, req.Prompt, deploy,
 				"the person being asked is told which step the agent wants to run")
-		})
-
-		t.Run("the model's own tool call parks at the gate", func(t *testing.T) {
-			h := newHarnessWith(ctx, t, open, config(deploy), nil)
-			h.model.script(toolCall("c1", deploy, `{"env":"prod"}`))
-
-			_, err := h.step.Run(ctx, testRun, agentStep, "ship it")
-			require.Error(t, err)
-			require.ErrorIs(t, err, agent.ErrApprovalRequired)
-			require.Zero(t, h.invoker.count())
-			require.Len(t, h.eventsOfType(ctx, t, scheduler.StepAwaitingApproval), 1)
+			require.True(t, req.Parks,
+				"a gate an agent parked at was recorded as one that IS the step")
 		})
 
 		t.Run("a granted pure step needs no gate", func(t *testing.T) {
@@ -312,6 +321,18 @@ type harness struct {
 	invoker *countingInvoker
 	store   runstore.Store
 	tenant  string
+	// gate and local are the REAL approval path behind this agent, so a test
+	// can decide the gate the way a person does rather than pretending to.
+	gate  *approval.Step
+	local *identity.Local
+}
+
+// decide answers this agent's gate as a named person would, through the same
+// approval.Step the plane uses.
+func (h *harness) decide(ctx context.Context, t *testing.T, subject string, approved bool) {
+	t.Helper()
+	require.NoError(t, h.local.CreateUser(ctx, h.tenant, subject, "test-secret"))
+	require.NoError(t, h.gate.Decide(ctx, testRun, agentStep, subject, approved))
 }
 
 // newHarness is the no-gate case: SQLite, a real approval gate behind it.
@@ -331,10 +352,11 @@ func newHarnessWith(
 	// The REAL Task 20 gate, not a fake that records a string. A stub gate
 	// could not show that an agent's request is the same kind of event a
 	// person's approval queue reads.
+	users := identity.NewSQLStoreWithDialect(db, dialect)
 	gate, err := approval.New(approval.Config{
 		Store:     store,
 		TenantID:  tenant,
-		Approvers: identity.NewSQLStoreWithDialect(db, dialect),
+		Approvers: users,
 		Resume:    stubResumer{},
 	})
 	require.NoError(t, err)
@@ -351,7 +373,10 @@ func newHarnessWith(
 	})
 	require.NoError(t, err)
 	_ = ctx
-	return &harness{step: st, model: model, invoker: inv, store: store, tenant: tenant}
+	return &harness{
+		step: st, model: model, invoker: inv, store: store, tenant: tenant,
+		gate: gate, local: identity.NewLocal(users),
+	}
 }
 
 func (h *harness) eventsOfType(
@@ -385,6 +410,17 @@ func (i *countingInvoker) Invoke(_ context.Context, inv agent.Invocation) (json.
 	defer i.mu.Unlock()
 	i.seen = append(i.seen, inv.Action)
 	return json.RawMessage(`{"ok":true}`), nil
+}
+
+// actions is what actually ran, in order. The ORDER is the point in the
+// resume tests: a replayed call shows up as a second entry, not as a bigger
+// number somewhere.
+func (i *countingInvoker) actions() []string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	out := make([]string, len(i.seen))
+	copy(out, i.seen)
+	return out
 }
 
 func (i *countingInvoker) count() int {

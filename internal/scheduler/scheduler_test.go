@@ -1025,3 +1025,50 @@ func TestAStepNamingNoEngineKindKeepsTheUnrestrictedDispatchSubject(t *testing.T
 	require.Equal(t, []string{bus.SubjectDispatch(testTier, caps)}, h.bus.subjects(),
 		"a step naming no kind goes on the subject every engine of every kind pulls")
 }
+
+// TestAStepParkedAtAGateIsNotSweptAndIsDispatchedAgainWhenReleased is the
+// scheduler's half of resuming a parked agent step.
+//
+// Two rules, and each of them was a way for the run to end wrongly. A step
+// stopped at a gate is waiting for a PERSON: whatever held its lease finished
+// its part and went away, so sweeping it would give a person a lease TTL to
+// decide in and fail the run on them while they slept. And a gate lifted by
+// STEP_RESUMED says the step may CARRY ON rather than that it is finished —
+// it has a dispatch behind it, so the attempt count alone says it is still in
+// flight, and nothing would ever dispatch it again.
+func TestAStepParkedAtAGateIsNotSweptAndIsDispatchedAgainWhenReleased(t *testing.T) {
+	ctx := testContext(t)
+	const ttl = 250 * time.Millisecond
+	h := newHarnessWithLeaseTTL(ctx, t, diamond(), ttl, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	// The step parks: it asks for an approval and stops renewing, exactly as
+	// an agent step does when its model asks for an at-most-once action.
+	require.NoError(t, h.store.Append(ctx, testTenant, runstore.Event{
+		RunID: testRun, StepID: "a", Type: scheduler.StepAwaitingApproval,
+		Payload: []byte(`{"prompt":"approve?","parks_step":true}`), At: time.Now().UTC(),
+	}))
+	time.Sleep(2 * ttl)
+
+	lost, err := h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Zero(t, lost, "a step waiting for a person was failed for not renewing a lease")
+	require.Zero(t, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t), "a gated step was dispatched anyway")
+
+	// A person approves. The gate is lifted without a verdict, because the
+	// step has not produced anything yet.
+	require.NoError(t, h.store.Append(ctx, testTenant, runstore.Event{
+		RunID: testRun, StepID: "a", Type: scheduler.StepResumed,
+		Payload: []byte(`{"approver":"release-boss","approved":true}`), At: time.Now().UTC(),
+	}))
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+
+	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t),
+		"the released step was never dispatched again, so the run waits forever")
+	second := h.bus.dispatches(t)[1]
+	require.Equal(t, uint32(2), second.GetAttempt(),
+		"the resumed step must run under a fresh attempt and fence")
+}

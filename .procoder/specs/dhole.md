@@ -92,7 +92,11 @@ and agent orchestration are profiles over a shared core.
   39 providers, zero root dependencies): `GenerateObject` for schema-validated structured
   output, the `agent` package's `maxSteps` for bounded iteration, its tool-call approval
   for gated actions, `AsTool` for exposing granted pipeline steps as agent tools, and the
-  contrib OTel bridge for tracing. Dhole adds model fingerprint capture, token and cost
+  contrib OTel bridge for tracing. An agent that asks for a gated action PARKS: the step
+  neither succeeds nor fails, its conversation is written to the run log, and a person's
+  approval resumes the model's loop at the call it stopped on — with what is left of its
+  step ceiling, never a fresh one. A denial ends the step and fails the run naming the
+  approver. Dhole adds model fingerprint capture, token and cost
   accounting with per-run and per-pipeline ceilings, and full call recording.
 
 ## Out of scope
@@ -184,6 +188,9 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
 - Plugin upgrade changing a cache key; a tag that moved under a previously-resolved digest.
 - Tainted data reaching an effectful step; an agent attempting a step outside its granted
   action space.
+- An agent parked at an approval gate across a control-plane restart, and a parked agent
+  asking for a second gated action after the first was approved — there is one gate per
+  step per run.
 - Cache hit on a step whose recorded output blob has been garbage collected.
 - Two engines claiming the same step after a partition; a zombie engine reporting a result
   for an attempt that has already been superseded.
