@@ -40,15 +40,16 @@ its tenant and could not reach another one by spelling it differently: its
 credentials place it in exactly one account, and its permissions within that
 account are further limited to its own tier.
 
-| Subject                        | Direction        | Message                          |
-| ------------------------------ | ---------------- | -------------------------------- |
-| `job.dispatch.<tier>.<caps>`   | plane → engine   | `JobDispatch`                    |
-| `job.status.<run>.<step>`      | engine → plane   | `JobStatus`                      |
-| `job.logs.<run>.<step>`        | engine → viewers | `LogChunk`                       |
-| `engine.control.<engine-id>`   | plane → engine   | `EngineControl`                  |
-| `engine.heartbeat.<engine-id>` | engine → plane   | `EngineHeartbeat`                |
-| `engine.registration`          | engine → plane   | `EngineRegistration`             |
-| `secret.redeem`                | engine → plane   | a handle, raw (reply: the value) |
+| Subject                             | Direction        | Message                          |
+| ----------------------------------- | ---------------- | -------------------------------- |
+| `job.dispatch.<tier>.<caps>`        | plane → engine   | `JobDispatch` (any engine kind)  |
+| `job.dispatch.<tier>.<caps>.<kind>` | plane → engine   | `JobDispatch` (one engine kind)  |
+| `job.status.<run>.<step>`           | engine → plane   | `JobStatus`                      |
+| `job.logs.<run>.<step>`             | engine → viewers | `LogChunk`                       |
+| `engine.control.<engine-id>`        | plane → engine   | `EngineControl`                  |
+| `engine.heartbeat.<engine-id>`      | engine → plane   | `EngineHeartbeat`                |
+| `engine.registration`               | engine → plane   | `EngineRegistration`             |
+| `secret.redeem`                     | engine → plane   | a handle, raw (reply: the value) |
 
 `<tier>` is the trust tier the work is dispatched to — `trusted`, `untrusted`,
 and whatever else the deployment defines. An engine's bus credentials permit
@@ -60,6 +61,49 @@ control plane's good manners: an engine in the untrusted tier that subscribes to
 engine subscribes to the dispatch subjects matching capability sets it can
 satisfy, so filtering happens at the bus rather than by receiving and rejecting
 work it was never eligible for.
+
+`<kind>` is the executor kind a step named in `Step.engine_type` — `process`,
+`kubernetes`, `vm`, and whatever else a deployment runs — matched against the
+`engine_types` an engine registered. It is a single subject token: a kind
+carrying a dot, a wildcard or a space is not a kind.
+
+**A step that names no kind is published to `job.dispatch.<tier>.<caps>`, and a
+step that names one is published to `job.dispatch.<tier>.<caps>.<kind>`.** An
+engine subscribes to BOTH: its tier's unrestricted subject, and the subject for
+its own kind. Two subjects and not one, because NATS subjects are token-exact
+unless wildcarded — a subscriber on the three-token subject never receives a
+four-token one.
+
+This is where the kind is enforced, and enforcing it anywhere else does not
+work. The scheduler's filter decides whether a step CAN be placed; the subject
+decides where it GOES. With the kind absent from the subject, every engine in a
+tier pulled one work queue and whichever grabbed the message first ran it — a
+step naming `vm`, in a tier holding a vm-backed and a kubernetes-backed engine,
+ran on the kubernetes one. Refusing on RECEIPT instead is worse: the dispatch
+has already been taken off the queue, and its redelivery to another engine is a
+race rather than a route.
+
+**An engine that does not know about the kind token receives exactly the
+unrestricted work it always received, and never receives kind-targeted work.**
+That is the intended outcome, not a degradation to tolerate: an engine that
+never heard of the token could not be trusted to honour the requirement anyway.
+**Upgrade the engines before the control plane.** The consequence of routing by
+subject is that a kind-targeted dispatch waits on the stream until an engine of
+that kind binds its queue. An engine that advertises `vm` in `engine_types` but
+predates this token is matched by the scheduler and never pulls the message, so
+the step is held and redelivered rather than run — a stall, which is the right
+failure and a visible one, but it is a stall until that engine is upgraded.
+
+There is no protocol version to check for this and no bump was made for it. The
+protocol version says what an engine speaking it must DO; here an older engine
+must do nothing differently, because the routing — not the negotiation — is
+what keeps the wrong work away from it, and the plane cannot know in advance
+which engine will pull a message off a work queue.
+
+An engine's bus credentials permit `job.dispatch.<tier>.>` — `>`, not `*`,
+since `*` matches exactly one token and a kind-targeted subject carries one
+more. The tier token is still fixed, so this widens what an engine may take
+within its tier and nothing about which tier.
 
 ### Message framing
 

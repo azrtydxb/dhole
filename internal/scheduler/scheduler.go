@@ -1666,7 +1666,18 @@ func (s *Scheduler) dispatch(
 		return err
 	}
 
-	subject := bus.SubjectDispatch(s.tier, engine.CapsHash(step.GetCapabilities()))
+	// The kind is part of the ROUTE, not a check the engine makes on receipt.
+	// Match decides whether a step CAN be placed and had no say in where it
+	// went: on kw a step naming engine_type vm, in a tier holding a vm-backed
+	// and a kubernetes-backed engine, ran on the kubernetes one, because both
+	// pulled the same job.dispatch.<tier>.<caps> queue. A step naming no kind
+	// keeps that subject byte for byte — it is what every engine subscribes
+	// to, including one built before this token existed.
+	capsHash := engine.CapsHash(step.GetCapabilities())
+	subject := bus.SubjectDispatch(s.tier, capsHash)
+	if kind := step.GetEngineType(); kind != "" {
+		subject = bus.SubjectDispatchKind(s.tier, capsHash, kind)
+	}
 
 	err = s.store.WithTx(ctx, func(tx runstore.Tx) error {
 		if err := tx.Append(ctx, tenantID, runstore.Event{

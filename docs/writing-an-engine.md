@@ -46,6 +46,10 @@ The shape of the loop, in any language:
 3. Subscribe to `job.dispatch.<tier>.<caps>` for your tier and for each
    capability set you can satisfy. `<caps>` is a stable hash of the sorted
    capability set, so the bus does the filtering; see "Computing `<caps>`".
+   Also subscribe to `job.dispatch.<tier>.<caps>.<kind>`, where `<kind>` is the
+   executor kind you advertise in `engine_types`: that is where a step naming
+   `Step.engine_type` is published, and a subscriber on the shorter subject
+   never receives it. Skip it and you simply never get kind-targeted work.
 4. For each `JobDispatch`: fetch the input ports, run the command, stream
    `LogChunk`s on `job.logs.<run>.<step>`, write the output ports, and publish a
    terminal `JobStatus` on `job.status.<run>.<step>`.
@@ -125,13 +129,13 @@ implement.
 `dhole-engine` is the Go engine as a standalone binary. Every knob is an
 environment variable and every connection is outbound:
 
-| Variable                     | Required | Meaning                                                      |
-| ---------------------------- | -------- | ------------------------------------------------------------ |
-| `DHOLE_BUS_URL`              | yes      | the NATS server to dial                                      |
-| `DHOLE_ENGINE_ID`            | yes      | this engine's identity, and its control subject              |
-| `DHOLE_TIER`                 | yes      | the trust tier whose work it takes                           |
-| `DHOLE_SLOTS`                | no       | concurrent steps; default 1                                  |
-| `DHOLE_EXECUTOR`             | no       | `process` (default) or `kubernetes`                          |
+| Variable          | Required | Meaning                                         |
+| ----------------- | -------- | ----------------------------------------------- |
+| `DHOLE_BUS_URL`   | yes      | the NATS server to dial                         |
+| `DHOLE_ENGINE_ID` | yes      | this engine's identity, and its control subject |
+| `DHOLE_TIER`      | yes      | the trust tier whose work it takes              |
+| `DHOLE_SLOTS`     | no       | concurrent steps; default 1                     |
+| `DHOLE_EXECUTOR`  | no       | `process` (default) or `kubernetes`             |
 
 The object store is configured by the variables the contract defines — see
 [reaching the object store](wire-contract.md#reaching-the-object-store) — and

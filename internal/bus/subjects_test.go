@@ -1,6 +1,7 @@
 package bus_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,8 @@ import (
 func TestSubjectsMatchDocumentedContract(t *testing.T) {
 	require.Equal(t, "job.dispatch.untrusted.abc", bus.SubjectDispatch("untrusted", "abc"))
 	require.Equal(t, "job.dispatch.trusted.deadbeef", bus.SubjectDispatch("trusted", "deadbeef"))
+	require.Equal(t, "job.dispatch.trusted.deadbeef.vm",
+		bus.SubjectDispatchKind("trusted", "deadbeef", "vm"))
 	require.Equal(t, "job.status.run-1.build", bus.SubjectStatus("run-1", "build"))
 	require.Equal(t, "job.logs.run-1.build", bus.SubjectLogs("run-1", "build"))
 	require.Equal(t, "engine.control.e1", bus.SubjectEngineControl("e1"))
@@ -25,8 +28,13 @@ func TestSubjectsMatchDocumentedContract(t *testing.T) {
 // against: an engine subscribes to its own tier's dispatch wildcard and to
 // nothing else.
 func TestTierWildcardsScopeToOneTier(t *testing.T) {
-	require.Equal(t, "job.dispatch.untrusted.*", bus.SubjectDispatchWildcard("untrusted"))
-	require.Equal(t, "job.dispatch.trusted.*", bus.SubjectDispatchWildcard("trusted"))
+	require.Equal(t, "job.dispatch.untrusted.>", bus.SubjectDispatchWildcard("untrusted"))
+	require.Equal(t, "job.dispatch.trusted.>", bus.SubjectDispatchWildcard("trusted"))
+	// `>` and not `*`: a kind-targeted dispatch carries one token more, and
+	// under `*` an engine was refused its own tier's kind subjects by the
+	// server. The tier token is fixed either way, which is the boundary.
+	require.True(t, strings.HasPrefix(
+		bus.SubjectDispatchKind("trusted", "deadbeef", "vm"), "job.dispatch.trusted."))
 }
 
 // TestSecretRedemptionSubjectIsPinned holds the one subject an engine in

@@ -113,7 +113,8 @@ func normaliseCaps(caps []dholev1.Capability) []dholev1.Capability {
 // maxAdvertisedCaps bounds how many capabilities an engine may advertise before
 // subscribing to every satisfiable subset stops being sensible. The enum has
 // four members today; the guard exists so a future one that grows it fails
-// loudly here instead of quietly creating a thousand consumers.
+// loudly here instead of quietly creating a thousand consumers — two thousand
+// now, since each capability set also has a queue for this engine's kind.
 const maxAdvertisedCaps = 8
 
 // satisfiableCapsHashes is every capability set this engine could serve: each

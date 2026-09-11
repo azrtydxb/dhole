@@ -451,6 +451,96 @@ func TestAgentRefusesSecretsItCannotRedeemWithoutLeakingTheHandle(t *testing.T) 
 	}
 }
 
+// TestAStepNamingAnEngineKindRunsOnAnEngineOfThatKindWhenTwoKindsShareATier is
+// the test whose absence let the bug ship. Match filters on engine type and is
+// right when exercised alone, but it only decides whether a step CAN be
+// placed: on kw, a step naming engine_type vm in a tier holding both a
+// vm-backed and a kubernetes-backed engine ran on the kubernetes one, because
+// both engines pulled the SAME job.dispatch.<tier>.<caps> work queue and
+// whichever grabbed it first ran it. Nothing short of two engines of different
+// kinds in one tier, over a real bus, catches that.
+func TestAStepNamingAnEngineKindRunsOnAnEngineOfThatKindWhenTwoKindsShareATier(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	registrations := h.registrations(ctx, t)
+
+	vm := make(chan string, 4)
+	kubernetes := make(chan string, 4)
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-vm", Tier: tier, Bus: h.engineBus,
+		Executor: kindedExecutor{Executor: process.New(), kind: "vm", acquired: vm},
+		Blobs:    h.blobs, CAS: h.cas, Slots: 1,
+	})
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-kubernetes", Tier: tier, Bus: h.engineBus,
+		Executor: kindedExecutor{Executor: process.New(), kind: "kubernetes", acquired: kubernetes},
+		Blobs:    h.blobs, CAS: h.cas, Slots: 1,
+	})
+	// Both engines are up and bound BEFORE anything is published, so an engine
+	// that does not run the step is one that was offered it and left it alone,
+	// not one that had not started yet.
+	awaitEngines(ctx, t, registrations, "engine-vm", "engine-kubernetes")
+
+	statuses := h.statuses(ctx, t, "run-kind", "probe")
+	h.publishDispatchToKind(ctx, t, newDispatch("run-kind", "probe", "echo", "hi"), "vm")
+
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, statuses).GetPhase())
+	require.Equal(t, "vm", receive(ctx, t, vm, "the vm engine acquiring a sandbox"))
+	require.Empty(t, kubernetes,
+		"an engine offering kubernetes must never be handed a step that named vm")
+
+	// The other direction, on the same pair: the route is a route, not a
+	// preference for whichever engine happens to be named first.
+	otherStatuses := h.statuses(ctx, t, "run-kind", "other")
+	h.publishDispatchToKind(ctx, t, newDispatch("run-kind", "other", "echo", "hi"), "kubernetes")
+
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, otherStatuses).GetPhase())
+	require.Equal(t, "kubernetes", receive(ctx, t, kubernetes, "the kubernetes engine acquiring a sandbox"))
+	require.Empty(t, vm, "the vm engine must not have run the step that named kubernetes")
+}
+
+// TestAnEngineWhoseKindIsNotASubjectTokenIsRefusedAtConstruction. The kind is
+// now part of a subject and of a durable consumer name. A kind carrying a dot
+// would split the subject into tokens nothing publishes to and produce a
+// durable name NATS rejects — an engine that registers, heartbeats, reports
+// ready and takes no kind-targeted work, forever. Refused loudly at the one
+// place a backend's kind enters the bus instead.
+func TestAnEngineWhoseKindIsNotASubjectTokenIsRefusedAtConstruction(t *testing.T) {
+	h := newHarness(t)
+	_, err := engine.New(engine.Config{
+		EngineID: "engine-bad-kind", Tier: tier, Bus: h.engineBus,
+		Executor: kindedExecutor{Executor: process.New(), kind: "vm.micro"},
+		Blobs:    h.blobs, CAS: h.cas, Slots: 1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "vm.micro")
+}
+
+// TestAStepNamingNoEngineKindStillReachesAnEngineOfAnyKind is the common case,
+// and the one a kind-routing regression would break silently: a step that
+// names no kind must keep going to the unrestricted subject every engine
+// subscribes to, whatever backend that engine happens to run.
+func TestAStepNamingNoEngineKindStillReachesAnEngineOfAnyKind(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	acquired := make(chan string, 4)
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-vm-only", Tier: tier, Bus: h.engineBus,
+		Executor: kindedExecutor{Executor: process.New(), kind: "vm", acquired: acquired},
+		Blobs:    h.blobs, CAS: h.cas, Slots: 1,
+	})
+
+	statuses := h.statuses(ctx, t, "run-anykind", "probe")
+	h.publishDispatch(ctx, t, newDispatch("run-anykind", "probe", "echo", "hi"))
+
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, statuses).GetPhase())
+	require.Equal(t, "vm", receive(ctx, t, acquired, "the engine acquiring a sandbox"))
+}
+
 // --- harness ---------------------------------------------------------------
 
 type harness struct {
@@ -523,6 +613,49 @@ func (h *harness) publishDispatch(ctx context.Context, t *testing.T, d *dholev1.
 	t.Helper()
 	subject := bus.SubjectDispatch(tier, engine.CapsHash(d.GetStep().GetCapabilities()))
 	require.NoError(t, h.plane.Publish(ctx, subject, d))
+}
+
+// publishDispatchToKind publishes where only engines of one backend kind are
+// listening. The kind is a token of the subject, exactly as the tier and the
+// capability set are, because a dispatch refused on RECEIPT has already been
+// taken off the work queue and its redelivery is a race rather than a route.
+func (h *harness) publishDispatchToKind(ctx context.Context, t *testing.T, d *dholev1.JobDispatch, kind string) {
+	t.Helper()
+	subject := bus.SubjectDispatchKind(tier, engine.CapsHash(d.GetStep().GetCapabilities()), kind)
+	require.NoError(t, h.plane.Publish(ctx, subject, d))
+}
+
+// awaitEngines blocks until every named engine has announced itself.
+func awaitEngines(ctx context.Context, t *testing.T, regs <-chan *dholev1.EngineRegistration, ids ...string) {
+	t.Helper()
+	waiting := map[string]bool{}
+	for _, id := range ids {
+		waiting[id] = true
+	}
+	for len(waiting) > 0 {
+		delete(waiting, receive(ctx, t, regs, "registration").GetEngineId())
+	}
+}
+
+// kindedExecutor wears a backend KIND its delegate does not have and
+// records every acquisition, so a test can say WHICH of two engines ran a
+// step. A JobStatus carries no engine id, so without this the two engines
+// sharing a tier are indistinguishable — the same blindness that let a step
+// naming vm run on the kubernetes engine with every unit test green.
+type kindedExecutor struct {
+	executor.Executor
+	kind     string
+	acquired chan string
+}
+
+func (e kindedExecutor) Kind() string { return e.kind }
+
+func (e kindedExecutor) Acquire(ctx context.Context, spec executor.Spec) (executor.Sandbox, error) {
+	select {
+	case e.acquired <- e.kind:
+	default:
+	}
+	return e.Executor.Acquire(ctx, spec)
 }
 
 func (h *harness) statuses(ctx context.Context, t *testing.T, run, step string) <-chan *dholev1.JobStatus {
