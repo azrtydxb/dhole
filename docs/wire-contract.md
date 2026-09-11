@@ -141,11 +141,31 @@ permissions violation rather than a consumer. That is the boundary working, not
 a bug to route around.
 
 Pulling and inspecting an existing consumer (`$JS.API.CONSUMER.MSG.NEXT` and
-`$JS.API.CONSUMER.INFO`) is permitted by NAME, because a NATS wildcard matches
-a whole token and a name prefix is not expressible. A deployment that needs the
-tier boundary to hold against a credential-holder guessing another tier's
-consumer name needs the tier in a token those subjects carry — a dispatch
-stream per tier — which is a change to what the control plane declares.
+`$JS.API.CONSUMER.INFO`) addresses it by NAME, and no permission can narrow a
+name: a NATS wildcard matches a whole token, so `engines-<tier>-*` is not
+expressible. Consumer names are guessable — every engine in a tier binds
+`engines-<tier>-<caps>` and `engines-<tier>-<caps>-<kind>` — so while every
+tier shared one `DISPATCH` stream, a connection that guessed a trusted
+consumer's name pulled trusted work off it, having created nothing and so
+never meeting the create permission above.
+
+**That is why there is one dispatch stream per tier, `DISPATCH_<tier>`.** The
+tier is then a token these subjects already carry, and an engine's credentials
+name its own tier's stream in all three:
+
+```
+$JS.API.CONSUMER.CREATE.DISPATCH_<tier>.*.job.dispatch.<tier>.>
+$JS.API.CONSUMER.MSG.NEXT.DISPATCH_<tier>.*
+$JS.API.CONSUMER.INFO.DISPATCH_<tier>.*
+```
+
+The consumer name stops mattering: a guessed name on another tier's stream is
+refused on the stream token before the name is ever read.
+
+`<tier>` therefore has to be a legal JetStream **stream name** as well as a
+subject token: no `.`, `*`, `>`, `/`, `\` or whitespace, and short enough that
+`DISPATCH_<tier>` stays within 255 bytes. A deployment naming a tier
+`local/dev` is refused when the tier is configured, not at its first dispatch.
 
 ### Message framing
 
@@ -219,9 +239,36 @@ step requiring nothing must reach an engine that offers everything.
 
 ### JetStream mechanics
 
-`job.dispatch.*` is carried by a work-queue stream named `DISPATCH`. An engine
-binds a durable pull consumer filtered to its own dispatch subject, and
-acknowledges by publishing to the message's reply subject.
+`job.dispatch.<tier>.>` is carried by a work-queue stream named
+`DISPATCH_<tier>` — one per trust tier, for the reason given under "How a work
+queue is bound". An engine binds a durable pull consumer on its own tier's
+stream, filtered to its own dispatch subject, and acknowledges by publishing to
+the message's reply subject.
+
+**Upgrade order: the control plane first, then the engines** — the opposite of
+the kind-token order above, and for the opposite reason. The plane is what
+declares streams, and `DISPATCH` covers `job.dispatch.>`, which overlaps every
+`DISPATCH_<tier>`; JetStream refuses two streams over overlapping subjects, so
+the two layouts cannot coexist and one side is always briefly wrong. Upgrading
+the PLANE first makes the losing side an engine that cannot find
+`DISPATCH_<tier>`: it retries the bind forever (it has no deadline, deliberately)
+while its tier's dispatches accumulate in that work queue, and takes them all
+as soon as it is upgraded. Work is HELD, never lost and never misrouted — a
+per-tier stream accepts only its own tier's subjects, so nothing can arrive
+anywhere else. An engine still bound to the removed `DISPATCH` fails its fetch
+and says so, rather than sitting quietly ready with no queue. Upgrading the
+ENGINES first loses nothing either, but stalls
+harder: they cannot bind a stream the old plane has not created, while the old
+plane keeps filling `DISPATCH`, and a plane that then finds work in `DISPATCH`
+refuses to start (below) until it is drained.
+
+**An existing `DISPATCH` stream** is not ignored. On start-up the plane looks
+for it: if it is empty it is deleted, since it holds no work and its subjects
+would block every per-tier stream from existing. If it still holds messages the
+plane REFUSES TO START, naming the stream and the count. Those messages are
+dispatches that live runs are waiting on, and deleting them would strand those
+runs silently. Stop submitting, let the engines still bound to it drain it,
+delete it, and start the new plane.
 
 A pull delivers under the **original subject**, not the reply inbox. An engine
 that routes by the subject it subscribed with will drop every dispatch while the
@@ -231,7 +278,7 @@ server believes it is working on them.
 lower, one stuck job stalls the whole queue for that capability set — including
 work other engines could have taken.
 
-`job.dispatch.*` is a **work queue**: exactly one engine receives each dispatch,
+`job.dispatch.<tier>.>` is a **work queue**: exactly one engine receives each dispatch,
 and an unacknowledged message is redelivered. `job.status.*` is durable —
 the control plane must not miss one. `job.logs.*` is **ephemeral and
 best-effort**; see Logs below.

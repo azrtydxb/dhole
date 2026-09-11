@@ -618,7 +618,12 @@ func TestAnEngineInATenantAccountIsLimitedToItsOwnTier(t *testing.T) {
 	plane, err := bus.Connect(ctx, accountCreds)
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"trusted", "untrusted"}))
+
+	untrustedStream, err := bus.DispatchStreamName("untrusted")
+	require.NoError(t, err)
+	trustedStream, err := bus.DispatchStreamName("trusted")
+	require.NoError(t, err)
 
 	engine, err := bus.Connect(ctx, engineCreds)
 	require.NoError(t, err)
@@ -631,12 +636,12 @@ func TestAnEngineInATenantAccountIsLimitedToItsOwnTier(t *testing.T) {
 		"engines-untrusted-abc":    bus.SubjectDispatch("untrusted", "abc"),
 		"engines-untrusted-abc-vm": bus.SubjectDispatchKind("untrusted", "abc", "vm"),
 	} {
-		sub, subErr := engine.SubscribePull(ctx, "DISPATCH", name, subject)
+		sub, subErr := engine.SubscribePull(ctx, untrustedStream, name, subject)
 		require.NoError(t, subErr, "an engine was refused its own tier's queue %q", subject)
 		t.Cleanup(func() { _ = sub.Close() })
 	}
 
-	_, err = engine.SubscribePull(ctx, "DISPATCH", "engines-trusted-abc",
+	_, err = engine.SubscribePull(ctx, trustedStream, "engines-trusted-abc",
 		bus.SubjectDispatch("trusted", "abc"))
 	require.ErrorIs(t, err, bus.ErrPermissionDenied,
 		"an untrusted engine bound a work queue filtered to the trusted tier inside its tenant's account")

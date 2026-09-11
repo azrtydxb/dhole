@@ -60,13 +60,13 @@ func TestPullConsumerRedeliversUnackedMessage(t *testing.T) {
 	t.Cleanup(conn.Close)
 
 	subject := bus.SubjectDispatch("untrusted", "abc")
-	require.NoError(t, conn.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+	require.NoError(t, conn.EnsureDispatchStreams(ctx, []string{"untrusted"}))
 
 	dispatch := &dholev1.JobDispatch{RunId: "run-1", StepId: "build", FenceToken: "f1"}
 	require.NoError(t, conn.Publish(ctx, subject, dispatch))
 
 	// First delivery: received and deliberately NOT acknowledged.
-	first, err := conn.SubscribePull(ctx, "DISPATCH", "engines", subject)
+	first, err := conn.SubscribePull(ctx, dispatchStream(t, "untrusted"), "engines", subject)
 	require.NoError(t, err)
 	msg, err := first.Next(ctx)
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestPullConsumerRedeliversUnackedMessage(t *testing.T) {
 	require.NoError(t, first.Close())
 
 	// The engine is gone. The same message must come back to the next one.
-	second, err := conn.SubscribePull(ctx, "DISPATCH", "engines", subject)
+	second, err := conn.SubscribePull(ctx, dispatchStream(t, "untrusted"), "engines", subject)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = second.Close() })
 
@@ -151,13 +151,13 @@ func TestAnEngineCanBindItsOwnKindsWorkQueueButNotAnotherTiers(t *testing.T) {
 	plane, err := bus.Connect(ctx, srv.PlaneURL())
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"trusted", "untrusted"}))
 
 	engine, err := bus.Connect(ctx, srv.TierURL("untrusted"))
 	require.NoError(t, err)
 	t.Cleanup(engine.Close)
 
-	own, err := engine.SubscribePull(ctx, "DISPATCH", "engines-untrusted-abc-vm",
+	own, err := engine.SubscribePull(ctx, dispatchStream(t, "untrusted"), "engines-untrusted-abc-vm",
 		bus.SubjectDispatchKind("untrusted", "abc", "vm"))
 	require.NoError(t, err, "an engine must be able to bind the queue for its own kind")
 	t.Cleanup(func() { _ = own.Close() })
@@ -233,7 +233,7 @@ func TestPublishToDurableSubjectReportsRefusal(t *testing.T) {
 	plane, err := bus.Connect(ctx, srv.PlaneURL())
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
-	require.NoError(t, plane.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+	require.NoError(t, plane.EnsureDispatchStreams(ctx, []string{"untrusted"}))
 
 	engine, err := bus.Connect(ctx, srv.TierURL("untrusted"))
 	require.NoError(t, err)
@@ -327,4 +327,13 @@ func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 	_, err = engine.SubscribeEphemeral(ctx, bus.SubjectSecretRedeem(), func([]byte) {})
 	require.Error(t, err, "an engine that could answer redemptions could substitute a value")
 	require.ErrorIs(t, err, bus.ErrPermissionDenied)
+}
+
+// dispatchStream names one tier's work queue, failing the test rather than
+// returning an error for a tier a test spelled wrong.
+func dispatchStream(t *testing.T, tier string) string {
+	t.Helper()
+	name, err := bus.DispatchStreamName(tier)
+	require.NoError(t, err)
+	return name
 }

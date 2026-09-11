@@ -250,8 +250,12 @@ type harness struct {
 	cfg      Config
 	tier     string
 	engineID string
-	blobDir  string
-	logf     func(string, ...any)
+	// dispatchStream is this tier's work queue. One stream per tier: a
+	// consumer is addressed by name in the JS API and a permission cannot
+	// narrow a name, so the tier lives in the STREAM token instead.
+	dispatchStream string
+	blobDir        string
+	logf           func(string, ...any)
 
 	plane *bus.NATS
 	raw   *nats.Conn
@@ -314,7 +318,12 @@ func startHarness(ctx context.Context, cfg Config, root string) (*harness, error
 
 	// The dispatch stream is a work queue, as the contract says: exactly one
 	// engine receives each dispatch and an unacknowledged one is redelivered.
-	if err := plane.EnsureWorkQueue(ctx, engine.DispatchStream, []string{"job.dispatch.>"}); err != nil {
+	h.dispatchStream, err = engine.DispatchStream(cfg.Tier)
+	if err != nil {
+		h.close()
+		return nil, fmt.Errorf("conformance: dispatch stream: %w", err)
+	}
+	if err := plane.EnsureDispatchStreams(ctx, []string{cfg.Tier}); err != nil {
 		h.close()
 		return nil, fmt.Errorf("conformance: dispatch stream: %w", err)
 	}
@@ -491,7 +500,7 @@ func (h *harness) engineEnv(busURL string) []string {
 		// deployment's engine reasonably may, could not otherwise be tested.
 		"DHOLE_OBJECT_STORE="+blobstore.KindFilesystem,
 		"DHOLE_BLOB_DIR="+h.blobDir,
-		"DHOLE_DISPATCH_STREAM="+engine.DispatchStream,
+		"DHOLE_DISPATCH_STREAM="+h.dispatchStream,
 		"DHOLE_SECRET_SUBJECT="+secretSubjectName,
 
 		// Deprecated spellings, kept so engines written against the suite's

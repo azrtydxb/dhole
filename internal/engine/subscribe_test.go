@@ -62,7 +62,7 @@ func TestSubscribeKeepsTryingWhileTheStreamIsMissing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := a.subscribe(ctx, "hash", "job.dispatch.trusted.hash")
+	_, err := a.subscribe(ctx, "DISPATCH_trusted", "hash", "job.dispatch.trusted.hash")
 	require.NoError(t, err, "subscribe gave up while the stream was still on its way")
 	require.GreaterOrEqual(t, b.attempts.Load(), int64(attemptsNeeded),
 		"subscribe stopped retrying early")
@@ -77,7 +77,7 @@ func TestSubscribeStopsWhenTheEngineIsShuttingDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
 
-	_, err := a.subscribe(ctx, "hash", "job.dispatch.trusted.hash")
+	_, err := a.subscribe(ctx, "DISPATCH_trusted", "hash", "job.dispatch.trusted.hash")
 	require.ErrorIs(t, err, context.Canceled)
 }
 
