@@ -387,6 +387,11 @@ for the vm backend. The images are built the way `docs/executors/vm.md` describe
   matters, and a pipeline adds deployment plumbing rather than proof.
 - Do it in CI instead, on a KVM-capable runner, rather than on kw.
 
+### ANSWERED (2026-09-11)
+
+- **Push 275 commits to `origin/main` now.** Nothing on the branch is
+  known-broken and 275 commits on one laptop is a single point of failure.
+
 ### ANSWERED (2026-09-10)
 
 - **Agent step: configure it, `read_run` only.** A real provider key on the kw
@@ -395,3 +400,21 @@ for the vm backend. The images are built the way `docs/executors/vm.md` describe
 - **microVM pipeline: prove it on kw.** Stage a guest kernel and rootfs on a
   node and deploy a vm-backed engine tier, on the same cluster everything else
   was verified on.
+
+## Push 275 commits to origin/main, or hold?
+
+The branch is ~275 commits ahead of `origin/main` and has never been pushed.
+Everything on it is gate-clean: `make check` 0 issues, `go test ./...` exit 0
+across 54 packages run to completion, both reference engines 11/11 on
+conformance, the vm executor 11/11 on real KVM hardware, and kw running the
+result. Nothing in the tree is known-broken.
+
+Two plan items stay open either way, both blocked on hardware rather than work:
+the stargz lazy-pull byte count and the QEMU contract's vsock-enabled kernel.
+
+- Push it now — nothing is known-broken, and 275 unpushed commits is a single
+  point of failure on one laptop.
+- Hold — the push is the user's call and nobody has asked for the work to be
+  published yet.
+- Push to a branch rather than `main`, so the history lands somewhere durable
+  without moving the default branch.
