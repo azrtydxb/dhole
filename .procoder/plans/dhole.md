@@ -1335,6 +1335,26 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       ack wait and asserts ONE sandbox acquisition; removing the renewal fails
       it with "the dispatch was delivered more than once while the step was
       still running".
+- [ ] **Work queued behind a busy engine is declared lost before anyone could
+      start it.** Found 2026-09-11 running a real CI/CD pipeline on kw, and it
+      is the one that matters. A lease starts when the plane DISPATCHES, and
+      `DefaultLeaseTTL` expires it 30 seconds later whether or not any engine
+      had a free slot. A work queue's whole point is that work waits for
+      capacity — so a pipeline with more ready steps than slots loses every
+      step that has to wait. On kw, two steps of three minutes each filled an
+      engine's two slots and a third step was declared lost, re-dispatched,
+      lost again, in a loop that produced attempt after attempt while the
+      engine was working exactly as it should.
+      The fix is to stop conflating "queued" with "being worked on". A lease
+      belongs to an ATTEMPT an engine has accepted; a dispatch nobody has
+      claimed is not late, it is waiting, and the queue already holds it
+      durably. Options: start the lease at ACCEPTED rather than at dispatch
+      (the engine already publishes that status), or keep the dispatch-time
+      lease but make its TTL the queue's patience rather than a step's
+      heartbeat window. Either way the scheduler must stop re-dispatching work
+      that is sitting in a queue it can see. Until then the operational
+      workaround is slots >= the pipeline's widest parallel rank, which is not
+      something a pipeline author should have to know about the fleet.
 - [ ] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
