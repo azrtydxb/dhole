@@ -280,6 +280,7 @@ export function Editor({
           revisionId={revisionId}
           variant="embedded"
           onSelect={setSelected}
+          theme={theme}
         />
       }
       inspector={

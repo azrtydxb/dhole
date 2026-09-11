@@ -26,7 +26,6 @@
 import { create } from "@bufbuild/protobuf";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  Background,
   Controls,
   ReactFlow,
   type Connection,
@@ -56,7 +55,13 @@ import { autoLayout } from "./layout.js";
 import { asPortTypeName, portTypeColour } from "../design/PortGlyph.js";
 import { createPortal } from "react-dom";
 
-import { CanvasMiniMap, HintBar, ZoomControl } from "./CanvasChrome.js";
+import {
+  CanvasGrid,
+  CanvasMiniMap,
+  HintBar,
+  ZoomControl,
+} from "./CanvasChrome.js";
+import type { Theme } from "../design/useTheme.js";
 import {
   StepNode,
   firstPortTop,
@@ -82,6 +87,10 @@ export interface CanvasProps {
   /** Told which step the user selected, so the shell's inspector can follow
    * the canvas. Selection lives in React Flow; this is how it gets out. */
   readonly onSelect?: (stepId: string | null) => void;
+  /** The active theme, passed down rather than read here, because the grid and
+   * the minimap need RESOLVED colours and resolving depends on which theme is
+   * on the document. */
+  readonly theme?: Theme;
 }
 
 /** nodeTypes is module-level because React Flow re-mounts every node when the
@@ -177,6 +186,7 @@ export function Canvas({
   revisionId,
   variant = "standalone",
   onSelect,
+  theme = "dark",
 }: CanvasProps) {
   // head is the revision the next edit is based on. It moves with every
   // applied operation, because every operation produces a revision: there is
@@ -298,10 +308,16 @@ export function Canvas({
           sourceHandle: edge.fromPort,
           target: edge.toStep,
           targetHandle: edge.toPort,
+          // Orthogonal with square corners, which is what the design draws:
+          // `M x1 y1 L mx y1 L mx y2 L x2 y2`. React Flow's default is a
+          // bezier, and a canvas of curves reads as a mind map rather than as
+          // a wiring diagram — the corners are what make a fan of eight edges
+          // followable.
+          type: "step",
           style: {
             stroke: portTypeColour(asPortTypeName(type)),
             strokeWidth: 1.5,
-            opacity: 0.75,
+            opacity: 0.65,
           },
         };
       }),
@@ -548,9 +564,9 @@ export function Canvas({
           fitViewOptions={{ maxZoom: 1, padding: 0.12 }}
           proOptions={{ hideAttribution: false }}
         >
-          <Background color="var(--grid)" gap={24} />
+          <CanvasGrid theme={theme} />
           <ZoomControl />
-          <CanvasMiniMap />
+          <CanvasMiniMap theme={theme} />
         </ReactFlow>
         <HintBar />
         {/* The authoring controls belong in the left rail, which this
@@ -608,7 +624,7 @@ export function Canvas({
           // pane, which is neither readable nor droppable.
           fitViewOptions={{ maxZoom: 1, padding: 0.1 }}
         >
-          <Background color="var(--grid)" gap={24} />
+          <CanvasGrid theme={theme} />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>

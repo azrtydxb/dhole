@@ -10,7 +10,16 @@
  * These are drawn over the canvas rather than beside it so they cost the graph
  * no width, and every one of them sits in a corner the graph rarely occupies.
  */
-import { MiniMap, useReactFlow, useStore } from "@xyflow/react";
+import {
+  Background,
+  BackgroundVariant,
+  MiniMap,
+  useReactFlow,
+  useStore,
+} from "@xyflow/react";
+
+import { svgTokens } from "../design/tokens.js";
+import type { Theme } from "../design/useTheme.js";
 
 /** The zoom control. It shows the current percentage rather than only +/-,
  * because "why is everything tiny" is answered by a number, not by a button. */
@@ -104,8 +113,25 @@ export function HintBar() {
   );
 }
 
+/** CanvasGrid is the design's background: a 1px crosshatch at the grid pitch,
+ * NOT React Flow's default dots. The difference is visible at a glance — a dot
+ * field reads as texture, a ruled grid reads as a drawing surface — and it is
+ * the surface every node position is judged against. */
+export function CanvasGrid({ theme }: { readonly theme: Theme }) {
+  return (
+    <Background
+      variant={BackgroundVariant.Lines}
+      gap={24}
+      lineWidth={1}
+      // A concrete colour, not var(--grid): see tokens.ts.
+      color={svgTokens[theme].grid}
+    />
+  );
+}
+
 /** CanvasMiniMap is React Flow's, wearing the editor's tokens. */
-export function CanvasMiniMap() {
+export function CanvasMiniMap({ theme }: { readonly theme: Theme }) {
+  const { ink3, line, panel2 } = svgTokens[theme];
   return (
     <MiniMap
       pannable
@@ -114,18 +140,18 @@ export function CanvasMiniMap() {
       // overlapping at the bottom-right corner, and the map won because it is
       // drawn later — which hid the only instructions on the screen.
       style={{
-        background: "var(--panel2)",
-        border: "1px solid var(--line)",
+        background: panel2,
+        border: `1px solid ${line}`,
         borderRadius: 6,
         bottom: 52,
         right: 14,
       }}
       maskColor="rgba(0,0,0,0.45)"
-      // A CSS variable cannot be used here: React Flow paints the minimap into
-      // an SVG whose fills it sets itself, and `var(--ink3)` arrives as an
-      // invalid colour and paints nothing — which is why the map was empty.
-      nodeColor={() => "#5d6b80"}
-      nodeStrokeColor="#262f3d"
+      // Resolved colours, not var(): the minimap writes these into SVG
+      // attributes. Hard-coding them instead would leave the dark palette on a
+      // light canvas.
+      nodeColor={() => ink3}
+      nodeStrokeColor={line}
     />
   );
 }
