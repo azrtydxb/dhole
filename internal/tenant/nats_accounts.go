@@ -124,16 +124,106 @@ func ProvisionAccount(ctx context.Context, srv *bus.Embedded, tenantID string) (
 	if err := srv.Reload(opts); err != nil {
 		return "", fmt.Errorf("tenant: provision account %q: %w", name, err)
 	}
-	if registered, lookupErr := srv.Server().LookupAccount(name); lookupErr == nil {
-		// JetStream is per-account. Without this the tenant's engines could
-		// connect but not bind a durable consumer, and dispatch would be a
-		// core-NATS fire-and-forget — the exact "bus as truth" mistake
-		// ADR 0005 forbids.
-		if !registered.JetStreamEnabled() {
-			_ = registered.EnableJetStream(nil, nil)
+	enableJetStream(srv, name)
+	return credentialURL(srv, name, password)
+}
+
+// TierAccountName is the username an engine of one tier connects as inside a
+// tenant's account. It is not a subject, so its shape matters only for being
+// unique and readable.
+func TierAccountName(tenantID, tier string) string {
+	return AccountName(tenantID) + "-" + tier
+}
+
+// ProvisionTierUser adds a credential inside tenantID's EXISTING account that
+// is limited to one trust tier, and returns a client URL carrying it.
+//
+// This is what a distributed deployment must hand an engine. The account
+// credential ProvisionAccount returns reaches the tenant's whole subject space
+// — including `job.dispatch.>`, every tier of it — because it is also the
+// identity the control plane's own components use. Giving that to an engine
+// makes tier isolation nothing but the engine's own good manners, which is the
+// thing [S-5] exists to refuse: "refused at the bus subject level rather than
+// by application code".
+//
+// The permissions come from bus.TierPermissions, the same table the embedded
+// tiered server uses, and not from a second copy here: the pull-consumer hole
+// closed in internal/bus was open for as long as it was partly because the
+// subject list lived in two places and only one of them was ever looked at.
+//
+// Idempotent for the same reason ProvisionAccount is: a re-provision must not
+// lock out engines already holding the credential.
+func ProvisionTierUser(ctx context.Context, srv *bus.Embedded, tenantID, tier string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if srv == nil {
+		return "", fmt.Errorf("tenant: provision tier user: no server")
+	}
+	if err := Validate(tenantID); err != nil {
+		return "", err
+	}
+	perms, err := bus.TierPermissions(tier)
+	if err != nil {
+		return "", fmt.Errorf("tenant: provision tier user: %w", err)
+	}
+	account := AccountName(tenantID)
+	name := TierAccountName(tenantID, tier)
+
+	provisionMu.Lock()
+	defer provisionMu.Unlock()
+
+	opts := srv.Options()
+	var target *server.Account
+	for _, existing := range opts.Users {
+		if existing.Username == name {
+			return credentialURL(srv, name, existing.Password)
+		}
+		// The tier user has to land in the tenant's OWN account object, the
+		// one already in these options. A freshly built Account of the same
+		// name would be a different account after the reload, and the engine
+		// would sit in an empty namespace receiving nothing.
+		if existing.Username == account && existing.Account != nil {
+			target = existing.Account
 		}
 	}
+	if target == nil {
+		return "", fmt.Errorf("tenant: provision tier user %q: tenant %q has no account yet", name, tenantID)
+	}
+
+	password, err := secret()
+	if err != nil {
+		return "", err
+	}
+	opts.Users = append(opts.Users, &server.User{
+		Username:    name,
+		Password:    password,
+		Permissions: perms,
+		Account:     target,
+	})
+	opts.NoAuthUser = ""
+
+	if err := srv.Reload(opts); err != nil {
+		return "", fmt.Errorf("tenant: provision tier user %q: %w", name, err)
+	}
+	// A reload re-registers the account, and JetStream does not survive that
+	// on its own: without this the tenant's stream came back "JetStream not
+	// enabled for account" the moment a tier user was added, so adding an
+	// engine's credential would have broken the tenant already running.
+	enableJetStream(srv, account)
 	return credentialURL(srv, name, password)
+}
+
+// enableJetStream turns JetStream on for an account that does not have it.
+// JetStream is per-account: without it a tenant's engines connect but cannot
+// bind a durable consumer, and dispatch degrades to a core-NATS
+// fire-and-forget — the exact "bus as truth" mistake ADR 0005 forbids.
+func enableJetStream(srv *bus.Embedded, account string) {
+	registered, err := srv.Server().LookupAccount(account)
+	if err != nil || registered.JetStreamEnabled() {
+		return
+	}
+	_ = registered.EnableJetStream(nil, nil)
 }
 
 // credentialURL builds the client URL a tenant connects with. The password is

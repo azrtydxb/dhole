@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,9 @@ func StartEmbeddedWithTiers(dir string, tiers []string) (*Embedded, error) {
 			Permissions: planePermissions(),
 		}}
 		for _, tier := range tiers {
+			if err := ValidTierToken(tier); err != nil {
+				return nil, err
+			}
 			password, err := secret()
 			if err != nil {
 				return nil, err
@@ -165,8 +169,8 @@ func (e *Embedded) Close() {
 	e.srv.WaitForShutdown()
 }
 
-// tierPermissions is the whole point of the tiered server: an engine may
-// subscribe to its own tier's dispatch wildcard and to nothing else.
+// TierPermissions is the whole point of the tiered server: an engine may take
+// its own tier's dispatched work and nothing else.
 //
 // The wildcard is `job.dispatch.<tier>.>`, not `.*`. A kind-targeted dispatch
 // (job.dispatch.<tier>.<caps>.<kind>) carries one token more, and `*` matches
@@ -174,40 +178,114 @@ func (e *Embedded) Close() {
 // work to its own backend kind. The tier token is still fixed, so this widens
 // what an engine may take within its tier and nothing about which tier.
 //
-// KNOWN GAP, older than kind routing and not closed here: these permissions
-// govern core subscriptions. A JetStream PULL consumer is delivered over the
-// engine's own inbox, and the server does not check a consumer's filter
-// subject against them — so an engine that binds a consumer on another tier's
-// dispatch subject receives that work today. Closing it means scoping the
-// $JS.API.CONSUMER subjects per tier, which is its own change.
+// The SUBSCRIBE list alone is not the boundary, and believing it was is how
+// the tier was walked over: a JetStream PULL consumer is delivered over the
+// engine's own inbox, so no core SUB on a dispatch subject ever happens and
+// the Subscribe allow-list never sees the consumer's FILTER SUBJECT. With
+// `$JS.API.CONSUMER.>` granted, an untrusted connection created a durable on
+// the DISPATCH stream filtered to `job.dispatch.trusted.>` and was handed
+// trusted work — refused at neither the bus nor the application, which is the
+// opposite of what [S-5] requires. See tierPermissionsConsumerAPI.
+//
+// It is exported because the tiered embedded server is not the only place a
+// tier's credentials are built: internal/tenant issues the same permissions to
+// an engine inside a tenant's account (ADR 0014). Two hand-written copies of
+// this table is how one of them stayed open after the other was fixed.
+//
+// tier must be ONE subject token. A tier called `*` or `>` would not narrow
+// anything — it would hand out every tier's work and every tier's consumer
+// API — so it is refused rather than spelled into a permission.
+func TierPermissions(tier string) (*server.Permissions, error) {
+	if err := ValidTierToken(tier); err != nil {
+		return nil, err
+	}
+	return tierPermissions(tier), nil
+}
+
+// ValidTierToken refuses a tier name that is not a single subject token.
+func ValidTierToken(tier string) error {
+	if tier == "" {
+		return fmt.Errorf("bus: tier: empty")
+	}
+	if strings.ContainsAny(tier, ".*> \t") {
+		return fmt.Errorf("bus: tier %q: not a single subject token", tier)
+	}
+	return nil
+}
+
 func tierPermissions(tier string) *server.Permissions {
+	publish := []string{
+		"job.status.>",
+		"job.logs.>",
+		"engine.heartbeat.>",
+		SubjectEngineRegistration(),
+		// Requesting only. An engine that could also SUBSCRIBE here
+		// would be able to answer a sibling's redemption with a value
+		// of its own choosing — credential substitution inside the
+		// tier this account exists to contain.
+		SubjectSecretRedeem(),
+		"$JS.API.STREAM.INFO.>",
+		"$JS.API.STREAM.NAMES",
+		"$JS.ACK.>",
+		"_INBOX.>",
+	}
+	publish = append(publish, tierPermissionsConsumerAPI(tier)...)
 	return &server.Permissions{
 		Subscribe: &server.SubjectPermission{
 			Allow: []string{
 				SubjectDispatchWildcard(tier),
 				"engine.control.>",
 				"_INBOX.>",
-				"$JS.API.CONSUMER.>",
 			},
 		},
-		Publish: &server.SubjectPermission{
-			Allow: []string{
-				"job.status.>",
-				"job.logs.>",
-				"engine.heartbeat.>",
-				SubjectEngineRegistration(),
-				// Requesting only. An engine that could also SUBSCRIBE here
-				// would be able to answer a sibling's redemption with a value
-				// of its own choosing — credential substitution inside the
-				// tier this account exists to contain.
-				SubjectSecretRedeem(),
-				"$JS.API.CONSUMER.>",
-				"$JS.API.STREAM.INFO.>",
-				"$JS.API.STREAM.NAMES",
-				"$JS.ACK.>",
-				"_INBOX.>",
-			},
-		},
+		Publish: &server.SubjectPermission{Allow: publish},
+	}
+}
+
+// tierPermissionsConsumerAPI is the JetStream consumer API a tier's engine may
+// reach, and it is where tier isolation is enforced for a pull consumer.
+//
+// A JS API call is a PUBLISH to a subject, so the filter subject can be
+// constrained only where it appears IN that subject. nats.go sends a
+// single-filter consumer create to
+// `$JS.API.CONSUMER.CREATE.<stream>.<consumer>.<filter subject>`, and the
+// server (jetstream_api.go, jsConsumerCreateRequest) refuses the request when
+// the filter in the body disagrees with the one in the subject. So allowing
+// only that form, with the tier token fixed, means a create naming another
+// tier's dispatch subject is refused by the server before any consumer exists.
+//
+// The three other create forms are NOT allowed, and that is the load-bearing
+// half rather than tidiness — each of them carries the filter in the JSON body
+// only, where a subject permission cannot see it:
+//
+//   - `$JS.API.CONSUMER.CREATE.<stream>.<consumer>` (no filter token), which
+//     is also the only form a MULTI-filter create may use,
+//   - `$JS.API.CONSUMER.DURABLE.CREATE.<stream>.<consumer>` (the legacy
+//     durable endpoint), and
+//   - `$JS.API.CONSUMER.CREATE.<stream>` (the legacy ephemeral endpoint).
+//
+// Granting any of them would leave the hole open while looking closed.
+//
+// The stream token is `*` rather than the dispatch stream's name: this package
+// does not name streams (internal/engine does), and the filter subject is the
+// boundary anyway — a consumer on another stream still may not be filtered
+// outside this tier's dispatch subtree.
+//
+// KNOWN GAP, not closable by permissions: MSG.NEXT and INFO address a consumer
+// by NAME, and a NATS wildcard matches a whole token, so `engines-<tier>-*` is
+// not expressible. A connection that guesses an existing consumer's name can
+// still pull from a queue another tier's engines created. Closing that needs
+// the tier in a token these subjects carry — a DISPATCH stream per tier — which
+// is a change to what the control plane declares, not to these permissions.
+func tierPermissionsConsumerAPI(tier string) []string {
+	return []string{
+		"$JS.API.CONSUMER.CREATE.*.*." + SubjectDispatchWildcard(tier),
+		"$JS.API.CONSUMER.MSG.NEXT.*.*",
+		// Metadata only, and the client reaches for it on its own: a pull
+		// consumer whose heartbeats stop asks whether the consumer still
+		// exists before giving up. Without it a deleted consumer becomes a
+		// hung fetch rather than a reported error.
+		"$JS.API.CONSUMER.INFO.*.*",
 	}
 }
 

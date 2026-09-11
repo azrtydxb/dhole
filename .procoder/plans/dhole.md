@@ -606,24 +606,63 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       universal, the rule the platform axes already follow), and `Explain`
       names it between platform and capability, coarsest cause first, so a step
       that cannot be placed is reported rather than held.
-- [ ] **A tier boundary an engine can step over with a pull consumer.** Found
+- [x] **A tier boundary an engine can step over with a pull consumer.** Found
       2026-09-11 while asserting tier isolation for the kind subject, and older
-      than that subject: `internal/bus/embedded.go` grants a tier's
-      credentials `job.dispatch.<tier>.>` and the server enforces it on core
-      SUBscriptions — `TestEngineCannotSubscribeToForeignTier` proves that. It
-      does NOT enforce it on a JetStream pull consumer: a connection with
-      untrusted credentials can create a durable consumer on the DISPATCH
-      stream filtered to `job.dispatch.trusted.<caps>` and receive that work,
-      because the delivery arrives over its own `_INBOX` and the server never
-      checks a consumer's filter subject against the subscribe permissions.
-      Demonstrated with a throwaway test (untrusted credentials, a dispatch
-      published to the trusted tier, `Next` returning it) and not committed —
-      it belongs with the fix. The fix is to scope the `$JS.API.CONSUMER`
-      subjects per tier rather than granting `$JS.API.CONSUMER.>`, so a
-      consumer create naming another tier's filter subject is refused by the
-      server, and to do the same for `internal/tenant`'s account permissions.
-      A Go-side check is not the fix: an engine in another language would not
-      have it.
+      than that subject: `internal/bus/embedded.go` granted a tier's
+      credentials `$JS.API.CONSUMER.>`, so an untrusted connection could create
+      a durable on the DISPATCH stream filtered to `job.dispatch.trusted.>` and
+      receive trusted work — the subscribe allow-list never sees a pull
+      consumer's filter subject, because no core SUB on the dispatch subject
+      happens. CLOSED for the create path, and [S-5] — "refused at the bus
+      subject level rather than by application code" — is now true of it. A
+      single-filter consumer create travels on
+      `$JS.API.CONSUMER.CREATE.<stream>.<consumer>.<filter subject>` and the
+      server refuses a body whose filter disagrees with the subject, so the
+      permission is `$JS.API.CONSUMER.CREATE.*.*.job.dispatch.<tier>.>` and the
+      three endpoints that carry the filter in the BODY alone — the new form
+      with no filter token (also the only multi-filter form), the legacy
+      durable endpoint and the legacy ephemeral endpoint — are not granted at
+      all. Verified by `TestAnEngineCannotBindAWorkQueueFilteredToAnotherTier`
+      and, for those three, by
+      `TestAnEngineCannotReachTheConsumerCreateEndpointsThatHideTheFilterSubject`,
+      which drives the raw API subjects rather than the client, since the
+      client only ever sends the one form. `SubscribePull` now reports the
+      refusal as `ErrPermissionDenied` instead of waiting out the caller's
+      deadline: the server answers a forbidden publish with an -ERR on the
+      connection and never replies, so a permissions failure arrived as
+      "context deadline exceeded". The same table is now exported as
+      `bus.TierPermissions` and used by `internal/tenant`'s new
+      `ProvisionTierUser`, so the two copies cannot drift apart again.
+      NOT closed, and carried below: pulling an EXISTING consumer by name.
+- [ ] **A tier boundary an engine can still step over by NAME.** Left open by
+      the fix above and demonstrated on 2026-09-11 with a throwaway test: an
+      untrusted connection that publishes to
+      `$JS.API.CONSUMER.MSG.NEXT.DISPATCH.engines-trusted-<caps>` pulls trusted
+      work off the consumer a trusted engine created, without creating anything
+      itself. The consumer name is guessable — engines are named
+      `engines-<tier>-<caps>` — and a NATS wildcard matches a WHOLE token, so
+      `engines-untrusted-*` is not expressible and no permission can narrow
+      MSG.NEXT or INFO to one tier while the stream is shared. This is not
+      fixable in `internal/bus` alone. The fix is to put the tier in a token
+      those subjects already carry: one dispatch stream per tier
+      (`DISPATCH_<tier>`), declared by whoever calls `EnsureWorkQueue`
+      (`internal/server/singlebinary.go`, `engine.DispatchStream`), after which
+      `$JS.API.CONSUMER.MSG.NEXT.DISPATCH_<tier>.*` is a tier-scoped
+      permission and the name stops mattering. A Go-side check is not the fix:
+      an engine in another language would not have it.
+- [ ] **A distributed deployment hands engines a credential that is not tier
+      scoped.** `internal/tenancy`'s provisioner gives out the tenant ACCOUNT
+      credential (`tenant.ProvisionAccount`), which reaches the tenant's whole
+      subject space including every tier's `job.dispatch.>` — it is also what
+      the plane's own components connect as. An engine holding it is separated
+      from other tiers by nothing but its own choice of filter subject.
+      `tenant.ProvisionTierUser` now issues a tier-scoped credential inside the
+      tenant's account, carrying `bus.TierPermissions`, and
+      `TestAnEngineInATenantAccountIsLimitedToItsOwnTier` proves an engine
+      holding one binds BOTH of its own tier's queues and is refused another
+      tier's. Nothing calls it yet: provisioning still returns only the account
+      credential, so this is closed in the mechanism and open in the
+      deployment until the provisioner hands engines their tier's user.
 - [ ] **One tier holding two engine kinds turns its whole cache off.** Found
       2026-09-11 on kw, in the plane's own log, which says in as many words
       that the engines of tier `trusted` disagree about their environment
