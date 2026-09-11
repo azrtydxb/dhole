@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -160,6 +161,18 @@ func newCacheHarnessWithFleet(
 	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline, fleet *mutableFleet,
 ) *cacheHarness {
 	t.Helper()
+	return newCacheHarnessLogging(ctx, t, pipeline, fleet, nil)
+}
+
+// newCacheHarnessLogging is the same with the scheduler's log in the test's
+// hands, so a case can assert what an operator is actually told about a fleet
+// that cannot be cached against. That log is the only answer to "why did my
+// runs get slower", so how often it says it is a behaviour, not a detail.
+func newCacheHarnessLogging(
+	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline, fleet *mutableFleet,
+	log *slog.Logger,
+) *cacheHarness {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "run.db")
 
@@ -203,6 +216,7 @@ func newCacheHarnessWithFleet(
 		Cache:       entries,
 		Revisions:   revs,
 		BlobRefs:    refs,
+		Log:         log,
 	})
 	require.NoError(t, err)
 
@@ -791,4 +805,196 @@ func TestAnotherTiersEnvironmentIsNotThisTiersEnvironment(t *testing.T) {
 	h.runChainForReal(ctx, t, "run-first")
 	_, records := h.cache.counts()
 	require.Equal(t, 2, records, "only this tier's engines answer for this tier's environment")
+}
+
+// engineOfKind is one ready engine in a tier that also says which executor
+// kind it offers. The kind is not decoration here either: a step naming
+// engine_type may only be placed on an engine that advertised that kind, and
+// it is now also what decides which engines answer for the environment the
+// step's cache key is hashed against.
+func engineOfKind(id, tier, kind, identity string) registry.Instance {
+	e := engineIn(id, tier, identity)
+	e.EngineTypes = []string{kind}
+	return e
+}
+
+// kindStep is a one-step pipeline whose step names the executor kind it needs,
+// or names none when kind is "".
+func kindStep(kind string) *dholev1.Pipeline {
+	step := &dholev1.Step{
+		Id:          "a",
+		Name:        "a",
+		PluginRef:   "oci://tool",
+		EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
+		LeaseScope:  dholev1.LeaseScope_LEASE_SCOPE_STEP,
+		Outputs:     []*dholev1.Port{{Name: "out"}},
+		EngineType:  kind,
+	}
+	return &dholev1.Pipeline{
+		Id:     testPipeline,
+		Tenant: &dholev1.Tenant{Id: testTenant},
+		Steps:  []*dholev1.Step{step},
+	}
+}
+
+// mixedTier is the fleet found on kw: one tier holding a Kubernetes engine and
+// a VM engine, each naming its own environment honestly — a busybox image
+// digest and a rootfs digest — and disagreeing with each other because they
+// are not the same kind of thing.
+func mixedTier() *mutableFleet {
+	return &mutableFleet{instances: []registry.Instance{
+		engineOfKind("k8s-1", testTier, "kubernetes", "sha256:busybox"),
+		engineOfKind("vm-1", testTier, "vm", "sha256:rootfs"),
+	}}
+}
+
+// TestAStepNamingAnEngineKindIsCachedAgainstThatKindsEnvironment is the defect
+// found on kw: a tier holding a Kubernetes engine and a VM engine had its
+// WHOLE cache turned off, because the identity was folded over every instance
+// of the tier and the two disagreed. A step naming engine_type: vm can only
+// ever land on the VM engine, whose identity is single and unambiguous, so
+// there is nothing ambiguous to refuse.
+func TestAStepNamingAnEngineKindIsCachedAgainstThatKindsEnvironment(t *testing.T) {
+	ctx := testContext(t)
+	pipeline := kindStep("vm")
+	h := newCacheHarnessWithFleet(ctx, t, pipeline, mixedTier())
+
+	h.seed(ctx, t, "run-first")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-first"))
+	require.Equal(t, []string{"a"}, h.dispatchedSteps(ctx, t, "run-first"))
+	require.True(t, dispatchOf(t, h.events(ctx, t, "run-first"), "a").Cacheable,
+		"the engines this step can actually reach agree about their environment")
+	h.finish(ctx, t, "run-first", "a", "bytes from a")
+
+	// The entry is under the VM engine's identity, computed here from the same
+	// inputs and independently of anything the scheduler did. The Kubernetes
+	// engine in the same tier has no say in it: the step cannot land there.
+	key, err := cache.Key(pipeline.GetSteps()[0], "sha256:rootfs", nil,
+		map[string]string{"oci://tool": "sha256:tool-v1"})
+	require.NoError(t, err)
+	_, hit, err := h.cache.Lookup(ctx, testTenant, key)
+	require.NoError(t, err)
+	require.True(t, hit, "the step was recorded against the environment it can only have run in")
+
+	// And the next run is served from it rather than dispatched.
+	h.seed(ctx, t, "run-second")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-second"))
+	require.Empty(t, h.dispatchedSteps(ctx, t, "run-second"))
+}
+
+// TestAStepNamingNoEngineKindInAMixedTierIsNotCached is ADR 0021 still working
+// and must keep working. A step that names no kind really can be handed to
+// either engine, so the plane cannot say what its result was produced in, and
+// recording it would serve a busybox result as a VM result. Refusing is the
+// right answer, not the bug above.
+func TestAStepNamingNoEngineKindInAMixedTierIsNotCached(t *testing.T) {
+	ctx := testContext(t)
+	h := newCacheHarnessWithFleet(ctx, t, kindStep(""), mixedTier())
+
+	h.seed(ctx, t, "run-first")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-first"))
+	require.Equal(t, []string{"a"}, h.dispatchedSteps(ctx, t, "run-first"))
+	require.Equal(t, "no stable environment identity to hash the step against",
+		dispatchOf(t, h.events(ctx, t, "run-first"), "a").CacheIneligibleReason,
+		"a step that could land on either engine has no environment to be keyed on")
+	h.finish(ctx, t, "run-first", "a", "bytes from a")
+
+	_, records := h.cache.counts()
+	require.Zero(t, records, "nothing may be recorded for a step whose environment is undecided")
+}
+
+// TestTwoEnginesOfOneKindThatDisagreeCacheNothingForThatKind: narrowing the
+// fold to the kind a step names must not narrow it to ONE ENGINE. Two VM
+// engines mid-rollout, on two different rootfs digests, are the disagreement
+// ADR 0021 refuses to cache through — the queue still picks which of them runs
+// the step.
+func TestTwoEnginesOfOneKindThatDisagreeCacheNothingForThatKind(t *testing.T) {
+	ctx := testContext(t)
+	fleet := &mutableFleet{instances: []registry.Instance{
+		engineOfKind("vm-1", testTier, "vm", "sha256:rootfs-v1"),
+		engineOfKind("vm-2", testTier, "vm", "sha256:rootfs-v2"),
+	}}
+	h := newCacheHarnessWithFleet(ctx, t, kindStep("vm"), fleet)
+
+	h.seed(ctx, t, "run-first")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-first"))
+	require.Equal(t, []string{"a"}, h.dispatchedSteps(ctx, t, "run-first"))
+	require.False(t, dispatchOf(t, h.events(ctx, t, "run-first"), "a").Cacheable)
+	h.finish(ctx, t, "run-first", "a", "bytes from a")
+
+	_, records := h.cache.counts()
+	require.Zero(t, records, "a half-finished rollout of one kind still caches nothing")
+}
+
+// warnRecorder keeps every warning the scheduler emitted, in order.
+type warnRecorder struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (w *warnRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (w *warnRecorder) WithAttrs([]slog.Attr) slog.Handler       { return w }
+func (w *warnRecorder) WithGroup(string) slog.Handler            { return w }
+
+func (w *warnRecorder) Handle(_ context.Context, r slog.Record) error {
+	line := r.Message
+	r.Attrs(func(a slog.Attr) bool {
+		line += " " + a.Key + "=" + a.Value.String()
+		return true
+	})
+	w.mu.Lock()
+	w.lines = append(w.lines, line)
+	w.mu.Unlock()
+	return nil
+}
+
+func (w *warnRecorder) recorded() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.lines)
+}
+
+// TestEachSetOfEnginesThatCannotBeCachedAgainstIsReportedOnceAndNamed. The
+// report is latched so that resolving the identity for every ready step of
+// every run does not bury the one occurrence that mattered. Once the state
+// became per KIND, a single tier-wide latch had to alternate between the
+// kinds' states and re-log both on every step — "report once" turning into
+// "report every time", which is the same as not latching at all.
+func TestEachSetOfEnginesThatCannotBeCachedAgainstIsReportedOnceAndNamed(t *testing.T) {
+	ctx := testContext(t)
+	// Both kinds are mid-rollout, so both are in conflict at the same time and
+	// the two states have to coexist.
+	fleet := &mutableFleet{instances: []registry.Instance{
+		engineOfKind("k8s-1", testTier, "kubernetes", "sha256:busybox-v1"),
+		engineOfKind("k8s-2", testTier, "kubernetes", "sha256:busybox-v2"),
+		engineOfKind("vm-1", testTier, "vm", "sha256:rootfs-v1"),
+		engineOfKind("vm-2", testTier, "vm", "sha256:rootfs-v2"),
+	}}
+	pipeline := kindStep("vm")
+	k8sStep := proto.Clone(pipeline.GetSteps()[0]).(*dholev1.Step)
+	k8sStep.Id, k8sStep.Name, k8sStep.EngineType = "k", "k", "kubernetes"
+	pipeline.Steps = append(pipeline.Steps, k8sStep)
+
+	warnings := &warnRecorder{}
+	h := newCacheHarnessLogging(ctx, t, pipeline, fleet, slog.New(warnings))
+
+	h.seed(ctx, t, "run-first")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-first"))
+	require.ElementsMatch(t, []string{"a", "k"}, h.dispatchedSteps(ctx, t, "run-first"))
+
+	// Said once per set, and each says WHICH engines disagreed: a kubernetes
+	// digest and a vm digest listed together, as the tier-wide line did, read
+	// as a fault when they are two different kinds of engine behaving
+	// correctly.
+	lines := warnings.recorded()
+	require.Len(t, lines, 2, "one line per set of engines, not one per step")
+	require.Contains(t, lines[0], "the vm engines of this tier disagree")
+	require.Contains(t, lines[0], "sha256:rootfs-v1 sha256:rootfs-v2")
+	require.Contains(t, lines[1], "the kubernetes engines of this tier disagree")
+	require.Contains(t, lines[1], "sha256:busybox-v1 sha256:busybox-v2")
+
+	// And nothing repeats while the state holds, however many steps resolve it.
+	h.seed(ctx, t, "run-second")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, "run-second"))
+	require.Len(t, warnings.recorded(), 2, "a state that has not changed is not said again")
 }

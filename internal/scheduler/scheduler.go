@@ -325,11 +325,16 @@ type Scheduler struct {
 	now  func() time.Time
 	log  *slog.Logger
 
-	// reported is what has already been said about a tier, so a fleet that is
-	// misconfigured or unreachable is reported when it CHANGES rather than on
-	// every cache decision. The identity is resolved on the dispatch path,
+	// reported is what has already been said about one SET of engines — a
+	// tier, narrowed to an engine kind when a step named one — so a fleet that
+	// is misconfigured or unreachable is reported when it CHANGES rather than
+	// on every cache decision. The identity is resolved on the dispatch path,
 	// which runs for every ready step of every run: a log line per lookup
 	// would bury the one occurrence that mattered.
+	//
+	// Keyed per set, and not per tier, because the state is now per set: one
+	// latch over a mixed tier would flip on every step that named a different
+	// kind and log every time, which is the same as not latching at all.
 	reportedMu sync.Mutex
 	reported   map[string]string
 }
@@ -834,7 +839,7 @@ func (s *Scheduler) cacheKey(
 	step *dholev1.Step,
 	state *runState,
 ) (*dholev1.Digest, bool, error) {
-	identity := cache.StepEnvironment(step, s.tierIdentity(ctx, tenantID))
+	identity := cache.StepEnvironment(step, s.tierIdentity(ctx, tenantID, step))
 	if cacheable, _ := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()), identity); !cacheable {
 		return nil, false, nil
 	}
@@ -861,8 +866,9 @@ func (s *Scheduler) cacheKey(
 	return key, true, nil
 }
 
-// tierIdentity is the environment identity every cache key for this
-// scheduler's tier is hashed against, and "" when the tier has none.
+// tierIdentity is the environment identity a step's cache key is hashed
+// against — the one the engines it could actually be dispatched to agree on —
+// and "" when they have none.
 //
 // It comes from the FLEET rather than from configuration, because the plane
 // does not know it. The environment a step runs in belongs to the engine that
@@ -873,54 +879,113 @@ func (s *Scheduler) cacheKey(
 // cached anywhere and the only test of it injected an identity no deployment
 // could produce (ADR 0021).
 //
+// It takes the STEP, because which engines answer depends on which ones the
+// step can reach: one naming Step.engine_type is folded over that kind alone.
+// Without the step there was no kind, and a `trusted` tier on kw holding a
+// Kubernetes engine and a VM engine — two correct identities that will never
+// agree — had its whole cache turned off, including for steps naming `vm`,
+// which can only ever land on the VM engine (ADR 0026).
+//
 // A registry that cannot be read is a cold cache, not a wrong one: an
 // unanswerable question about the environment is answered "no identity", which
 // is the same refusal an unidentifiable environment gets.
-func (s *Scheduler) tierIdentity(ctx context.Context, tenantID string) string {
+func (s *Scheduler) tierIdentity(ctx context.Context, tenantID string, step *dholev1.Step) string {
+	kind := step.GetEngineType()
 	instances, err := s.fleet.Instances(ctx, tenantID)
 	if err != nil {
-		s.reportTier("unreadable: "+err.Error(),
-			"cannot read the fleet, so nothing is cached for this tier", "error", err)
+		s.reportTier(kind, "unreadable: "+err.Error(),
+			"cannot read the fleet, so nothing is cached for "+engineScope(kind), "error", err)
 		return ""
 	}
-	// The identity is whatever the tier agreed on, and a disagreement is
-	// already an empty one — this does not decide anything, it only says so.
-	// Deciding here as well would be a second copy of the rule, and the copy
-	// that never ran would be the one that was wrong.
-	identity, conflict := registry.TierEnvironmentIdentity(instances, s.tier)
-	if len(conflict) > 0 {
+	// The identity is whatever the reachable engines agreed on, and a
+	// disagreement is already an empty one — this does not decide anything, it
+	// only says so. Deciding here as well would be a second copy of the rule,
+	// and the copy that never ran would be the one that was wrong.
+	identity, conflict := registry.TierEnvironmentIdentity(instances, s.tier, kind)
+	switch {
+	case len(conflict) > 0:
 		// Visible rather than silently degraded: a half-finished rollout of
-		// two sandbox images turns the tier's cache off, and an operator
-		// wondering why their runs got slower has this line to find.
-		s.reportTier("conflict: "+strings.Join(conflict, ","),
-			"engines in this tier disagree about their environment, so nothing is cached for it",
+		// two sandbox images turns the cache off, and an operator wondering
+		// why their runs got slower has this line to find. It names WHICH
+		// engines disagreed, because "the tier" was the wrong answer on a
+		// mixed tier — a kubernetes digest and a vm digest listed side by side
+		// read as a fault when they are simply two different kinds of engine.
+		//
+		// Returning here rather than falling through to the line below is not
+		// tidiness: both used to fire for one lookup, each flipping the other's
+		// latch, so the "report once" became "report twice per step".
+		s.reportTier(kind, "conflict: "+strings.Join(conflict, ","),
+			engineScope(kind)+" disagree about their environment, so nothing is cached for "+
+				cacheScope(kind),
 			"identities", conflict)
-	}
-	if identity == "" {
+		return ""
+	case identity == "":
 		// The steady state of a host-process tier, and also of a plane whose
 		// fleet has not checked in yet. Said once, because "why is nothing
 		// cached" is otherwise a question with no answer anywhere.
-		s.reportTier("identity: none",
-			"no engine in this tier names its environment, so nothing is cached for it")
+		s.reportTier(kind, "identity: none",
+			silentScope(kind)+" names its environment, so nothing is cached for "+cacheScope(kind))
 		return ""
+	default:
+		s.reportTier(kind, "identity: "+identity, "")
+		return identity
 	}
-	s.reportTier("identity: "+identity, "")
-	return identity
 }
 
-// reportTier logs msg once per distinct state of the tier. The identity is
-// resolved for every ready step of every run, so an unconditional log line
-// would be the loudest thing in the file and the one time it changed would be
-// invisible in it.
-func (s *Scheduler) reportTier(state, msg string, args ...any) {
+// engineScope names the engines an identity was folded over, for a person
+// reading the log. "the engines of this tier" and "the vm engines of this
+// tier" are different faults with different fixes, and before engine-kind
+// routing only the first existed — so an operator reading the old line on a
+// mixed tier was told a kubernetes digest and a vm digest were in conflict,
+// which is not a fault at all.
+func engineScope(kind string) string {
+	if kind == "" {
+		return "the engines of this tier"
+	}
+	return "the " + kind + " engines of this tier"
+}
+
+// silentScope is the same set as the subject of "names no environment", where
+// the grammar wants a singular.
+func silentScope(kind string) string {
+	if kind == "" {
+		return "no engine in this tier"
+	}
+	return "no " + kind + " engine in this tier"
+}
+
+// cacheScope names what stopped being cached, which is not the same set: a
+// disagreement among one kind's engines costs only the steps that named it.
+func cacheScope(kind string) string {
+	if kind == "" {
+		return "steps that name no engine kind"
+	}
+	return "steps naming engine kind " + kind
+}
+
+// reportTier logs msg once per distinct state of one set of engines. The
+// identity is resolved for every ready step of every run, so an unconditional
+// log line would be the loudest thing in the file and the one time it changed
+// would be invisible in it.
+//
+// The state is latched per (tier, kind) because that is the granularity it now
+// has: a mixed tier where one kind agrees and another does not has two states
+// at once, and a single latch would alternate between them and log both every
+// time.
+func (s *Scheduler) reportTier(kind, state, msg string, args ...any) {
+	key := s.tier + "\x00" + kind
 	s.reportedMu.Lock()
-	unchanged := s.reported[s.tier] == state
-	s.reported[s.tier] = state
+	unchanged := s.reported[key] == state
+	s.reported[key] = state
 	s.reportedMu.Unlock()
 	if unchanged || msg == "" {
 		return
 	}
-	s.log.Warn(msg, append([]any{"tier", s.tier}, args...)...)
+	args = append([]any{"tier", s.tier}, args...)
+	if kind != "" {
+		args = append(args, "engine_kind", kind)
+	}
+	s.log.Warn(msg, args...)
 }
 
 // inputDigests collects the digests feeding a step's input ports and says
@@ -1654,7 +1719,7 @@ func (s *Scheduler) dispatch(
 	// image runs in that image and not in the engine's, so keying it against
 	// the tier's digest would hash two different computations to one key.
 	cacheable, reason := cache.Eligible(step, executorLeaseScope(step.GetLeaseScope()),
-		cache.StepEnvironment(step, s.tierIdentity(ctx, tenantID)))
+		cache.StepEnvironment(step, s.tierIdentity(ctx, tenantID, step)))
 	payload, err := MarshalDispatched(Dispatched{
 		Attempt:               attempt,
 		Fence:                 token.Fence,

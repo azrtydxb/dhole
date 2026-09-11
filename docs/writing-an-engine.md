@@ -64,8 +64,11 @@ distributed deployment your environment is on a different machine. It must be
 **absent** rather than invented — an image digest or a VM snapshot id, never a
 hostname, a start time or a version string you made up. Leave it empty if you
 have nothing reproducible to name; your tier then caches nothing, which is the
-correct answer. Engines in one tier must agree on it, or the tier caches
-nothing either.
+correct answer. Engines that a step can reach must agree on it, or nothing is
+cached for that step either — and "reach" means the engines of your tier that
+offer the `engine_types` kind the step named, so two kinds of engine sharing
+one tier disable each other's caching only for the steps that name no kind
+(ADR 0026).
 
 Advertise only what you can honestly enforce. A capability you advertise is one
 the scheduler will rely on; an engine that claims `PRIVILEGED` without being able

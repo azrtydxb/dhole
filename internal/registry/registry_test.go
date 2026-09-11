@@ -658,7 +658,7 @@ func TestATierTakesTheIdentityItsEnginesAgreeOn(t *testing.T) {
 			engine("e2", "trusted", "sha256:a"),
 			// Another tier's disagreement is not this tier's problem.
 			engine("e3", "untrusted", "sha256:b"),
-		}, "trusted")
+		}, "trusted", "")
 		require.Equal(t, "sha256:a", identity)
 		require.Empty(t, conflict)
 	})
@@ -667,7 +667,7 @@ func TestATierTakesTheIdentityItsEnginesAgreeOn(t *testing.T) {
 		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
 			engine("e1", "trusted", "sha256:a"),
 			engine("e2", "trusted", "sha256:b"),
-		}, "trusted")
+		}, "trusted", "")
 		require.Empty(t, identity,
 			"a half-finished rollout of two images caches nothing rather than caching wrongly")
 		require.Equal(t, []string{"sha256:a", "sha256:b"}, conflict,
@@ -678,7 +678,7 @@ func TestATierTakesTheIdentityItsEnginesAgreeOn(t *testing.T) {
 		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
 			engine("e1", "trusted", "sha256:a"),
 			engine("e2", "trusted", ""),
-		}, "trusted")
+		}, "trusted", "")
 		require.Empty(t, identity,
 			"the queue could hand the step to the engine that cannot name where it ran it")
 		require.Equal(t, []string{"", "sha256:a"}, conflict)
@@ -688,14 +688,77 @@ func TestATierTakesTheIdentityItsEnginesAgreeOn(t *testing.T) {
 		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
 			engine("e1", "trusted", ""),
 			engine("e2", "trusted", ""),
-		}, "trusted")
+		}, "trusted", "")
 		require.Empty(t, identity)
 		require.Empty(t, conflict, "agreeing that there is nothing to name is not a disagreement")
 	})
 
 	t.Run("a tier nothing has registered in has no identity", func(t *testing.T) {
-		identity, conflict := registry.TierEnvironmentIdentity(nil, "trusted")
+		identity, conflict := registry.TierEnvironmentIdentity(nil, "trusted", "")
 		require.Empty(t, identity, "a plane whose fleet has not checked in has a cold cache")
+		require.Empty(t, conflict)
+	})
+}
+
+// TestAKindScopedIdentityFoldsOnlyTheEnginesTheStepCanReach is the mixed tier
+// found on kw: a Kubernetes engine and a VM engine in one tier, each naming
+// its own environment correctly and disagreeing with the other because they
+// are not the same kind of thing. Folding the whole tier turned the cache off
+// for every step in it, including steps that could only ever land on one of
+// them. Engine-kind routing made a mixed tier a normal configuration; this is
+// the half of that change that was missed.
+func TestAKindScopedIdentityFoldsOnlyTheEnginesTheStepCanReach(t *testing.T) {
+	engine := func(id, tier, kind, identity string) registry.Instance {
+		return registry.Instance{
+			ID: id, State: registry.StateReady, Tier: tier,
+			EngineTypes: []string{kind}, EnvironmentIdentity: identity,
+		}
+	}
+	mixed := []registry.Instance{
+		engine("k8s-1", "trusted", "kubernetes", "sha256:busybox"),
+		engine("vm-1", "trusted", "vm", "sha256:rootfs"),
+	}
+
+	t.Run("a named kind takes the identity of that kind's engines alone", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity(mixed, "trusted", "vm")
+		require.Equal(t, "sha256:rootfs", identity)
+		require.Empty(t, conflict, "the Kubernetes engine cannot take this step and has no say")
+
+		identity, conflict = registry.TierEnvironmentIdentity(mixed, "trusted", "kubernetes")
+		require.Equal(t, "sha256:busybox", identity)
+		require.Empty(t, conflict)
+	})
+
+	t.Run("naming no kind still folds the whole tier and still refuses", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity(mixed, "trusted", "")
+		require.Empty(t, identity,
+			"a step naming no kind really can land on either engine")
+		require.Equal(t, []string{"sha256:busybox", "sha256:rootfs"}, conflict)
+	})
+
+	t.Run("engines of one kind that disagree still leave it with no identity", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
+			engine("vm-1", "trusted", "vm", "sha256:rootfs-v1"),
+			engine("vm-2", "trusted", "vm", "sha256:rootfs-v2"),
+		}, "trusted", "vm")
+		require.Empty(t, identity,
+			"the queue still picks which VM engine runs the step")
+		require.Equal(t, []string{"sha256:rootfs-v1", "sha256:rootfs-v2"}, conflict)
+	})
+
+	t.Run("an engine that advertised no kind answers for no named kind", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity([]registry.Instance{
+			{ID: "silent", State: registry.StateReady, Tier: "trusted",
+				EnvironmentIdentity: "sha256:whatever"},
+		}, "trusted", "vm")
+		require.Empty(t, identity,
+			"unstated is unknown, not universal — Match would not place the step there either")
+		require.Empty(t, conflict, "and nothing reachable disagreed; there is simply nothing there")
+	})
+
+	t.Run("a kind nothing in the tier offers has no identity", func(t *testing.T) {
+		identity, conflict := registry.TierEnvironmentIdentity(mixed, "trusted", "process")
+		require.Empty(t, identity)
 		require.Empty(t, conflict)
 	})
 }

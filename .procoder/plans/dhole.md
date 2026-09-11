@@ -624,7 +624,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       server, and to do the same for `internal/tenant`'s account permissions.
       A Go-side check is not the fix: an engine in another language would not
       have it.
-- [ ] **One tier holding two engine kinds turns its whole cache off.** Found
+- [x] **One tier holding two engine kinds turns its whole cache off.** Found
       2026-09-11 on kw, in the plane's own log, which says in as many words
       that the engines of tier `trusted` disagree about their environment
       and that nothing is cached for it — the two identities being a busybox
@@ -643,6 +643,19 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       step names one, tier-wide when it does not, where a genuine disagreement
       among the reachable engines still means no key. A step naming no kind in
       a mixed tier must stay uncached — it really can land on either.
+      CLOSED. `registry.TierEnvironmentIdentity` now takes the engine kind and
+      folds only the instances of that tier offering it — the same filter
+      `Match` applies, including its rule that an engine advertising no kind
+      answers for no named one — and an empty kind still folds the whole tier.
+      `Scheduler.tierIdentity` and `api.Plan` both pass what the step named, so
+      a plan and a run resolve the same set. A step naming `vm` in a mixed tier
+      caches against the VM engine's identity; a step naming no kind in that
+      same tier still caches nothing, and two engines of ONE kind that disagree
+      still cache nothing for it. The operator log is now per (tier, kind) and
+      names which engines disagreed — "the vm engines of this tier" — latched
+      per set, which also fixed a flip-flop that logged the conflict line and
+      the no-identity line for every single step. ADR 0026 supersedes ADR 0021
+      with the narrowed set.
 - [ ] **A trigger's bound inputs never reach the run it starts.** (Was: "a
       pipeline cannot name the image its steps run in" — that, the repository
       file reference and the loop body syntax are all closed; see below.) (the executor's pod
