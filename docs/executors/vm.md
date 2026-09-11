@@ -107,10 +107,22 @@ POSIX shell on the `PATH`:
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o root/init ./internal/executor/vm/agent
 install -D /usr/bin/busybox root/bin/busybox        # a STATIC busybox
-for a in sh sleep id printf cat ls seq env mkdir rm; do ln -s /bin/busybox root/bin/$a; done
+for a in sh sleep id printf echo cat ls seq env mkdir rm true false sync \
+         head tail grep tr sed awk wc sort uniq cut tee dd base64 \
+         md5sum sha256sum touch cp mv ln chmod find xargs date test expr \
+         basename dirname tar gzip du df ps kill uname mktemp stat; do
+  ln -s /bin/busybox root/bin/$a
+done
 mkdir -p root/{proc,sys,dev,tmp,dhole/work}
 ( cd root && find . | cpio -o -H newc --quiet | gzip -1 > ../rootfs.cpio.gz )
 ```
+
+**Symlink generously.** busybox only answers to a name it is linked as, and a
+name that is missing is `exit 127` — "command not found" — from a shell that
+started perfectly well, which reads as a broken step rather than a thin rootfs.
+An earlier version of this recipe linked ten applets and the conformance suite
+failed `secret-redemption` on it, because that case pipes the redeemed value
+through `tr`. The engine was correct and the guest could not run the step.
 
 A dynamically linked busybox in an initramfs with no libc fails as
 `exec: "sh": executable file not found in $PATH`, which reads as a missing
