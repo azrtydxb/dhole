@@ -1396,6 +1396,22 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       costs a step the ability to ask for more. Whichever lands, the engine's
       own pod must be protected from the steps it runs: an engine that misses
       a lease because its own sandbox out-competed it is the failure above.
+- [ ] **A denial cannot say why, and the field's own comment says it should.**
+      Found 2026-09-11 building the editor's approval gate.
+      `DecideApprovalRequest` carries `run_id`, `step_id` and `approved` and
+      nothing else, while the comment on `approved` reads "a denial is a
+      decision rather than a pause: a run that stopped for no stated reason is
+      the worst possible record of one". There is nowhere to put the stated
+      reason. The record of a refused at-most-once effect — a deploy somebody
+      declined — is therefore a boolean and an approver, which is exactly the
+      record the comment calls the worst possible one.
+      The gate UI already collects a reason and refuses to submit without one,
+      so the editor holds a sentence the contract cannot carry. Add
+      `string reason = 4`, additive within the major version, record it on the
+      decision event beside the approver, and show it wherever the decision is
+      shown. Decide deliberately whether it is required for a DENIAL only or
+      for both: "approved because the scan was a false positive" is worth as
+      much six months later as the refusal.
 - [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.
