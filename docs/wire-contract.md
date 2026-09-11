@@ -314,13 +314,24 @@ Three obligations, and they are the whole contract:
   carry — leaves the field empty. It must never substitute a hostname, a
   start-up timestamp, a version string or a constant.
 
-The plane hashes cache keys against the identity of the **tier**, agreed by its
-members. A tier caches nothing at all when its engines disagree, when any
-member reports none, or when no member has registered yet. Disagreement is a
-misconfiguration — usually a half-finished rollout of two different sandbox
-images — and the plane logs it rather than degrading quietly. It is not an
-error and nothing is refused: the tier simply runs every step for real until it
-agrees again.
+The plane hashes a step's cache key against the identity agreed by the engines
+that step could actually **reach**: the ones in its tier, narrowed to the
+`engine_types` kind when the step names `Step.engine_type` — the same filter
+that decides where the step may be placed at all. Nothing is cached for that
+set when its engines disagree, when any member of it reports none, or when
+nothing in it has registered yet. Disagreement is a misconfiguration — usually
+a half-finished rollout of two different sandbox images — and the plane logs
+it, naming which engines disagreed, rather than degrading quietly. It is not an
+error and nothing is refused: those steps simply run for real until the engines
+agree again.
+
+The kind matters because one tier may hold two kinds of engine, and then two
+correct identities that will never agree: a sandbox image digest from a
+Kubernetes engine and a rootfs digest from a VM engine. A step naming `vm` can
+only land on the VM engine, so its environment is not in doubt and it caches. A
+step naming no kind really can be handed to either, so it has no environment
+and caches nothing — which is the same refusal, reached for the same reason
+([ADR 0026](../.procoder/adr/0026-a-cache-key-is-hashed-against-the-engines-a-step-can-reach.md)).
 
 An engine that omits the field is treated as having none, which turns its
 tier's cache off rather than poisoning it. That is what makes the field

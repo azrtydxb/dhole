@@ -955,3 +955,45 @@ func TestValidateReportsAFileBindingThatNamesNothing(t *testing.T) {
 	require.Equal(t, "in", found.GetPort(),
 		"the diagnostic must name the port, or the editor cannot draw it")
 }
+
+// TestPlanResolvesTheEnvironmentPerStepAgainstTheEnginesThatCouldTakeIt. Plan
+// exists to say what a run would do before it does it, so it must resolve the
+// environment the way the scheduler does — per step, against the engines the
+// step names a kind for. A tier holding two kinds of engine has two correct
+// and permanently disagreeing identities (a sandbox image digest and a VM
+// rootfs digest, on kw), and folding the tier whole reported every step of it
+// uncacheable, including the steps whose environment is not in doubt at all.
+func TestPlanResolvesTheEnvironmentPerStepAgainstTheEnginesThatCouldTakeIt(t *testing.T) {
+	const otherEnv = "sha256:the-other-kinds-environment"
+	other := readyEngine()
+	other.ID, other.EngineTypes, other.EnvironmentIdentity =
+		"engine-2", []string{planEngineKindOther}, otherEnv
+	h := newPlanHarness(t, staticFleet{readyEngine(), other})
+	ctx := context.Background()
+
+	p := cacheablePipeline(tenantA)
+	stepByID(t, p, "a").EngineType = planEngineKindOther
+	rev := savePlanned(t, h, tenantA, p)
+
+	// Recorded under the identity of the only engines step a can reach.
+	key, err := cache.Key(stepByID(t, p, "a"), otherEnv, nil, rev.Lockfile)
+	require.NoError(t, err)
+	require.NoError(t, h.cache.Record(ctx, tenantA,
+		key, []*dholev1.OutputRef{{Port: "out", Digest: digest("aaaa")}}))
+
+	got, err := h.client.Plan(ctx, authed(&dholev1.PlanRequest{
+		PipelineId: p.GetId(), RevisionId: rev.ID,
+	}, tokenAlice))
+	require.NoError(t, err)
+
+	require.True(t, plannedByID(t, got.Msg.GetSteps(), "a").GetCacheHit(),
+		"the engines step a names a kind for agree about their environment, "+
+			"and its work is recorded under it")
+	// Step b names no kind and really could land on either engine, so the
+	// plane cannot say what its result would be produced in. That is ADR 0021
+	// working, and the plan says so in the same words a run would.
+	b := plannedByID(t, got.Msg.GetSteps(), "b")
+	require.False(t, b.GetCacheHit())
+	require.Equal(t, "no stable environment identity to hash the step against",
+		b.GetNonCacheableReason())
+}

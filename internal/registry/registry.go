@@ -106,8 +106,9 @@ type Instance struct {
 	// only place the plane can see which engines a dispatch could land on.
 	Tier string
 	// EnvironmentIdentity is the digest of the environment it runs steps in,
-	// empty when it has none. Cache keys are hashed against the TIER's
-	// identity, agreed by its members (ADR 0021) — see TierEnvironmentIdentity.
+	// empty when it has none. Cache keys are hashed against the identity the
+	// engines a step can REACH agree on — its tier, narrowed to the engine
+	// kind the step named (ADR 0021) — see TierEnvironmentIdentity.
 	EnvironmentIdentity string
 	// InFlight is what its last heartbeat said it was holding.
 	//
@@ -175,23 +176,41 @@ type Registry interface {
 	Drain(ctx context.Context, engineID string) error
 }
 
-// TierEnvironmentIdentity is the environment identity every cache key for tier
-// is hashed against, and the identities that stopped it having one.
+// TierEnvironmentIdentity is the environment identity every cache key for the
+// engines of tier that a step could REACH is hashed against, and the
+// identities that stopped them having one.
 //
-// The TIER, not the engine. A tier exists to be a set of interchangeable
-// workers — the plane chooses a tier and the queue chooses which member picks
-// the dispatch up — so an identity that varied per engine would key the cache
-// on something the scheduler does not get to pick, and a step could be recorded
-// under the environment of the engine that happened to run it and then served
-// to a step that will run somewhere else (ADR 0021).
+// Not the engine. A tier exists to be a set of interchangeable workers — the
+// plane chooses a tier and the queue chooses which member picks the dispatch
+// up — so an identity that varied per engine would key the cache on something
+// the scheduler does not get to pick, and a step could be recorded under the
+// environment of the engine that happened to run it and then served to a step
+// that will run somewhere else (ADR 0021).
 //
-// Members are therefore expected to agree, and there are three ways they can
-// fail to. All of them return "" and cache nothing:
+// engineKind narrows the fold to the engines that could actually take the
+// step, and is exactly what the step named in Step.engine_type — empty when it
+// named nothing. It exists because the whole-tier fold was wrong the moment a
+// kind became addressable: on kw one `trusted` tier held a Kubernetes engine
+// naming a busybox image digest and a VM engine naming a rootfs digest, both
+// correct and permanently in disagreement, and the fold turned the cache off
+// for the ENTIRE tier — including steps naming `vm`, which can only ever land
+// on the VM engine and whose environment is therefore not in doubt at all.
+// A step naming no kind still folds the whole tier, because it really can be
+// handed to either (ADR 0026).
 //
-//   - nobody is in the tier. A plane whose fleet has not checked in yet has a
-//     cold cache, not a wrong one.
+// The kind filter is the one Match applies, and deliberately the same rule: an
+// engine that advertised no kind at all answers for no NAMED kind, because
+// unstated is unknown rather than universal and Match would not place the step
+// there either. An engine that cannot take the step must not be able to
+// disable — or decide — its cache.
+//
+// Members that can take it are expected to agree, and there are three ways
+// they can fail to. All of them return "" and cache nothing:
+//
+//   - nobody is reachable. A plane whose fleet has not checked in yet has a
+//     cold cache, not a wrong one, and so has a kind nothing offers.
 //   - a member reports no identity. It runs steps in an environment nothing can
-//     name — a host process — and the rest of the tier cannot answer for it.
+//     name — a host process — and the rest of them cannot answer for it.
 //   - members disagree. That is a misconfiguration, usually a half-finished
 //     rollout of two different sandbox images, and the conflicting identities
 //     are returned so the plane can say so rather than silently degrading.
@@ -202,10 +221,13 @@ type Registry interface {
 // steps whose results get recorded — and an entry recorded under an identity
 // the next dispatch will not run in is exactly the wrong answer this exists to
 // avoid.
-func TierEnvironmentIdentity(instances []Instance, tier string) (identity string, conflict []string) {
+func TierEnvironmentIdentity(instances []Instance, tier, engineKind string) (identity string, conflict []string) {
 	var seen []string
 	for _, e := range instances {
 		if e.Tier != tier {
+			continue
+		}
+		if engineKind != "" && !slices.Contains(e.EngineTypes, engineKind) {
 			continue
 		}
 		if !slices.Contains(seen, e.EnvironmentIdentity) {
@@ -214,7 +236,7 @@ func TierEnvironmentIdentity(instances []Instance, tier string) (identity string
 	}
 	switch len(seen) {
 	case 0:
-		return "", nil // nothing in this tier has announced itself
+		return "", nil // nothing reachable here has announced itself
 	case 1:
 		return seen[0], nil // "" when the single answer is "I have none"
 	default:

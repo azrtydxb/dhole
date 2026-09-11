@@ -112,15 +112,6 @@ func (s *Server) Plan(
 		return nil, connect.NewError(connect.CodeInternal,
 			fmt.Errorf("api: reading the engine fleet: %w", err))
 	}
-	// The identity comes from the same place the scheduler takes it from: the
-	// tier these steps would be dispatched to, as its engines announced it
-	// (ADR 0021). A plan computed against this plane's own executor answered a
-	// different question from the one the run would ask — and on a distributed
-	// plane, which has no executor at all, it answered none.
-	//
-	// A tier with no agreed identity is not an error: cache.Eligible then
-	// reports it per step, in its own words, exactly as a run would find it.
-	tierIdentity, _ := registry.TierEnvironmentIdentity(engines, s.tier)
 
 	steps := make([]*dholev1.PlannedStep, 0, len(pipeline.GetSteps()))
 	byID := stepsByID(pipeline)
@@ -144,10 +135,26 @@ func (s *Server) Plan(
 				planned.EngineKind = kindOf(matched[0])
 			}
 
-			// Per step, because a step that names its own image runs in that
-			// image rather than in the engine's. A plan computed against the
-			// tier's digest for every step would report a hit for a step whose
-			// key the run will not even compute the same way.
+			// Per step, twice over, because both halves of the identity are
+			// per step. The tier's answer depends on the engine KIND the step
+			// named, since only engines of that kind can take it (ADR 0026) —
+			// folding a mixed tier whole reported every step of it uncacheable,
+			// including steps the fleet has an unambiguous answer for. And a
+			// step that names its own image runs in that image rather than in
+			// the engine's, so a plan computed against the tier's digest for
+			// every step would report a hit for a step whose key the run will
+			// not even compute the same way.
+			//
+			// The identity comes from the same place the scheduler takes it
+			// from: the engines these steps would be dispatched to, as they
+			// announced it. A plan computed against this plane's own executor
+			// answered a different question from the one the run would ask —
+			// and on a distributed plane, which has no executor at all, it
+			// answered none.
+			//
+			// No agreed identity is not an error: cache.Eligible then reports
+			// it per step, in its own words, exactly as a run would find it.
+			tierIdentity, _ := registry.TierEnvironmentIdentity(engines, s.tier, step.GetEngineType())
 			envIdentity := cache.StepEnvironment(step, tierIdentity)
 			cacheable, reason := cache.Eligible(step, leaseScopeOf(step.GetLeaseScope()), envIdentity)
 			planned.NonCacheableReason = reason
