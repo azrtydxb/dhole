@@ -624,6 +624,25 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       server, and to do the same for `internal/tenant`'s account permissions.
       A Go-side check is not the fix: an engine in another language would not
       have it.
+- [ ] **One tier holding two engine kinds turns its whole cache off.** Found
+      2026-09-11 on kw, in the plane's own log, which says in as many words
+      that the engines of tier `trusted` disagree about their environment
+      and that nothing is cached for it — the two identities being a busybox
+      image digest (the Kubernetes engine) and a rootfs digest (the VM
+      engine). Both engines are correct; the aggregation is not.
+      `registry.TierEnvironmentIdentity` folds every
+      instance of a TIER into one identity and reports a conflict when they
+      differ, and `Scheduler.tierIdentity` takes no step and therefore no kind,
+      so a step that explicitly names `engine_type: vm` — which can only land
+      on the VM engine, whose identity is unambiguous — is refused a cache key
+      along with everything else in the tier. Before engine-kind routing a tier
+      was one kind in every deployment and the fold was right; making a kind
+      addressable made a mixed tier a normal configuration, and this is the
+      half of that change that was missed. The fix is to resolve the identity
+      against the engines a step could ACTUALLY reach: kind-scoped when the
+      step names one, tier-wide when it does not, where a genuine disagreement
+      among the reachable engines still means no key. A step naming no kind in
+      a mixed tier must stay uncached — it really can land on either.
 - [ ] **A trigger's bound inputs never reach the run it starts.** (Was: "a
       pipeline cannot name the image its steps run in" — that, the repository
       file reference and the loop body syntax are all closed; see below.) (the executor's pod
