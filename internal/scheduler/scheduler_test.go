@@ -12,6 +12,7 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
+	engineagent "github.com/azrtydxb/dhole/internal/engine"
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/outbox"
@@ -69,6 +70,20 @@ func (b *recordingBus) SubscribePull(context.Context, string, string, string) (b
 
 func (b *recordingBus) SubscribeEphemeral(context.Context, string, func([]byte)) (func(), error) {
 	panic("recordingBus: SubscribeEphemeral is not used by the outbox")
+}
+
+// subjects is every subject published to so far, in order. The subject is the
+// routing decision, so a test that only reads the payloads cannot tell where a
+// dispatch went — which is how a step naming an engine kind came to run on an
+// engine of another one.
+func (b *recordingBus) subjects() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.published))
+	for _, p := range b.published {
+		out = append(out, p.subject)
+	}
+	return out
 }
 
 // dispatches drains everything published so far into JobDispatch messages.
@@ -964,4 +979,49 @@ func TestAFileTheDefinitionCarriesReachesTheEngineAsADeclaredInput(t *testing.T)
 	require.Equal(t, "context", inputs[0].GetPort())
 	require.Equal(t, fileDigest.GetHex(), inputs[0].GetDigest().GetHex(),
 		"the engine was pointed at bytes that are not the ones the revision pins")
+}
+
+// TestAStepNamingAnEngineKindIsPublishedOnThatKindsSubject is the half of the
+// placement the filter never had. Match decides whether a step CAN be placed;
+// the SUBJECT decides where it GOES. Proven on kw: a step naming engine_type
+// vm, in a tier holding both a vm-backed and a kubernetes-backed engine, ran
+// on the kubernetes one — both engines pull the same
+// job.dispatch.<tier>.<caps> work queue and whichever grabbed it first ran it.
+// The step wrote /proc/sys/kernel/osrelease and it read the node's kernel.
+//
+// So the kind is a token of the subject, exactly as the tier and the
+// capability set already are, and only engines of that kind subscribe to it.
+func TestAStepNamingAnEngineKindIsPublishedOnThatKindsSubject(t *testing.T) {
+	ctx := testContext(t)
+	p := diamond()
+	p.GetSteps()[0].EngineType = "kubernetes"
+	instance := readyEngine("e1")
+	instance.EngineTypes = []string{"kubernetes"}
+	h := newHarnessWith(ctx, t, p, instance)
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	caps := engineagent.CapsHash(p.GetSteps()[0].GetCapabilities())
+	require.Equal(t,
+		[]string{bus.SubjectDispatch(testTier, caps) + ".kubernetes"},
+		h.bus.subjects(),
+		"a step naming a kind must be published where only that kind is listening")
+}
+
+// TestAStepNamingNoEngineKindKeepsTheUnrestrictedDispatchSubject is the common
+// case, and it must stay byte-identical to what it was before kind routing
+// existed: that subject is what every engine already subscribes to, including
+// one built before the kind token was invented.
+func TestAStepNamingNoEngineKindKeepsTheUnrestrictedDispatchSubject(t *testing.T) {
+	ctx := testContext(t)
+	p := diamond()
+	h := newHarnessWith(ctx, t, p, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	caps := engineagent.CapsHash(p.GetSteps()[0].GetCapabilities())
+	require.Equal(t, []string{bus.SubjectDispatch(testTier, caps)}, h.bus.subjects(),
+		"a step naming no kind goes on the subject every engine of every kind pulls")
 }

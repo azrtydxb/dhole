@@ -165,6 +165,13 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Slots <= 0 {
 		cfg.Slots = 1
 	}
+	// A kind is one subject token and one durable-consumer name segment. A
+	// kind carrying a dot, a wildcard or a space would silently widen, split
+	// or break the route this engine binds — so it is refused here, loudly, at
+	// the one place a backend's kind enters the bus.
+	if kind := cfg.Executor.Kind(); !validKindToken(kind) {
+		return nil, fmt.Errorf("engine: executor kind %q is not a usable subject token", kind)
+	}
 	registry, err := newRegistryClient(cfg)
 	if err != nil {
 		return nil, err
@@ -206,17 +213,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.registry.run(ctx)
 	}()
 
-	subs := make([]bus.Subscription, 0, len(hashes))
+	queues := a.workQueues(hashes)
+
+	subs := make([]bus.Subscription, 0, len(queues))
 	defer func() {
 		for _, sub := range subs {
 			_ = sub.Close()
 		}
 	}()
 
-	errs := make(chan error, len(hashes))
-	for _, hash := range hashes {
-		subject := bus.SubjectDispatch(a.cfg.Tier, hash)
-		sub, err := a.subscribe(ctx, hash, subject)
+	errs := make(chan error, len(queues))
+	for _, q := range queues {
+		sub, err := a.subscribe(ctx, q.consumer, q.subject)
 		if err != nil {
 			wg.Wait()
 			return err
@@ -239,17 +247,61 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
-// subscribe binds the durable consumer for one capability set. The consumer is
-// named for the tier and the capability set rather than for this engine, which
-// is what makes the dispatch subject a work queue: every engine that can serve
-// the set pulls from the same consumer, and exactly one of them gets each
-// message.
-func (a *Agent) subscribe(ctx context.Context, hash, subject string) (bus.Subscription, error) {
+// workQueue is one durable consumer this engine pulls from: a subject and the
+// name of the queue every engine eligible for that subject shares.
+type workQueue struct {
+	consumer string
+	subject  string
+}
+
+// workQueues is every queue this engine takes work from: for each capability
+// set it can serve, the tier's UNRESTRICTED dispatch subject and the subject
+// naming this engine's own executor kind.
+//
+// Both, and on separate consumers, because of what kw proved: a step naming
+// engine_type vm, in a tier holding a vm-backed and a kubernetes-backed
+// engine, ran on the kubernetes one. Every engine in the tier pulled the one
+// job.dispatch.<tier>.<caps> queue and whichever grabbed the message first ran
+// it, so the scheduler's filter decided whether the step COULD be placed and
+// had no say in where it went.
+//
+// A second FILTER SUBJECT on the existing consumer would not do: that consumer
+// is named for the tier and capability set alone and is therefore SHARED by
+// every engine in the tier, so widening it would hand kind-targeted work to
+// engines of the wrong kind — the bug, rebuilt. The kind's queue needs a name
+// of its own, which only engines of that kind bind.
+func (a *Agent) workQueues(hashes []string) []workQueue {
+	kind := a.cfg.Executor.Kind()
+	queues := make([]workQueue, 0, 2*len(hashes))
+	for _, hash := range hashes {
+		queues = append(queues, workQueue{
+			consumer: "engines-" + a.cfg.Tier + "-" + hash,
+			subject:  bus.SubjectDispatch(a.cfg.Tier, hash),
+		})
+		if kind == "" {
+			continue
+		}
+		queues = append(queues, workQueue{
+			// A durable name may not contain a dot, and a kind that carried
+			// one would not be a single subject token either — New refuses it
+			// rather than binding a queue nobody publishes to.
+			consumer: "engines-" + a.cfg.Tier + "-" + hash + "-" + kind,
+			subject:  bus.SubjectDispatchKind(a.cfg.Tier, hash, kind),
+		})
+	}
+	return queues
+}
+
+// subscribe binds the durable consumer named consumer. The name is the tier,
+// the capability set and — for a kind's queue — the executor kind, rather than
+// this engine's id, which is what makes the dispatch subject a work queue:
+// every engine that can serve it pulls from the same consumer, and exactly one
+// of them gets each message.
+func (a *Agent) subscribe(ctx context.Context, consumer, subject string) (bus.Subscription, error) {
 	backoff := a.cfg.SubscribeBackoff
 	if backoff <= 0 {
 		backoff = subscribeRetry
 	}
-	consumer := "engines-" + a.cfg.Tier + "-" + hash
 	var lastComplaint time.Time
 	for attempt := 1; ; attempt++ {
 		sub, err := a.cfg.Bus.SubscribePull(ctx, DispatchStream, consumer, subject)
@@ -870,3 +922,17 @@ type logStream struct {
 }
 
 func (w *logStream) Write(p []byte) (int, error) { return w.sink.write(w.stream, p) }
+
+// validKindToken reports whether kind can be both a NATS subject token and
+// part of a durable consumer name: printable, no dot, no wildcard, no space.
+// An EMPTY kind is not malformed, only silent: such an engine binds no kind
+// queue and is never credited with a kind by the scheduler either, since an
+// unstated engine type is unknown rather than universal.
+func validKindToken(kind string) bool {
+	for _, r := range kind {
+		if r == '.' || r == '*' || r == '>' || r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}

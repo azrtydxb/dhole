@@ -113,9 +113,107 @@ func TestEngineCannotSubscribeToForeignTier(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(stop)
 
+	// Its own tier's KIND subjects too: those are one token longer, and under
+	// the old `*` wildcard the server refused an engine the very consumer that
+	// routes work to its backend kind.
+	stopKind, err := engine.SubscribeEphemeral(ctx,
+		bus.SubjectDispatchKind("untrusted", "abc", "vm"), func([]byte) {})
+	require.NoError(t, err)
+	t.Cleanup(stopKind)
+
 	_, err = engine.SubscribeEphemeral(ctx, bus.SubjectDispatchWildcard("trusted"), func([]byte) {})
 	require.Error(t, err)
 	require.ErrorIs(t, err, bus.ErrPermissionDenied)
+
+	// The boundary holds for the longer subject as well: a kind token is not a
+	// way around the tier.
+	_, err = engine.SubscribeEphemeral(ctx,
+		bus.SubjectDispatchKind("trusted", "abc", "vm"), func([]byte) {})
+	require.Error(t, err)
+	require.ErrorIs(t, err, bus.ErrPermissionDenied,
+		"an engine must not reach another tier's work by naming a kind")
+}
+
+// TestAnEngineCanBindItsOwnKindsWorkQueueButNotAnotherTiers holds the
+// permission half of kind routing on the real server. A kind-targeted subject carries one
+// token more than the tier wildcard used to allow — `*` matches exactly one
+// token — so an engine was refused the very consumer that routes work to its
+// backend. Widening the wildcard to `>` must not widen the TIER boundary,
+// which is what the second half asserts.
+func TestAnEngineCanBindItsOwnKindsWorkQueueButNotAnotherTiers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	plane, err := bus.Connect(ctx, srv.PlaneURL())
+	require.NoError(t, err)
+	t.Cleanup(plane.Close)
+	require.NoError(t, plane.EnsureWorkQueue(ctx, "DISPATCH", []string{"job.dispatch.>"}))
+
+	engine, err := bus.Connect(ctx, srv.TierURL("untrusted"))
+	require.NoError(t, err)
+	t.Cleanup(engine.Close)
+
+	own, err := engine.SubscribePull(ctx, "DISPATCH", "engines-untrusted-abc-vm",
+		bus.SubjectDispatchKind("untrusted", "abc", "vm"))
+	require.NoError(t, err, "an engine must be able to bind the queue for its own kind")
+	t.Cleanup(func() { _ = own.Close() })
+
+	// The tier boundary, on the subject shape that is one token longer. It is
+	// asserted on a core subscription because that is where the boundary is
+	// actually enforced: see the note in embedded.go on what a pull consumer's
+	// filter subject is NOT checked against.
+	_, err = engine.SubscribeEphemeral(ctx,
+		bus.SubjectDispatchKind("trusted", "abc", "vm"), func([]byte) {})
+	require.ErrorIs(t, err, bus.ErrPermissionDenied,
+		"a kind token must not be a way into another tier's work")
+}
+
+// TestASubscriberOnTheUnrestrictedDispatchSubjectDoesNotReceiveKindTargetedWork
+// is the assumption the whole routing fix rests on, verified rather than
+// trusted: NATS subjects are token-exact unless wildcarded, so an engine bound
+// to job.dispatch.<tier>.<caps> — which is every engine built before the kind
+// token existed — never sees job.dispatch.<tier>.<caps>.<kind>. That is what
+// makes the change backward compatible AND correct: an old engine keeps taking
+// unrestricted work and is never handed work it could not honour.
+func TestASubscriberOnTheUnrestrictedDispatchSubjectDoesNotReceiveKindTargetedWork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	conn, err := bus.Connect(ctx, srv.URL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+
+	unrestricted := make(chan string, 4)
+	stop, err := conn.SubscribeEphemeral(ctx, bus.SubjectDispatch("untrusted", "abc"),
+		func([]byte) { unrestricted <- "unrestricted" })
+	require.NoError(t, err)
+	t.Cleanup(stop)
+
+	kinded := make(chan string, 4)
+	stopKind, err := conn.SubscribeEphemeral(ctx, bus.SubjectDispatchKind("untrusted", "abc", "vm"),
+		func([]byte) { kinded <- "vm" })
+	require.NoError(t, err)
+	t.Cleanup(stopKind)
+
+	require.NoError(t, conn.Publish(ctx, bus.SubjectDispatchKind("untrusted", "abc", "vm"),
+		&dholev1.JobDispatch{RunId: "run-1", StepId: "build"}))
+
+	select {
+	case got := <-kinded:
+		require.Equal(t, "vm", got)
+	case <-ctx.Done():
+		t.Fatal("the kind subscriber received nothing")
+	}
+	require.Empty(t, unrestricted,
+		"a three-token subscriber must not match a four-token subject")
 }
 
 // TestPublishToDurableSubjectReportsRefusal closes the other half of the tier

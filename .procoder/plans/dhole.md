@@ -542,7 +542,7 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       would wipe the password of a person who is also issued a token — and
       migration 0022 backfills the subjects of tokens already in flight, so an
       existing deployment does not have to reissue them.
-- [ ] **A step naming an engine KIND is still not routed to one — the filter
+- [x] **A step naming an engine KIND is still not routed to one — the filter
       decides, and the bus does not obey.** Reopened 2026-09-10 by running it on
       kw: a step with `engine_type: vm`, on a cluster with a vm-backed engine
       and a kubernetes-backed engine in the SAME tier, ran on the kubernetes
@@ -568,6 +568,32 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       Unit tests could not have caught this — they exercise `Match` in
       isolation, where it is correct. It took a real pipeline on a cluster with
       two engine kinds in one tier.
+      CLOSED 2026-09-11: the kind is a token of the dispatch SUBJECT, and the
+      existing subject is kept as the "any kind" one. A step naming no kind
+      still goes to `job.dispatch.<tier>.<caps>`, byte for byte; a step naming
+      one goes to `job.dispatch.<tier>.<caps>.<kind>`. An engine binds BOTH —
+      two durable consumers, `engines-<tier>-<caps>` and
+      `engines-<tier>-<caps>-<kind>`, never one consumer with two filter
+      subjects: that consumer is named for the tier and capability set alone
+      and is therefore SHARED by every engine in the tier, so widening it would
+      hand kind-targeted work to engines of the wrong kind, which is the bug
+      rebuilt. Backward compatible by construction: NATS subjects are
+      token-exact unless wildcarded (asserted on a live server), so an engine
+      predating the token keeps taking unrestricted work and can never be
+      handed kind-targeted work it would not know to honour — which preserves
+      the N-1 promise without the plane having to know which engine will pull a
+      message off a queue. No protocol bump: the version says what an engine
+      speaking it must DO, and an older engine must do nothing differently
+      here. The tier's subscribe permission widened from
+      `job.dispatch.<tier>.*` to `job.dispatch.<tier>.>` — `*` matches exactly
+      one token, so under it an engine was refused its OWN kind's subject —
+      with the tier token still fixed, and the foreign-tier refusal asserted on
+      the longer shape too. Verified by
+      `TestAStepNamingAnEngineKindRunsOnAnEngineOfThatKindWhenTwoKindsShareATier`:
+      two engines of different kinds in ONE tier over a real bus, a step
+      naming each kind, each running on the right engine and neither on the
+      other — the test whose absence let this ship. Not yet re-run on kw; the
+      cluster check is the owner's.
       SUPERSEDED TEXT: **Nothing routes a step to an engine KIND.** `scheduler.Match` does not
       filter on engine type, so a capability is the only lever — the pipeline
       asks for NETWORK to reach a pod. A step's placement on the process engine
@@ -580,6 +606,24 @@ Files: `internal/server/`, `internal/scheduler/`, `internal/steps/`, `internal/w
       universal, the rule the platform axes already follow), and `Explain`
       names it between platform and capability, coarsest cause first, so a step
       that cannot be placed is reported rather than held.
+- [ ] **A tier boundary an engine can step over with a pull consumer.** Found
+      2026-09-11 while asserting tier isolation for the kind subject, and older
+      than that subject: `internal/bus/embedded.go` grants a tier's
+      credentials `job.dispatch.<tier>.>` and the server enforces it on core
+      SUBscriptions — `TestEngineCannotSubscribeToForeignTier` proves that. It
+      does NOT enforce it on a JetStream pull consumer: a connection with
+      untrusted credentials can create a durable consumer on the DISPATCH
+      stream filtered to `job.dispatch.trusted.<caps>` and receive that work,
+      because the delivery arrives over its own `_INBOX` and the server never
+      checks a consumer's filter subject against the subscribe permissions.
+      Demonstrated with a throwaway test (untrusted credentials, a dispatch
+      published to the trusted tier, `Next` returning it) and not committed —
+      it belongs with the fix. The fix is to scope the `$JS.API.CONSUMER`
+      subjects per tier rather than granting `$JS.API.CONSUMER.>`, so a
+      consumer create naming another tier's filter subject is refused by the
+      server, and to do the same for `internal/tenant`'s account permissions.
+      A Go-side check is not the fix: an engine in another language would not
+      have it.
 - [ ] **A trigger's bound inputs never reach the run it starts.** (Was: "a
       pipeline cannot name the image its steps run in" — that, the repository
       file reference and the loop body syntax are all closed; see below.) (the executor's pod

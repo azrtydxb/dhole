@@ -167,6 +167,19 @@ func (e *Embedded) Close() {
 
 // tierPermissions is the whole point of the tiered server: an engine may
 // subscribe to its own tier's dispatch wildcard and to nothing else.
+//
+// The wildcard is `job.dispatch.<tier>.>`, not `.*`. A kind-targeted dispatch
+// (job.dispatch.<tier>.<caps>.<kind>) carries one token more, and `*` matches
+// exactly ONE token — under `*` an engine was refused the consumer that routes
+// work to its own backend kind. The tier token is still fixed, so this widens
+// what an engine may take within its tier and nothing about which tier.
+//
+// KNOWN GAP, older than kind routing and not closed here: these permissions
+// govern core subscriptions. A JetStream PULL consumer is delivered over the
+// engine's own inbox, and the server does not check a consumer's filter
+// subject against them — so an engine that binds a consumer on another tier's
+// dispatch subject receives that work today. Closing it means scoping the
+// $JS.API.CONSUMER subjects per tier, which is its own change.
 func tierPermissions(tier string) *server.Permissions {
 	return &server.Permissions{
 		Subscribe: &server.SubjectPermission{

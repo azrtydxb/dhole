@@ -390,6 +390,7 @@ func callWithEmptyTenant(t *testing.T, impl any, name string) error {
 func subjectBuilders() map[string]string {
 	return map[string]string{
 		"SubjectDispatch":           bus.SubjectDispatch("trusted", "capsdeadbeef"),
+		"SubjectDispatchKind":       bus.SubjectDispatchKind("trusted", "capsdeadbeef", "vm"),
 		"SubjectDispatchWildcard":   bus.SubjectDispatchWildcard("trusted"),
 		"SubjectStatus":             bus.SubjectStatus("run-1", "build"),
 		"SubjectLogs":               bus.SubjectLogs("run-1", "build"),
