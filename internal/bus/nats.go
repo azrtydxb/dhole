@@ -56,6 +56,52 @@ type NATS struct {
 
 	mu      streamCache
 	closing sync.Once
+
+	// violations carries the server's ASYNCHRONOUS permission refusals to
+	// whoever is waiting on a call that one of them just killed. See
+	// violationWatch.
+	violations violationWatch
+}
+
+// violationWatch fans one async permission error out to the calls waiting for
+// it. The server answers a forbidden PUBLISH with an -ERR on the connection
+// rather than by replying to the request, so a JetStream API call that is
+// refused simply never gets an answer: without this, creating a consumer the
+// credentials do not cover blocked until the caller's deadline and then
+// reported "context deadline exceeded" — a permissions failure wearing a
+// timeout's clothes, on the path that enforces the tier boundary.
+type violationWatch struct {
+	sync.Mutex
+	waiting map[chan error]struct{}
+}
+
+// watch registers a listener for permission violations and returns it with the
+// function that removes it. Buffered by one: the notifier never blocks on a
+// listener that has already given up.
+func (w *violationWatch) watch() (<-chan error, func()) {
+	ch := make(chan error, 1)
+	w.Lock()
+	if w.waiting == nil {
+		w.waiting = map[chan error]struct{}{}
+	}
+	w.waiting[ch] = struct{}{}
+	w.Unlock()
+	return ch, func() {
+		w.Lock()
+		delete(w.waiting, ch)
+		w.Unlock()
+	}
+}
+
+func (w *violationWatch) notify(err error) {
+	w.Lock()
+	defer w.Unlock()
+	for ch := range w.waiting {
+		select {
+		case ch <- err:
+		default:
+		}
+	}
 }
 
 type streamCache struct {
@@ -77,7 +123,12 @@ func Connect(ctx context.Context, url string, opts ...Option) (*NATS, error) {
 		mu:      streamCache{bySubject: map[string]string{}},
 	}
 
-	conn, err := nats.Connect(url, nats.Timeout(connectTimeout))
+	conn, err := nats.Connect(url, nats.Timeout(connectTimeout),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			if err != nil && errors.Is(err, nats.ErrPermissionViolation) {
+				n.violations.notify(err)
+			}
+		}))
 	if err != nil {
 		return nil, fmt.Errorf("bus: connect: %w", err)
 	}
@@ -262,16 +313,47 @@ func (n *NATS) SubscribeEphemeralOnSubjects(ctx context.Context, pattern string,
 // filtered to subject. Nothing is removed from the stream until a delivery is
 // acknowledged, so a subscriber that dies mid-message gives the work back.
 func (n *NATS) SubscribePull(ctx context.Context, stream, consumer, subject string) (Subscription, error) {
-	cons, err := n.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
-		Durable:       consumer,
-		FilterSubject: subject,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       n.ackWait,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("bus: consumer %q on %q: %w", consumer, stream, err)
+	// The tier boundary is enforced on this call, by the server: the create
+	// travels on `$JS.API.CONSUMER.CREATE.<stream>.<consumer>.<subject>`, and
+	// a tier's credentials permit that subject only under its own tier's
+	// dispatch subtree. A refusal arrives as an -ERR on the connection and
+	// never as a reply, so it is watched for rather than returned.
+	violation, stop := n.violations.watch()
+	defer stop()
+
+	type result struct {
+		cons jetstream.Consumer
+		err  error
 	}
-	return &pullSubscription{consumer: cons, closed: make(chan struct{})}, nil
+	done := make(chan result, 1)
+	go func() {
+		cons, err := n.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+			Durable:       consumer,
+			FilterSubject: subject,
+			AckPolicy:     jetstream.AckExplicitPolicy,
+			AckWait:       n.ackWait,
+		})
+		done <- result{cons: cons, err: err}
+	}()
+
+	for {
+		select {
+		case res := <-done:
+			if res.err != nil {
+				return nil, fmt.Errorf("bus: consumer %q on %q: %w", consumer, stream, res.err)
+			}
+			return &pullSubscription{consumer: res.cons, closed: make(chan struct{})}, nil
+		case err := <-violation:
+			// Match on the subject so a SIBLING call's refusal, arriving on
+			// the same connection, is not reported as this one's — and keep
+			// waiting when it is not ours, since the refusal for this call
+			// may still be on its way.
+			if strings.Contains(err.Error(), subject) {
+				return nil, fmt.Errorf("%w: consumer %q on %q filtered to %q: %v",
+					ErrPermissionDenied, consumer, stream, subject, err)
+			}
+		}
+	}
 }
 
 // confirmSubscribed turns the server's refusal into a synchronous error, so a

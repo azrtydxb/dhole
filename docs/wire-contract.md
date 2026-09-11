@@ -105,6 +105,48 @@ since `*` matches exactly one token and a kind-targeted subject carries one
 more. The tier token is still fixed, so this widens what an engine may take
 within its tier and nothing about which tier.
 
+### How a work queue is bound, and why the shape matters
+
+A dispatch is not delivered over a core subscription. An engine binds a durable
+JetStream **pull** consumer on the dispatch stream and the messages arrive over
+its own inbox, so the subscribe permission on `job.dispatch.<tier>.>` is never
+consulted for that delivery. Tier isolation on the dispatch path is therefore
+enforced on the call that CREATES the consumer, and an engine written against
+this contract must make that call in the one shape the permission can see:
+
+```
+$JS.API.CONSUMER.CREATE.<stream>.<consumer>.<filter subject>
+```
+
+A single-filter consumer create carries the filter subject as the tail of the
+JS API subject, and the server refuses the request if the filter in the body
+disagrees with it. An engine's credentials permit that subject only under
+`job.dispatch.<tier>.>`, so a create naming another tier is refused by the
+server before any consumer exists.
+
+The consequence for an engine author: **create your consumer with exactly one
+filter subject, and let the client put it in the API subject.** The other three
+create endpoints carry the filter in the request body alone, where no subject
+permission can see it, and an engine's credentials do not reach any of them:
+
+| Endpoint                                              | Why it is refused                           |
+| ----------------------------------------------------- | ------------------------------------------- |
+| `$JS.API.CONSUMER.CREATE.<stream>.<consumer>`         | no filter token; also the multi-filter form |
+| `$JS.API.CONSUMER.DURABLE.CREATE.<stream>.<consumer>` | legacy durable endpoint                     |
+| `$JS.API.CONSUMER.CREATE.<stream>`                    | legacy ephemeral endpoint                   |
+
+A client that falls back to one of those — an old library, or a consumer
+configured with `filter_subjects` rather than `filter_subject` — gets a
+permissions violation rather than a consumer. That is the boundary working, not
+a bug to route around.
+
+Pulling and inspecting an existing consumer (`$JS.API.CONSUMER.MSG.NEXT` and
+`$JS.API.CONSUMER.INFO`) is permitted by NAME, because a NATS wildcard matches
+a whole token and a name prefix is not expressible. A deployment that needs the
+tier boundary to hold against a credential-holder guessing another tier's
+consumer name needs the tier in a token those subjects carry — a dispatch
+stream per tier — which is a change to what the control plane declares.
+
 ### Message framing
 
 The two engine-to-plane subjects carry an `EngineMessage`, not a bare payload:
