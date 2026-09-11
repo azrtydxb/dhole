@@ -22,6 +22,8 @@ import { Sidebar } from "./Sidebar.js";
 import { StatusBar, type EngineStatus } from "./StatusBar.js";
 import { Toolbar, type ToolbarAction } from "./Toolbar.js";
 import { asPortTypeName } from "../design/PortGlyph.js";
+import { statusOf } from "../canvas/stepStatus.js";
+import { useRunModel } from "../run/useRunModel.js";
 import { EffectClass as EffectClass_ } from "../gen/dhole/v1/common_pb.js";
 
 const menus: readonly Menu[] = [
@@ -94,11 +96,16 @@ export function Editor({
   revisionId,
   tenant,
   user,
+  runId = null,
 }: {
   readonly pipelineId: string;
   readonly revisionId: string;
   readonly tenant: string;
   readonly user: string;
+  /** A run to follow while editing. The canvas paints its progress on the same
+   * nodes rather than sending the user to a different screen: "which step is
+   * this stuck on" is a question about the graph they are already looking at. */
+  readonly runId?: string | null;
 }) {
   const { theme, toggleTheme } = useTheme();
   const [tab, setTab] = useState<"properties" | "logs">("properties");
@@ -153,6 +160,12 @@ export function Editor({
   const start = useMutation({
     mutationFn: () => pipelineClient.startRun({ pipelineId, revisionId }),
   });
+
+  const run = useRunModel(runId);
+  const runStatus = useMemo(
+    () => new Map(run.nodes.map((node) => [node.id, statusOf(node)] as const)),
+    [run],
+  );
 
   const revision = pipeline.data?.revision;
   const steps = useMemo(
@@ -284,7 +297,9 @@ export function Editor({
         <Toolbar
           actions={actions}
           onAction={onAction}
-          status={status}
+          status={
+            runId === null ? status : `run ${runId.slice(0, 12)} · ${run.state}`
+          }
           agentEditsPending={0}
           onOpenAgentEdits={() => setNotice("no agent edits are pending")}
           onOpenAssistant={() =>
@@ -322,6 +337,7 @@ export function Editor({
           onSelect={setSelected}
           theme={theme}
           {...(planned === null ? {} : { planned })}
+          {...(runId === null ? {} : { runStatus })}
         />
       }
       inspector={

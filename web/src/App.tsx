@@ -85,8 +85,23 @@ export function App() {
     );
   }
 
-  // A run is a different thing to look at, not a different app: the run view
-  // reads the realised graph and the logs, and the editor edits a definition.
+  // A run WITH a pipeline is followed on the editor's own canvas: the graph is
+  // where "which step is this stuck on" is legible, and sending the user to a
+  // separate screen takes away the thing they were reading. A run on its own —
+  // a pasted link, no pipeline in the URL — still gets the run view, because
+  // there is no definition to draw it over.
+  if (runId !== "" && pipelineId !== "" && revisionId !== "") {
+    return (
+      <Editor
+        pipelineId={pipelineId}
+        revisionId={revisionId}
+        tenant={parameters.get("tenant") ?? "default"}
+        user={parameters.get("as") ?? "me"}
+        runId={runId}
+      />
+    );
+  }
+
   if (runId !== "") {
     return (
       <Frame>
