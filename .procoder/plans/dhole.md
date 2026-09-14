@@ -1292,7 +1292,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
 - [x] Write `internal/executor/pool/pool_test.go` asserting `TestPoolReusesSandboxAcrossRuns`: two runs with the same pool key receive the same sandbox id, and a file written by the first is visible to the second. Run — expect FAIL with "undefined: pool.New".
 - [x] Add `TestReapReleasesIdleSandboxes` asserting a sandbox idle beyond the threshold is released and the next acquire creates a new one.
 - [x] Add `TestPooledSandboxIsReportedNonCacheable` asserting Task 16's `cache.Eligible` is consulted and returns false for every step run from the pool.
-- [ ] **The kubernetes executor silently truncates any input bigger than about
+- [x] **The kubernetes executor silently truncates any input bigger than about
       128 KiB.** Found 2026-09-11 by running a real CI/CD pipeline on kw: a step
       received a 2 MiB source tarball as 167,323 bytes and `tar` failed with
       "unexpected end of file". Isolated with a two-step pipeline that writes
@@ -1317,6 +1317,13 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       `log-throughput-10mb` exercises stdout, which is the other direction and
       is fine. Add a case with a multi-megabyte INPUT. The vm and process
       backends do not use exec streams and are unaffected.
+      CLOSED (93d2742): `sandbox.Put` writes in 64 KiB chunks and reads the
+      file size back on the same exec, refusing a short write with both byte
+      counts, and re-sends a rewindable source up to three times. The shared
+      executor contract gained "an input far larger than one stream's buffer
+      arrives whole" (2 MiB, digest-checked); it failed on kw before the fix
+      and passes after, and a mutation that short-writes on purpose fails it
+      with "the sandbox holds 1024 bytes after 65536 were written".
 - [x] **Every step longer than the ack wait ran twice.** Found 2026-09-11 by
       running a real CI/CD pipeline on kw: `go test` took 2m37s against a 30
       second ack wait, the server handed the same dispatch out again, and the
