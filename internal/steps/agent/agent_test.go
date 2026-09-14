@@ -439,6 +439,15 @@ type stubModel struct {
 	turns  []*provider.Response
 	repeat *provider.Response
 	calls  int
+	// lastCall is what the model was most recently shown, so a case can assert
+	// on what the loop TOLD it rather than only on what it did next.
+	lastCall provider.Call
+}
+
+func (m *stubModel) lastPrompt() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return fmt.Sprintf("%+v", m.lastCall)
 }
 
 func (m *stubModel) script(resps ...*provider.Response) {
@@ -458,10 +467,11 @@ func (m *stubModel) ProviderName() string { return "stub" }
 
 func (m *stubModel) Capabilities() provider.Capabilities { return provider.Capabilities{} }
 
-func (m *stubModel) Generate(context.Context, provider.Call) (*provider.Response, error) {
+func (m *stubModel) Generate(_ context.Context, call provider.Call) (*provider.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls++
+	m.lastCall = call
 	if len(m.turns) > 0 {
 		next := m.turns[0]
 		m.turns = m.turns[1:]

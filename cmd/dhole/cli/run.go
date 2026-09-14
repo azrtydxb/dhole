@@ -11,6 +11,7 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/gen/dhole/v1/dholev1connect"
+	"github.com/azrtydxb/dhole/internal/steps/approval"
 )
 
 // runStartCmd starts a run of an approved revision.
@@ -193,7 +194,39 @@ func (o *options) emitEvent(event *dholev1.WatchRunResponse) error {
 		return err
 	}
 	at := time.Unix(0, event.GetAtUnixNano()).UTC().Format(time.RFC3339)
-	_, err := fmt.Fprintf(o.env.Stdout, "%s %6d %-22s %s\n",
+	line := fmt.Sprintf("%s %6d %-22s %s",
 		at, event.GetSequence(), event.GetType(), event.GetStepId())
+	if detail := eventDetail(event); detail != "" {
+		line += "  " + detail
+	}
+	_, err := fmt.Fprintln(o.env.Stdout, line)
 	return err
+}
+
+// eventDetail is the part of an event a person needs that its type and step
+// do not say, or "" when there is nothing to add.
+//
+// Today that is one event. A gate decision printed as a bare
+// STEP_APPROVAL_DECIDED said a decision happened and nothing about who made it
+// or why, though the event carried both — so the text log of a refused deploy
+// was the one record of it that left out the refusal.
+func eventDetail(event *dholev1.WatchRunResponse) string {
+	if event.GetType() != string(approval.StepApprovalDecided) {
+		return ""
+	}
+	decision, err := approval.UnmarshalDecision(event.GetPayload())
+	if err != nil {
+		// Unreadable is said, not hidden: a decision line with no detail
+		// would look like a decision nobody explained.
+		return "(decision payload unreadable)"
+	}
+	verdict := "approved"
+	if !decision.Approved {
+		verdict = "denied"
+	}
+	detail := verdict + " by " + decision.Approver
+	if decision.Reason != "" {
+		detail += " — " + decision.Reason
+	}
+	return detail
 }

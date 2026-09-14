@@ -195,7 +195,7 @@ func (b *builtins) parkedAt(
 			if err != nil {
 				return nil, agent.Decision{}, err
 			}
-			decision = agent.Decision{Approver: d.Approver, Approved: d.Approved}
+			decision = agent.Decision{Approver: d.Approver, Approved: d.Approved, Reason: d.Reason}
 			decided = true
 		}
 	}

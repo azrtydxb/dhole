@@ -1476,6 +1476,12 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       approver — the payload carries both and `--output json` shows them;
       and a resumed agent is still told only "approved by <approver>"
       (`internal/server/agent.go` builds `agent.Decision` without the reason).
+      FOLLOW-UP, closed: a resumed agent's approved call now returns
+      `{"result", "approval": {"approved_by", "reason"}}` and the action
+      record carries `approval_reason`
+      (`TestAResumedAgentIsToldWhyItWasApproved`, both halves mutation-killed);
+      the text form of `dhole run logs` prints "approved by X — reason" on a
+      decision (`TestAPersonReadingARunLogSeesWhoDecidedAGateAndWhy`).
 - [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.

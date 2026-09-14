@@ -330,8 +330,19 @@ func (s *Step) invoke(
 			s.record(ctx, inv, false, err)
 			return nil, err
 		}
-		s.recordApproved(ctx, inv, approver)
-		return s.invoker.Invoke(ctx, inv)
+		reason := window.why()
+		s.recordApproved(ctx, inv, approver, reason)
+		result, err := s.invoker.Invoke(ctx, inv)
+		if err != nil {
+			return result, err
+		}
+		// The approval travels IN the result the model reads, because that is
+		// the only channel it has: the SDK shows an ApprovalDecision's reason to
+		// the model on a DENIAL and never on an approval. "Approved, but only
+		// because the scan was a false positive" is a constraint on what the
+		// agent does next, and a resume that dropped it threw away the one
+		// sentence a person wrote for exactly that purpose.
+		return withApproval(result, approver, reason), nil
 	}
 
 	// The action is recorded BEFORE it is taken, and the record says it was
@@ -366,6 +377,11 @@ type ActionRecord struct {
 	// through, and is empty for everything else. Without it the log said an
 	// agent had taken a gated action and not on whose authority.
 	Approver string `json:"approver,omitempty"`
+	// ApprovalReason is WHY that person let the action through. It is separate
+	// from Reason, which explains a refusal: one field holding both would make
+	// "why did this not happen" and "why was this allowed" indistinguishable in
+	// the log of an at-most-once effect.
+	ApprovalReason string `json:"approval_reason,omitempty"`
 }
 
 // record appends one attempted action to the run log.
@@ -381,11 +397,44 @@ func (s *Step) record(ctx context.Context, inv Invocation, allowed bool, cause e
 	}, cause)
 }
 
-// recordApproved records an action a named person let through.
-func (s *Step) recordApproved(ctx context.Context, inv Invocation, approver string) {
+// recordApproved records an action a named person let through, and why.
+func (s *Step) recordApproved(
+	ctx context.Context, inv Invocation, approver, reason string,
+) {
 	s.appendAction(ctx, inv, ActionRecord{
-		Subject: s.subject, Action: inv.Action, Allowed: true, Approver: approver,
+		Subject: s.subject, Action: inv.Action, Allowed: true,
+		Approver: approver, ApprovalReason: reason,
 	}, nil)
+}
+
+// withApproval wraps an approved call's result with who approved it and why.
+//
+// The original result is kept whole under "result" rather than merged, so an
+// invoker whose answer happened to have an "approval" key is not silently
+// overwritten, and a result that is not a JSON object still reaches the model.
+func withApproval(result json.RawMessage, approver, reason string) json.RawMessage {
+	if len(result) == 0 {
+		result = json.RawMessage("null")
+	}
+	wrapped, err := json.Marshal(struct {
+		Result   json.RawMessage `json:"result"`
+		Approval struct {
+			By     string `json:"approved_by"`
+			Reason string `json:"reason,omitempty"`
+		} `json:"approval"`
+	}{
+		Result: result,
+		Approval: struct {
+			By     string `json:"approved_by"`
+			Reason string `json:"reason,omitempty"`
+		}{By: approver, Reason: reason},
+	})
+	if err != nil {
+		// A result that cannot be re-encoded is still the result: losing the
+		// approval note is better than losing the answer to the call.
+		return result
+	}
+	return wrapped
 }
 
 func (s *Step) appendAction(
@@ -564,6 +613,9 @@ type Decision struct {
 	// supplied.
 	Approver string
 	Approved bool
+	// Reason is the person's own words for the decision. The gate refuses a
+	// decision without one, so it is never empty for a real resume.
+	Reason string
 }
 
 // Run drives the model's bounded tool-calling loop from a prompt.
@@ -632,7 +684,7 @@ func (s *Step) Resume(
 			ToolCallID: id, Approved: true, Reason: "approved by " + decision.Approver,
 		})
 	}
-	window := newResumeWindow(decision.Approver, park.Actions)
+	window := newResumeWindow(decision, park.Actions)
 	return s.generate(ctx, runID, stepID,
 		agent.RunOpts{Messages: messages, Approvals: approvals}, window, ceiling, park)
 }
@@ -825,15 +877,29 @@ type resumeWindow struct {
 	mu        sync.Mutex
 	open      bool
 	approver  string
+	reason    string
 	remaining map[string]int
 }
 
-func newResumeWindow(approver string, actions []string) *resumeWindow {
+func newResumeWindow(decision Decision, actions []string) *resumeWindow {
 	remaining := make(map[string]int, len(actions))
 	for _, a := range actions {
 		remaining[a]++
 	}
-	return &resumeWindow{open: true, approver: approver, remaining: remaining}
+	return &resumeWindow{
+		open: true, approver: decision.Approver, reason: decision.Reason,
+		remaining: remaining,
+	}
+}
+
+// why is the person's reason for the standing decision.
+func (w *resumeWindow) why() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reason
 }
 
 // consume reports whether a person has already decided this call, and who.

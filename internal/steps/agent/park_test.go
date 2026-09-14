@@ -293,3 +293,41 @@ func TestAPartOfAnUnknownKindIsRefusedRatherThanDropped(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrTranscript)
 	require.Contains(t, err.Error(), "telepathy", "the refusal does not name what it could not read")
 }
+
+// TestAResumedAgentIsToldWhyItWasApproved. A person's approval now carries a
+// reason, and the agent is the one party that acts on it next. A resume that
+// told the model only "approved by <name>" threw the reason away at the exact
+// moment it was most useful: "approved — but only because the scan was a false
+// positive" is a constraint on what the agent does next, not decoration.
+//
+// It is also evidence. The run log recorded who let an at-most-once action
+// through and not why, which is the record the approval field's own comment
+// calls the worst possible one.
+func TestAResumedAgentIsToldWhyItWasApproved(t *testing.T) {
+	ctx := testContext(t)
+	h := newHarness(t, config(deploy), nil)
+	h.model.script(toolCall("c1", deploy, `{"env":"prod"}`))
+
+	parked, err := h.step.Run(ctx, testRun, agentStep, "ship it")
+	require.NoError(t, err)
+	require.NotNil(t, parked.Parked)
+
+	const why = "the vuln scan finding is a false positive, see ticket 4412"
+	_, err = h.step.Resume(ctx, testRun, agentStep, *parked.Parked,
+		agent.Decision{Approver: approver, Approved: true, Reason: why})
+	require.NoError(t, err)
+
+	require.Contains(t, h.model.lastPrompt(), why,
+		"the resumed model was told who approved and not why")
+
+	var allowed agent.ActionRecord
+	for _, e := range h.eventsOfType(ctx, t, agent.EventAction) {
+		var record agent.ActionRecord
+		require.NoError(t, json.Unmarshal(e.Payload, &record))
+		if record.Action == deploy && record.Allowed {
+			allowed = record
+		}
+	}
+	require.Equal(t, why, allowed.ApprovalReason,
+		"the log says who let an at-most-once action through and not why")
+}
