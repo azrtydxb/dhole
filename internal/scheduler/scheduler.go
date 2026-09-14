@@ -1249,6 +1249,7 @@ func (s *Scheduler) recordOrphan(ctx context.Context, orphan lease.Orphan) (bool
 	// capped for as long as the bucket's max age, for a failure the plane has
 	// already detected and written down.
 	s.releaseHold(orphan.TenantID, orphan.RunID, orphan.StepID)
+	s.revokeSecrets(ctx, orphan.TenantID, orphan.RunID, orphan.StepID, orphan.Attempt)
 	return true, nil
 }
 
@@ -1317,6 +1318,7 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 		// have been another plane's, so the slot is given back here too. The
 		// release is idempotent.
 		s.releaseHold(tenantID, st.GetRunId(), st.GetStepId())
+		s.revokeSecrets(ctx, tenantID, st.GetRunId(), st.GetStepId(), st.GetAttempt())
 		return s.Advance(ctx, tenantID, st.GetRunId())
 	}
 
@@ -1350,6 +1352,9 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 	// and a leaked slot wedges its pipeline permanently — at the moment
 	// something else has already gone wrong.
 	s.releaseHold(tenantID, st.GetRunId(), st.GetStepId())
+	// And its unspent secret handles, before Advance can issue the retry its
+	// own: they are revoked by exact attempt, so the retry's are never reached.
+	s.revokeSecrets(ctx, tenantID, st.GetRunId(), st.GetStepId(), st.GetAttempt())
 	return s.Advance(ctx, tenantID, st.GetRunId())
 }
 
@@ -1835,9 +1840,13 @@ func (s *Scheduler) dispatch(
 	// return below is a step that never went out, and a slot kept for one of
 	// those is a slot leaked for the life of the bucket's max age.
 	committed := false
+	// Handles minted for a dispatch that then does not commit belong to no
+	// attempt anyone will run, and are revoked with the slot (ADR 0028).
+	var issued []*dholev1.SecretRef
 	defer func() {
 		if !committed {
 			release()
+			s.discardSecrets(ctx, issued)
 		}
 	}()
 
@@ -1902,6 +1911,7 @@ func (s *Scheduler) dispatch(
 	if err != nil {
 		return err
 	}
+	issued = dispatchMsg.GetSecrets()
 
 	// The run's span, and the trace context that travels WITH the dispatch:
 	// the engine that runs this step is another process, and it can only join

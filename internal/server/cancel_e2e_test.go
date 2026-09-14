@@ -14,6 +14,7 @@ import (
 	"github.com/azrtydxb/dhole/gen/dhole/v1/dholev1connect"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/server"
 )
 
@@ -240,4 +241,41 @@ func awaitFleet(
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// TestCancellingARunRevokesItsHandles: a cancelled run may still have a
+// dispatch sitting in a work queue, which no engine holds and so no Cancel can
+// reach. Its handles used to stay redeemable, so the engine that eventually
+// took it would be handed the credential for a run nobody wants any more
+// (ADR 0028). The handle here stands for exactly that dispatch: issued for the
+// run, for a step no engine has accepted.
+func TestCancellingARunRevokesItsHandles(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+
+	srv := startWithAPI(ctx, t)
+	pipelines := apiClient(t, srv)
+	token := srv.BootstrapToken()
+
+	runID, err := srv.Submit(ctx, tenantID, sleeper("cancel-my-handles"))
+	require.NoError(t, err)
+
+	queued, err := srv.Secrets().IssueFor(secrets.Scope{
+		TenantID: tenantID, RunID: runID, StepID: "queued", Attempt: 1,
+	}, "REGISTRY_PASSWORD", "correcthorsebatterystaple", time.Minute)
+	require.NoError(t, err)
+	elsewhere, err := srv.Secrets().IssueFor(secrets.Scope{
+		TenantID: tenantID, RunID: "another-run", StepID: "queued", Attempt: 1,
+	}, "REGISTRY_PASSWORD", "correcthorsebatterystaple", time.Minute)
+	require.NoError(t, err)
+
+	req := connect.NewRequest(&dholev1.CancelRunRequest{RunId: runID, Reason: "the operator asked"})
+	req.Header().Set("Authorization", "Bearer "+token)
+	_, err = pipelines.CancelRun(ctx, req)
+	require.NoError(t, err)
+
+	_, err = srv.Secrets().Redeem(queued.GetHandle())
+	require.Error(t, err, "a cancelled run's unspent handle is still redeemable")
+	_, err = srv.Secrets().Redeem(elsewhere.GetHandle())
+	require.NoError(t, err, "cancelling one run revoked another run's handle")
 }

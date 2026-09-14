@@ -174,6 +174,10 @@ type Config struct {
 	// cancellation stop the work rather than only the bookkeeping. Optional,
 	// with the same rule.
 	Control EngineControl
+	// Secrets revokes the unspent secret handles of a run that is cancelled
+	// (ADR 0028). Optional: without one, a cancelled run's queued dispatch
+	// keeps its handles until they expire.
+	Secrets SecretRevoker
 	// Tier is the trust tier steps would be dispatched to, and must match the
 	// scheduler's. It is what a plan resolves the environment identity of:
 	// every cache key is hashed against the identity that tier's engines
@@ -241,6 +245,7 @@ type Server struct {
 	drain     Drainer
 	// control is the one inbound path to an engine. See control.go.
 	control   EngineControl
+	secrets   SecretRevoker
 	tier      string
 	cat       StepResolver
 	catWriter PluginPublisher
@@ -292,6 +297,7 @@ func NewServer(cfg Config) (*Server, error) {
 		fleet:       cfg.Fleet,
 		drain:       cfg.Drain,
 		control:     cfg.Control,
+		secrets:     cfg.Secrets,
 		tier:        cfg.Tier,
 		cat:         cfg.Catalog,
 		catWriter:   cfg.CatalogWriter,

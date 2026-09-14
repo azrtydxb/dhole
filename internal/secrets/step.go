@@ -97,13 +97,42 @@ func (i *StepIssuer) Issue(
 		if err != nil {
 			return nil, err
 		}
-		ref, err := i.broker.Issue(scope.TenantID, decl.GetEnv(), value, ttl)
+		ref, err := i.broker.IssueFor(scope, decl.GetEnv(), value, ttl)
 		if err != nil {
 			return nil, fmt.Errorf("secrets: issuing a handle for the secret named %q: %w", decl.GetName(), err)
 		}
 		refs = append(refs, ref)
 	}
 	return refs, nil
+}
+
+// Revoke forgets the unspent handles issued for one attempt, when it ends
+// (ADR 0028).
+func (i *StepIssuer) Revoke(_ context.Context, scope Scope) {
+	if i == nil || i.broker == nil {
+		return
+	}
+	i.broker.RevokeAttempt(scope)
+}
+
+// RevokeRun forgets the unspent handles of every attempt of one run.
+func (i *StepIssuer) RevokeRun(_ context.Context, tenantID, runID string) {
+	if i == nil || i.broker == nil {
+		return
+	}
+	i.broker.RevokeRun(tenantID, runID)
+}
+
+// Discard forgets handles issued for a dispatch that never committed.
+func (i *StepIssuer) Discard(_ context.Context, refs []*dholev1.SecretRef) {
+	if i == nil || i.broker == nil || len(refs) == 0 {
+		return
+	}
+	handles := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		handles = append(handles, ref.GetHandle())
+	}
+	i.broker.RevokeHandles(handles...)
 }
 
 // value reads one secret, naming it in every failure.

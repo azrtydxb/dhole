@@ -67,6 +67,9 @@ type entry struct {
 	name     string
 	value    string
 	expires  time.Time
+	// scope is the attempt a step's handle was issued for, and zero for one
+	// the plane issued for itself. It is what revocation matches on.
+	scope Scope
 }
 
 // NewBroker returns an empty broker.
@@ -78,6 +81,15 @@ func NewBroker() *Broker {
 // dispatch carries. The value never leaves this process except as the reply to
 // a redemption of this handle.
 func (b *Broker) Issue(tenantID, name, value string, ttl time.Duration) (*dholev1.SecretRef, error) {
+	return b.IssueFor(Scope{TenantID: tenantID}, name, value, ttl)
+}
+
+// IssueFor is Issue for one attempt of a step: the handle remembers the scope
+// it was minted for, so the attempt's end can revoke it (ADR 0028). A scope
+// carrying only a tenant is a handle no attempt owns, which is what the plane's
+// own resolutions are.
+func (b *Broker) IssueFor(scope Scope, name, value string, ttl time.Duration) (*dholev1.SecretRef, error) {
+	tenantID := scope.TenantID
 	switch {
 	case tenantID == "":
 		// No unscoped record, even while only one tenant exists.
@@ -111,7 +123,7 @@ func (b *Broker) Issue(tenantID, name, value string, ttl time.Duration) (*dholev
 			delete(b.handles, h)
 		}
 	}
-	b.handles[handle] = entry{tenantID: tenantID, name: name, value: value, expires: expires}
+	b.handles[handle] = entry{tenantID: tenantID, name: name, value: value, expires: expires, scope: scope}
 	return &dholev1.SecretRef{
 		Name:      name,
 		Handle:    handle,
@@ -139,6 +151,62 @@ func (b *Broker) Redeem(handle string) (string, error) {
 		return "", errRefused
 	}
 	return e.value, nil
+}
+
+// RevokeAttempt forgets every unspent handle issued for exactly this attempt,
+// and reports how many. It is called when the attempt ends — whatever way it
+// ends — so a handle its engine never redeemed stops being a live credential
+// then rather than at its expiry (ADR 0028).
+//
+// Exact, and only exact: a scope missing any field matches nothing. Matching
+// by step would reach the retry of the same step, which may already have been
+// issued its own handles by the time the previous attempt's end is processed.
+func (b *Broker) RevokeAttempt(scope Scope) int {
+	if scope.TenantID == "" || scope.RunID == "" || scope.StepID == "" || scope.Attempt == 0 {
+		return 0
+	}
+	return b.revoke(func(e entry) bool { return e.scope == scope })
+}
+
+// RevokeRun forgets every unspent handle issued for any attempt of one run. A
+// cancelled run may still have a dispatch in a work queue that no engine holds
+// and no Cancel can reach; revoking here is what stops the engine that later
+// takes it from being handed the credential.
+func (b *Broker) RevokeRun(tenantID, runID string) int {
+	if tenantID == "" || runID == "" {
+		return 0
+	}
+	return b.revoke(func(e entry) bool { return e.scope.TenantID == tenantID && e.scope.RunID == runID })
+}
+
+// RevokeHandles forgets the named handles if they are still unspent. It is for
+// a dispatch that minted handles and then never committed: the attempt number
+// it built them under may belong to another pass's dispatch that did, so
+// revoking by scope there would take a live attempt's credential.
+func (b *Broker) RevokeHandles(handles ...string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, h := range handles {
+		if _, ok := b.handles[h]; ok {
+			delete(b.handles, h)
+			n++
+		}
+	}
+	return n
+}
+
+func (b *Broker) revoke(match func(entry) bool) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for h, e := range b.handles {
+		if match(e) {
+			delete(b.handles, h)
+			n++
+		}
+	}
+	return n
 }
 
 // RedeemFor exchanges a handle for its value, once, on behalf of tenantID —

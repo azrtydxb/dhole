@@ -204,3 +204,43 @@ func (r *subjectRecorder) all() []string {
 	defer r.mu.Unlock()
 	return append([]string{}, r.subjects...)
 }
+
+// TestRevokingAnAttemptLeavesEveryOtherAttemptsHandles is ADR 0028's revocation
+// rule at the broker. An attempt that ends takes its unspent handles with it,
+// and nothing else: not the retry of the same step, which may already have
+// been issued, not a sibling step, and not another run or another tenant's run
+// of the same id.
+func TestRevokingAnAttemptLeavesEveryOtherAttemptsHandles(t *testing.T) {
+	b := secrets.NewBroker()
+	issue := func(scope secrets.Scope) string {
+		t.Helper()
+		ref, err := b.IssueFor(scope, "TOKEN", "value", time.Minute)
+		require.NoError(t, err)
+		return ref.GetHandle()
+	}
+	ended := secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push", Attempt: 1}
+	endedA, endedB := issue(ended), issue(ended)
+	retry := issue(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push", Attempt: 2})
+	sibling := issue(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "sign", Attempt: 1})
+	otherRun := issue(secrets.Scope{TenantID: "acme", RunID: "run-2", StepID: "push", Attempt: 1})
+	otherTenant := issue(secrets.Scope{TenantID: "globex", RunID: "run-1", StepID: "push", Attempt: 1})
+
+	require.Equal(t, 2, b.RevokeAttempt(ended), "an ended attempt's two unspent handles were not both revoked")
+	for _, h := range []string{endedA, endedB} {
+		_, err := b.Redeem(h)
+		require.Error(t, err, "a handle of an ended attempt is still redeemable")
+	}
+	require.Zero(t, b.RevokeAttempt(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push"}),
+		"a scope naming no attempt is not every attempt")
+
+	require.Equal(t, 2, b.RevokeRun("acme", "run-1"), "a run's remaining handles were not revoked with it")
+	for _, h := range []string{retry, sibling} {
+		_, err := b.Redeem(h)
+		require.Error(t, err, "a handle of a revoked run is still redeemable")
+	}
+	for _, h := range []string{otherRun, otherTenant} {
+		_, err := b.Redeem(h)
+		require.NoError(t, err, "revoking one run took a handle of another")
+	}
+	require.Zero(t, b.RevokeRun("", "run-1"), "a revocation naming no tenant is not every tenant's")
+}

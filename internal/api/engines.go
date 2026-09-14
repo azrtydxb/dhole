@@ -32,6 +32,11 @@ type EngineControl interface {
 	Send(ctx context.Context, engineID string, control *dholev1.EngineControl) error
 }
 
+// SecretRevoker forgets the unspent secret handles of every attempt of a run.
+type SecretRevoker interface {
+	RevokeRun(ctx context.Context, tenantID, runID string)
+}
+
 // Compile-time proof that the server serves the whole engine contract too.
 var _ dholev1connect.EngineServiceHandler = (*Server)(nil)
 
@@ -172,6 +177,13 @@ func (s *Server) CancelRun(
 		At:      s.now().UTC(),
 	}); err != nil {
 		return nil, storeError("record cancellation", err)
+	}
+	// Every unspent handle of the run, before any engine is told. A dispatch
+	// still waiting in a work queue is held by no engine, so no Cancel below
+	// can reach it; the engine that takes it later must not be handed the
+	// credential for a run nobody wants (ADR 0028).
+	if s.secrets != nil {
+		s.secrets.RevokeRun(ctx, p.TenantID, runID)
 	}
 
 	out := make([]*dholev1.CancelledStep, 0, len(held))

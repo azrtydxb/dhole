@@ -42,6 +42,11 @@ type StepSecrets interface {
 	Check(ctx context.Context, tenantID string, step *dholev1.Step) error
 	// Issue mints one handle per declaration for exactly this attempt.
 	Issue(ctx context.Context, scope secrets.Scope, step *dholev1.Step, ttl time.Duration) ([]*dholev1.SecretRef, error)
+	// Revoke forgets the unspent handles of exactly one attempt, when that
+	// attempt ends (ADR 0028).
+	Revoke(ctx context.Context, scope secrets.Scope)
+	// Discard forgets handles issued for a dispatch that never committed.
+	Discard(ctx context.Context, refs []*dholev1.SecretRef)
 }
 
 // SecretUnavailable is the STEP_SECRET_UNAVAILABLE payload.
@@ -115,4 +120,25 @@ func (s *Scheduler) secretRefs(
 	return s.secrets.Issue(ctx, secrets.Scope{
 		TenantID: tenantID, RunID: runID, StepID: step.GetId(), Attempt: attempt,
 	}, step, DefaultSecretTTL)
+}
+
+// revokeSecrets forgets the unspent handles of one attempt that has ended —
+// succeeded, failed, cancelled, or lost with its engine (ADR 0028). Handles
+// live in the memory of the plane that issued them, so on any other plane this
+// revokes nothing and the handle's expiry remains the backstop.
+func (s *Scheduler) revokeSecrets(ctx context.Context, tenantID, runID, stepID string, attempt uint32) {
+	if s.secrets == nil {
+		return
+	}
+	s.secrets.Revoke(ctx, secrets.Scope{TenantID: tenantID, RunID: runID, StepID: stepID, Attempt: attempt})
+}
+
+// discardSecrets forgets the handles a dispatch minted and then did not commit.
+// By handle rather than by attempt: the attempt number it was built under may
+// be one another pass has already dispatched, whose handles are live.
+func (s *Scheduler) discardSecrets(ctx context.Context, refs []*dholev1.SecretRef) {
+	if s.secrets == nil || len(refs) == 0 {
+		return
+	}
+	s.secrets.Discard(ctx, refs)
 }
