@@ -611,6 +611,7 @@ func (noLeases) Renew(context.Context, lease.Token) error            { panic("no
 func (noLeases) Validate(context.Context, lease.Token) error         { panic("noLeases: not reached") }
 func (noLeases) Expire(context.Context) ([]lease.Orphan, error)      { panic("noLeases: not reached") }
 func (noLeases) Unaccepted(context.Context) ([]lease.Waiting, error) { panic("noLeases: not reached") }
+func (noLeases) Withdraw(context.Context, lease.Token) error         { panic("noLeases: not reached") }
 
 // eventKinds reduces a log to what a reader replaying it sees happen.
 func eventKinds(events []runstore.Event) []string {
