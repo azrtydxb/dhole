@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"time"
@@ -145,7 +146,10 @@ func runCancelCmd(o *options) *cobra.Command {
 func (o *options) followRun(
 	cmd *cobra.Command, client dholev1connect.PipelineServiceClient, runID string, stepsOnly bool,
 ) error {
-	ctx, cancel := o.context(cmd)
+	// Not o.context: --timeout bounds how long the server may take to answer a
+	// call, and a run legitimately takes as long as its steps do. A follow
+	// ends when the run does, or when the person interrupts it.
+	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 
 	stream, err := client.WatchRun(ctx, connect.NewRequest(&dholev1.WatchRunRequest{RunId: runID}))

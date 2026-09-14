@@ -144,7 +144,7 @@ func Root(env Env) *cobra.Command {
 	flags.StringVar(&o.token, "token", os.Getenv("DHOLE_TOKEN"),
 		"bearer credential; this API has no unauthenticated call (DHOLE_TOKEN)")
 	flags.StringVar(&o.output, "output", "text", "text or json")
-	flags.DurationVar(&o.timeout, "timeout", 60*time.Second, "how long to wait for the server")
+	flags.DurationVar(&o.timeout, "timeout", 60*time.Second, "how long to wait for the server to answer a call (following a run is not bounded by it)")
 
 	// A mistyped flag is usage, not a crash, wherever it appears.
 	root.SetVersionTemplate("dhole {{.Version}}\n")
