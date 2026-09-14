@@ -278,6 +278,23 @@ server believes it is working on them.
 lower, one stuck job stalls the whole queue for that capability set — including
 work other engines could have taken.
 
+**Fetch only while there is room, and renew what you hold.** An engine binds one
+queue per capability subset and kind, so it usually has several, and the order
+of fetching and taking a slot matters. Taking a slot and then waiting on a queue
+for work lets empty queues spend the slot budget: with eight queues and two
+slots the queue holding work waits its turn behind the other seven, and a
+dispatch not accepted within the lease is declared lost. Fetch from every queue
+at once and take a slot only once a dispatch has arrived — but stop fetching,
+abandoning any fetch still open, once you hold as many dispatches as you have
+slots: a full engine that keeps fetching sits on work an idle engine could run.
+A dispatch you fetched and cannot start yet is still delivered to you, so renew
+it (`+WPI`, JetStream's in-progress acknowledgement) from the moment it arrives,
+not from the moment it starts — the ack wait runs from delivery, and letting it
+expire hands the same attempt to another engine. A dispatch you will not start
+at all, because you are stopping or abandoned the fetch it landed on, is
+negatively acknowledged (`-NAK`) so the queue offers it to someone else at once
+rather than after the ack wait.
+
 `job.dispatch.<tier>.>` is a **work queue**: exactly one engine receives each dispatch,
 and an unacknowledged message is redelivered. `job.status.*` is durable —
 the control plane must not miss one. `job.logs.*` is **ephemeral and
