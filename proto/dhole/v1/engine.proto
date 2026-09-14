@@ -64,6 +64,38 @@ message JobDispatch {
   // step span from it rather than from a root of its own. Absent when the
   // control plane has no tracing configured, which is not an error.
   map<string, string> trace_context = 13;
+  // Set by a control plane that answers acceptance requests on
+  // `job.accept.<run>.<step>`. An engine handed a dispatch with this set asks
+  // there, before it starts anything, whether this dispatch's fence is still
+  // the step's current lease — and never starts one the plane answers
+  // ACCEPTANCE_FENCED. A dispatch that sat in the queue while its attempt was
+  // declared lost and re-dispatched is otherwise run a second time for nobody,
+  // which for an at-most-once step is the side effect happening twice
+  // (ADR 0029). Unset on a dispatch from a plane that predates it: such a
+  // plane answers nothing, and an engine starts the step without asking.
+  bool confirm_acceptance = 14;
+}
+
+// Acceptance is the control plane's answer to an engine asking to start a
+// dispatch it pulled.
+enum Acceptance {
+  // The plane could not decide — it could not read the lease. An engine treats
+  // it exactly as no answer at all.
+  ACCEPTANCE_UNSPECIFIED = 0;
+  // The fence is the step's current lease, and the plane has accepted it for
+  // this engine: start the step.
+  ACCEPTANCE_CURRENT = 1;
+  // A newer attempt holds the step, or its lease is gone. Never start it:
+  // acknowledge the dispatch off the queue and publish nothing.
+  ACCEPTANCE_FENCED = 2;
+}
+
+// AcceptReply answers a JobStatus{PHASE_ACCEPTED} sent as a request on
+// `job.accept.<run>.<step>`.
+message AcceptReply {
+  Acceptance acceptance = 1;
+  // Why the plane could not decide, when acceptance is UNSPECIFIED.
+  string error = 2;
 }
 
 // Phase is where a job stands. Only terminal phases carry an exit code.

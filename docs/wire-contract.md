@@ -40,16 +40,17 @@ its tenant and could not reach another one by spelling it differently: its
 credentials place it in exactly one account, and its permissions within that
 account are further limited to its own tier.
 
-| Subject                             | Direction        | Message                          |
-| ----------------------------------- | ---------------- | -------------------------------- |
-| `job.dispatch.<tier>.<caps>`        | plane → engine   | `JobDispatch` (any engine kind)  |
-| `job.dispatch.<tier>.<caps>.<kind>` | plane → engine   | `JobDispatch` (one engine kind)  |
-| `job.status.<run>.<step>`           | engine → plane   | `JobStatus`                      |
-| `job.logs.<run>.<step>`             | engine → viewers | `LogChunk`                       |
-| `engine.control.<engine-id>`        | plane → engine   | `EngineControl`                  |
-| `engine.heartbeat.<engine-id>`      | engine → plane   | `EngineHeartbeat`                |
-| `engine.registration`               | engine → plane   | `EngineRegistration`             |
-| `secret.redeem`                     | engine → plane   | a handle, raw (reply: the value) |
+| Subject                             | Direction        | Message                            |
+| ----------------------------------- | ---------------- | ---------------------------------- |
+| `job.dispatch.<tier>.<caps>`        | plane → engine   | `JobDispatch` (any engine kind)    |
+| `job.dispatch.<tier>.<caps>.<kind>` | plane → engine   | `JobDispatch` (one engine kind)    |
+| `job.status.<run>.<step>`           | engine → plane   | `JobStatus`                        |
+| `job.logs.<run>.<step>`             | engine → viewers | `LogChunk`                         |
+| `engine.control.<engine-id>`        | plane → engine   | `EngineControl`                    |
+| `engine.heartbeat.<engine-id>`      | engine → plane   | `EngineHeartbeat`                  |
+| `engine.registration`               | engine → plane   | `EngineRegistration`               |
+| `secret.redeem`                     | engine → plane   | a handle, raw (reply: the value)   |
+| `job.accept.<run>.<step>`           | engine → plane   | `JobStatus` (reply: `AcceptReply`) |
 
 `<tier>` is the trust tier the work is dispatched to — `trusted`, `untrusted`,
 and whatever else the deployment defines. An engine's bus credentials permit
@@ -313,10 +314,14 @@ best-effort**; see Logs below.
 2. It enqueues a `JobDispatch` through the outbox. The event and the outbox row
    commit in one transaction, so a dispatch is never published for a step whose
    readiness was rolled back.
-3. An engine pulls the dispatch, checks `protocol_version`, and publishes
-   `JobStatus{PHASE_ACCEPTED}`. That status — or the first heartbeat listing
-   the job in `in_flight`, whichever the plane applies first — accepts the lease,
-   and from then on it expires one TTL after its last renewal.
+3. An engine pulls the dispatch, checks `protocol_version`, and — once it has a
+   slot, and when the dispatch carries `confirm_acceptance` — asks the plane on
+   `job.accept.<run>.<step>` whether the dispatch is still current (see
+   "Confirming a dispatch before starting it"). It then publishes
+   `JobStatus{PHASE_ACCEPTED}`. The confirmation, that status or the first
+   heartbeat listing the job in `in_flight`, whichever the plane applies first,
+   accepts the lease, and from then on it expires one TTL after its last
+   renewal.
 4. The engine runs the step, streaming `LogChunk` messages as output appears and
    writing the authoritative log to the object store.
 5. The engine publishes a terminal `JobStatus` — `SUCCEEDED`, `FAILED`, or
@@ -336,6 +341,58 @@ dead and its step re-dispatched, the resurrected engine's late report is
 recognised as stale rather than overwriting a newer attempt's result.
 
 An engine must never invent, reuse, or omit a fence token.
+
+### Confirming a dispatch before starting it
+
+Discarding a stale REPORT is not enough, because by then the stale attempt has
+run. A dispatch can wait in the work queue while its attempt is declared lost
+and re-dispatched, and a dispatch is redelivered after the engine that accepted
+it dies — in both cases the message still on the queue carries a fence that is
+no longer current. Found on a real cluster: a superseded dispatch started a
+sandbox that ran `build` for nobody for five minutes, beside the attempt that
+replaced it. For an `at-most-once` step that is its side effect happening twice
+([ADR 0029](../.procoder/adr/0029-an-engine-confirms-its-fence-before-it-starts-a-step.md)).
+
+So a control plane that can answer sets `JobDispatch.confirm_acceptance`, and an
+engine handed such a dispatch must ask before it starts it:
+
+1. **When:** after it has a slot for the dispatch, and before it acquires a
+   sandbox, redeems a secret, lists the job in a heartbeat or publishes any
+   status. Not before the slot: a CURRENT answer accepts the lease, and a lease
+   accepted by a dispatch still waiting for a slot — listed in no heartbeat — is
+   declared lost one TTL later.
+2. **How:** a core NATS request on `job.accept.<run>.<step>` whose body is the
+   `JobStatus{PHASE_ACCEPTED}` it is about to publish, fence echoed unchanged.
+   The reply is an `AcceptReply`. Bound the request; five seconds is what
+   Dhole's own engine allows.
+3. **`ACCEPTANCE_CURRENT`:** start the step as usual. The plane has already
+   accepted the lease for you.
+4. **`ACCEPTANCE_FENCED`:** never start it. Acknowledge the dispatch off the
+   queue — not `-NAK`, which hands a dead dispatch to the next engine to refuse
+   again — publish no status, and free the slot. Nobody is waiting on that
+   attempt, and the plane would discard its report anyway.
+5. **No answer** — no responder, a timeout, or `ACCEPTANCE_UNSPECIFIED`: start a
+   `pure` or `idempotent` step, whose stale result the fence still discards; keep
+   asking, about once a second and holding the delivery renewed, for an
+   `at-most-once` step, which starts only once a plane says CURRENT. Its effect
+   cannot be discarded afterwards.
+
+A dispatch WITHOUT `confirm_acceptance` comes from a plane that does not answer.
+Do not ask it: its engine credentials may not permit publishing on `job.accept.*`
+at all, and a request the server refuses is not answered with an error — it
+simply times out, on every step. An engine that does not know the field never
+asks either, and still works: it is stopped mid-run by the plane instead (see
+"Heartbeats and orphans"), later than a confirming engine would have been
+stopped but for the same reason.
+
+Only EQUALITY is involved on the engine's side: the plane decides which fence is
+current, and the engine echoes the one it was given. Engine credentials permit
+PUBLISHING on `job.accept.>` and not subscribing to it — an engine that could
+subscribe could answer a sibling CURRENT for a dispatch the plane would refuse.
+
+No protocol version was bumped for this. The flag, not a version, is what tells
+an engine that somebody will answer, and the plane decides nothing on the basis
+of whether an engine asked.
 
 ## Protocol version negotiation
 
@@ -755,6 +812,19 @@ that returns runs it as the same attempt.
 An engine that finds itself holding a job whose fence is no longer valid must
 stop that job. It has been superseded, and its output would be discarded anyway.
 
+**It finds out from the control plane's answer to its heartbeat.** A heartbeat
+naming a fence the plane's lease refuses is answered with `EngineControl{Cancel}`
+on `engine.control.<engine-id>`, naming that run, step and attempt under THE
+FENCE THE ENGINE HOLDS — the fence it will obey, where a Cancel under any other
+fence must be refused. The engine stops the job as it stops any cancelled job:
+it terminates the sandbox and publishes `PHASE_CANCELLED`, which the plane
+discards as stale. The Cancel is repeated on every heartbeat that still lists
+the job, since control is a core subject and one published while the engine was
+reconnecting is gone. An engine that confirms before starting can still meet
+this — its lease can expire while it is partitioned from the plane — and an
+engine that predates confirmation meets it for every superseded dispatch it
+starts.
+
 **An engine re-announces itself every third heartbeat** — every fifteen seconds
 — by publishing `EngineRegistration` again, unchanged. This is not optional.
 
@@ -847,7 +917,9 @@ suite's own choices are named so a second implementer makes the same ones.
   plane compares them by age. Ordering an opaque string is undefined; an engine
   only ever needs equality, and this document should say so explicitly.
 - **The engine's half of the fence rule.** Nothing states what an engine does
-  with a `Cancel` whose fence is not the one it holds. It must refuse it.
+  with a `Cancel` whose fence is not the one it holds. It must refuse it. (What
+  it does with a dispatch whose fence was superseded before it started is now
+  stated, under "Confirming a dispatch before starting it".)
 - **`PHASE_RUNNING`.** Defined in the schema; the message flow never says when
   to send it.
 

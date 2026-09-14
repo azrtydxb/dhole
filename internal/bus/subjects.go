@@ -13,6 +13,7 @@ package bus
 //	engine.heartbeat.<engine-id>       engine -> plane    EngineHeartbeat
 //	engine.registration                engine -> plane    EngineRegistration
 //	secret.redeem                      engine -> plane    handle -> value (raw)
+//	job.accept.<run>.<step>            engine -> plane    JobStatus -> AcceptReply
 
 // SubjectDispatch carries one JobDispatch to the tier and capability set it was
 // scheduled for. It is a work queue: exactly one engine receives each dispatch.
@@ -58,6 +59,25 @@ func SubjectDispatchWildcard(tier string) string {
 // the control plane must not miss one.
 func SubjectStatus(runID, stepID string) string {
 	return "job.status." + runID + "." + stepID
+}
+
+// SubjectAccept is where an engine asks, before it starts a dispatch that
+// carries confirm_acceptance, whether that dispatch's fence is still the step's
+// current lease. It is a core request/reply, NOT a stream subject: the answer
+// must come from a plane reading the lease now, and a durable subject would be
+// answered by JetStream's own publish acknowledgement instead (ADR 0029).
+//
+// It is under job.* rather than job.status.* because job.status.> is captured
+// by the status stream, and a request published into a stream is answered by
+// the stream.
+func SubjectAccept(runID, stepID string) string {
+	return "job.accept." + runID + "." + stepID
+}
+
+// SubjectAcceptWildcard is every acceptance request, which is what the control
+// plane serves.
+func SubjectAcceptWildcard() string {
+	return "job.accept.>"
 }
 
 // SubjectLogs carries live LogChunks to whoever is watching. Ephemeral and

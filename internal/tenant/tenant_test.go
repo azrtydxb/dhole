@@ -398,6 +398,8 @@ func subjectBuilders() map[string]string {
 		"SubjectEngineHeartbeat":    bus.SubjectEngineHeartbeat("engine-1"),
 		"SubjectEngineRegistration": bus.SubjectEngineRegistration(),
 		"SubjectSecretRedeem":       bus.SubjectSecretRedeem(),
+		"SubjectAccept":             bus.SubjectAccept("run-1", "build"),
+		"SubjectAcceptWildcard":     bus.SubjectAcceptWildcard(),
 	}
 }
 

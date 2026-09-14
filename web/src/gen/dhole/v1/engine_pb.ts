@@ -20,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_engine: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChVkaG9sZS92MS9lbmdpbmUucHJvdG8SCGRob2xlLnYxIkcKCElucHV0UmVmEgwKBHBvcnQYASABKAkSIAoGZGlnZXN0GAIgASgLMhAuZGhvbGUudjEuRGlnZXN0EgsKA2tleRgDIAEoCSJcCglPdXRwdXRSZWYSDAoEcG9ydBgBIAEoCRIgCgZkaWdlc3QYAiABKAsyEC5kaG9sZS52MS5EaWdlc3QSCwoDa2V5GAMgASgJEhIKCnNpemVfYnl0ZXMYBCABKAQiPQoJU2VjcmV0UmVmEgwKBG5hbWUYASABKAkSDgoGaGFuZGxlGAIgASgJEhIKCmV4cGlyZXNfYXQYAyABKAMi7gMKC0pvYkRpc3BhdGNoEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHAoEc3RlcBgFIAEoCzIOLmRob2xlLnYxLlN0ZXASIgoGaW5wdXRzGAYgAygLMhIuZGhvbGUudjEuSW5wdXRSZWYSJAoHc2VjcmV0cxgHIAMoCzITLmRob2xlLnYxLlNlY3JldFJlZhIVCg1vdXRwdXRfcHJlZml4GAggASgJEhgKEHByb3RvY29sX3ZlcnNpb24YCSABKA0SIAoGdGVuYW50GAogASgLMhAuZGhvbGUudjEuVGVuYW50Eg8KB2NvbW1hbmQYCyADKAkSKwoDZW52GAwgAygLMh4uZGhvbGUudjEuSm9iRGlzcGF0Y2guRW52RW50cnkSPgoNdHJhY2VfY29udGV4dBgNIAMoCzInLmRob2xlLnYxLkpvYkRpc3BhdGNoLlRyYWNlQ29udGV4dEVudHJ5GioKCEVudkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEaMwoRVHJhY2VDb250ZXh0RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASLLAQoJSm9iU3RhdHVzEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHgoFcGhhc2UYBSABKA4yDy5kaG9sZS52MS5QaGFzZRIRCglleGl0X2NvZGUYBiABKAUSJAoHb3V0cHV0cxgHIAMoCzITLmRob2xlLnYxLk91dHB1dFJlZhINCgVlcnJvchgIIAEoCRIPCgdsb2dfa2V5GAkgASgJInkKCExvZ0NodW5rEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEgsKA3NlcRgDIAEoBBIMCgRkYXRhGAQgASgMEiAKBnN0cmVhbRgFIAEoDjIQLmRob2xlLnYxLlN0cmVhbRIPCgdhdHRlbXB0GAYgASgNItkBChJFbmdpbmVSZWdpc3RyYXRpb24SEQoJZW5naW5lX2lkGAEgASgJEhkKEXByb3RvY29sX3ZlcnNpb25zGAIgAygNEioKDGNhcGFiaWxpdGllcxgDIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSCgoCb3MYBCABKAkSDAoEYXJjaBgFIAEoCRINCgVzbG90cxgGIAEoDRIUCgxlbmdpbmVfdHlwZXMYByADKAkSDAoEdGllchgIIAEoCRIcChRlbnZpcm9ubWVudF9pZGVudGl0eRgJIAEoCSJRCghJbkZsaWdodBIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhMKC2ZlbmNlX3Rva2VuGAQgASgJIksKD0VuZ2luZUhlYXJ0YmVhdBIRCgllbmdpbmVfaWQYASABKAkSJQoJaW5fZmxpZ2h0GAIgAygLMhIuZGhvbGUudjEuSW5GbGlnaHQifQoNRW5naW5lTWVzc2FnZRI0CgxyZWdpc3RyYXRpb24YZCABKAsyHC5kaG9sZS52MS5FbmdpbmVSZWdpc3RyYXRpb25IABIuCgloZWFydGJlYXQYZSABKAsyGS5kaG9sZS52MS5FbmdpbmVIZWFydGJlYXRIAEIGCgRib2R5Ik8KBkNhbmNlbBIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhMKC2ZlbmNlX3Rva2VuGAQgASgJIiEKBURyYWluEhgKEGRlYWRsaW5lX3NlY29uZHMYASABKA0iUQoGQXR0YWNoEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SFQoNcmVwbHlfc3ViamVjdBgEIAEoCSKBAQoNRW5naW5lQ29udHJvbBIiCgZjYW5jZWwYASABKAsyEC5kaG9sZS52MS5DYW5jZWxIABIgCgVkcmFpbhgCIAEoCzIPLmRob2xlLnYxLkRyYWluSAASIgoGYXR0YWNoGAMgASgLMhAuZGhvbGUudjEuQXR0YWNoSABCBgoEa2luZCqBAQoFUGhhc2USFQoRUEhBU0VfVU5TUEVDSUZJRUQQABISCg5QSEFTRV9BQ0NFUFRFRBABEhEKDVBIQVNFX1JVTk5JTkcQAhITCg9QSEFTRV9TVUNDRUVERUQQAxIQCgxQSEFTRV9GQUlMRUQQBBITCg9QSEFTRV9DQU5DRUxMRUQQBSpGCgZTdHJlYW0SFgoSU1RSRUFNX1VOU1BFQ0lGSUVEEAASEQoNU1RSRUFNX1NURE9VVBABEhEKDVNUUkVBTV9TVERFUlIQAkKMAQoMY29tLmRob2xlLnYxQgtFbmdpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
+    "ChVkaG9sZS92MS9lbmdpbmUucHJvdG8SCGRob2xlLnYxIkcKCElucHV0UmVmEgwKBHBvcnQYASABKAkSIAoGZGlnZXN0GAIgASgLMhAuZGhvbGUudjEuRGlnZXN0EgsKA2tleRgDIAEoCSJcCglPdXRwdXRSZWYSDAoEcG9ydBgBIAEoCRIgCgZkaWdlc3QYAiABKAsyEC5kaG9sZS52MS5EaWdlc3QSCwoDa2V5GAMgASgJEhIKCnNpemVfYnl0ZXMYBCABKAQiPQoJU2VjcmV0UmVmEgwKBG5hbWUYASABKAkSDgoGaGFuZGxlGAIgASgJEhIKCmV4cGlyZXNfYXQYAyABKAMiigQKC0pvYkRpc3BhdGNoEg4KBnJ1bl9pZBgBIAEoCRIPCgdzdGVwX2lkGAIgASgJEg8KB2F0dGVtcHQYAyABKA0SEwoLZmVuY2VfdG9rZW4YBCABKAkSHAoEc3RlcBgFIAEoCzIOLmRob2xlLnYxLlN0ZXASIgoGaW5wdXRzGAYgAygLMhIuZGhvbGUudjEuSW5wdXRSZWYSJAoHc2VjcmV0cxgHIAMoCzITLmRob2xlLnYxLlNlY3JldFJlZhIVCg1vdXRwdXRfcHJlZml4GAggASgJEhgKEHByb3RvY29sX3ZlcnNpb24YCSABKA0SIAoGdGVuYW50GAogASgLMhAuZGhvbGUudjEuVGVuYW50Eg8KB2NvbW1hbmQYCyADKAkSKwoDZW52GAwgAygLMh4uZGhvbGUudjEuSm9iRGlzcGF0Y2guRW52RW50cnkSPgoNdHJhY2VfY29udGV4dBgNIAMoCzInLmRob2xlLnYxLkpvYkRpc3BhdGNoLlRyYWNlQ29udGV4dEVudHJ5EhoKEmNvbmZpcm1fYWNjZXB0YW5jZRgOIAEoCBoqCghFbnZFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBGjMKEVRyYWNlQ29udGV4dEVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiRgoLQWNjZXB0UmVwbHkSKAoKYWNjZXB0YW5jZRgBIAEoDjIULmRob2xlLnYxLkFjY2VwdGFuY2USDQoFZXJyb3IYAiABKAkiywEKCUpvYlN0YXR1cxIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhMKC2ZlbmNlX3Rva2VuGAQgASgJEh4KBXBoYXNlGAUgASgOMg8uZGhvbGUudjEuUGhhc2USEQoJZXhpdF9jb2RlGAYgASgFEiQKB291dHB1dHMYByADKAsyEy5kaG9sZS52MS5PdXRwdXRSZWYSDQoFZXJyb3IYCCABKAkSDwoHbG9nX2tleRgJIAEoCSJ5CghMb2dDaHVuaxIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRILCgNzZXEYAyABKAQSDAoEZGF0YRgEIAEoDBIgCgZzdHJlYW0YBSABKA4yEC5kaG9sZS52MS5TdHJlYW0SDwoHYXR0ZW1wdBgGIAEoDSLZAQoSRW5naW5lUmVnaXN0cmF0aW9uEhEKCWVuZ2luZV9pZBgBIAEoCRIZChFwcm90b2NvbF92ZXJzaW9ucxgCIAMoDRIqCgxjYXBhYmlsaXRpZXMYAyADKA4yFC5kaG9sZS52MS5DYXBhYmlsaXR5EgoKAm9zGAQgASgJEgwKBGFyY2gYBSABKAkSDQoFc2xvdHMYBiABKA0SFAoMZW5naW5lX3R5cGVzGAcgAygJEgwKBHRpZXIYCCABKAkSHAoUZW52aXJvbm1lbnRfaWRlbnRpdHkYCSABKAkiUQoISW5GbGlnaHQSDgoGcnVuX2lkGAEgASgJEg8KB3N0ZXBfaWQYAiABKAkSDwoHYXR0ZW1wdBgDIAEoDRITCgtmZW5jZV90b2tlbhgEIAEoCSJLCg9FbmdpbmVIZWFydGJlYXQSEQoJZW5naW5lX2lkGAEgASgJEiUKCWluX2ZsaWdodBgCIAMoCzISLmRob2xlLnYxLkluRmxpZ2h0In0KDUVuZ2luZU1lc3NhZ2USNAoMcmVnaXN0cmF0aW9uGGQgASgLMhwuZGhvbGUudjEuRW5naW5lUmVnaXN0cmF0aW9uSAASLgoJaGVhcnRiZWF0GGUgASgLMhkuZGhvbGUudjEuRW5naW5lSGVhcnRiZWF0SABCBgoEYm9keSJPCgZDYW5jZWwSDgoGcnVuX2lkGAEgASgJEg8KB3N0ZXBfaWQYAiABKAkSDwoHYXR0ZW1wdBgDIAEoDRITCgtmZW5jZV90b2tlbhgEIAEoCSIhCgVEcmFpbhIYChBkZWFkbGluZV9zZWNvbmRzGAEgASgNIlEKBkF0dGFjaBIOCgZydW5faWQYASABKAkSDwoHc3RlcF9pZBgCIAEoCRIPCgdhdHRlbXB0GAMgASgNEhUKDXJlcGx5X3N1YmplY3QYBCABKAkigQEKDUVuZ2luZUNvbnRyb2wSIgoGY2FuY2VsGAEgASgLMhAuZGhvbGUudjEuQ2FuY2VsSAASIAoFZHJhaW4YAiABKAsyDy5kaG9sZS52MS5EcmFpbkgAEiIKBmF0dGFjaBgDIAEoCzIQLmRob2xlLnYxLkF0dGFjaEgAQgYKBGtpbmQqVwoKQWNjZXB0YW5jZRIaChZBQ0NFUFRBTkNFX1VOU1BFQ0lGSUVEEAASFgoSQUNDRVBUQU5DRV9DVVJSRU5UEAESFQoRQUNDRVBUQU5DRV9GRU5DRUQQAiqBAQoFUGhhc2USFQoRUEhBU0VfVU5TUEVDSUZJRUQQABISCg5QSEFTRV9BQ0NFUFRFRBABEhEKDVBIQVNFX1JVTk5JTkcQAhITCg9QSEFTRV9TVUNDRUVERUQQAxIQCgxQSEFTRV9GQUlMRUQQBBITCg9QSEFTRV9DQU5DRUxMRUQQBSpGCgZTdHJlYW0SFgoSU1RSRUFNX1VOU1BFQ0lGSUVEEAASEQoNU1RSRUFNX1NURE9VVBABEhEKDVNUUkVBTV9TVERFUlIQAkKMAQoMY29tLmRob2xlLnYxQgtFbmdpbmVQcm90b1ABWi5naXRodWIuY29tL2F6cnR5ZHhiL2Rob2xlL2dlbi9kaG9sZS92MTtkaG9sZXYxogIDRFhYqgIIRGhvbGUuVjHKAghEaG9sZVxWMeICFERob2xlXFYxXEdQQk1ldGFkYXRh6gIJRGhvbGU6OlYxYgZwcm90bzM",
     [file_dhole_v1_common, file_dhole_v1_pipeline],
   );
 
@@ -218,6 +218,21 @@ export type JobDispatch = Message<"dhole.v1.JobDispatch"> & {
    * @generated from field: map<string, string> trace_context = 13;
    */
   traceContext: { [key: string]: string };
+
+  /**
+   * Set by a control plane that answers acceptance requests on
+   * `job.accept.<run>.<step>`. An engine handed a dispatch with this set asks
+   * there, before it starts anything, whether this dispatch's fence is still
+   * the step's current lease — and never starts one the plane answers
+   * ACCEPTANCE_FENCED. A dispatch that sat in the queue while its attempt was
+   * declared lost and re-dispatched is otherwise run a second time for nobody,
+   * which for an at-most-once step is the side effect happening twice
+   * (ADR 0029). Unset on a dispatch from a plane that predates it: such a
+   * plane answers nothing, and an engine starts the step without asking.
+   *
+   * @generated from field: bool confirm_acceptance = 14;
+   */
+  confirmAcceptance: boolean;
 };
 
 /**
@@ -227,6 +242,34 @@ export type JobDispatch = Message<"dhole.v1.JobDispatch"> & {
 export const JobDispatchSchema: GenMessage<JobDispatch> =
   /*@__PURE__*/
   messageDesc(file_dhole_v1_engine, 3);
+
+/**
+ * AcceptReply answers a JobStatus{PHASE_ACCEPTED} sent as a request on
+ * `job.accept.<run>.<step>`.
+ *
+ * @generated from message dhole.v1.AcceptReply
+ */
+export type AcceptReply = Message<"dhole.v1.AcceptReply"> & {
+  /**
+   * @generated from field: dhole.v1.Acceptance acceptance = 1;
+   */
+  acceptance: Acceptance;
+
+  /**
+   * Why the plane could not decide, when acceptance is UNSPECIFIED.
+   *
+   * @generated from field: string error = 2;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message dhole.v1.AcceptReply.
+ * Use `create(AcceptReplySchema)` to create a new message.
+ */
+export const AcceptReplySchema: GenMessage<AcceptReply> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_engine, 4);
 
 /**
  * JobStatus is an engine's report on a dispatch. The fence token it echoes is
@@ -289,7 +332,7 @@ export type JobStatus = Message<"dhole.v1.JobStatus"> & {
  */
 export const JobStatusSchema: GenMessage<JobStatus> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 4);
+  messageDesc(file_dhole_v1_engine, 5);
 
 /**
  * LogChunk is a live log fragment. These are best-effort and ephemeral — they
@@ -338,7 +381,7 @@ export type LogChunk = Message<"dhole.v1.LogChunk"> & {
  */
 export const LogChunkSchema: GenMessage<LogChunk> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 5);
+  messageDesc(file_dhole_v1_engine, 6);
 
 /**
  * EngineRegistration is what an engine announces on start. The scheduler
@@ -422,7 +465,7 @@ export type EngineRegistration = Message<"dhole.v1.EngineRegistration"> & {
  */
 export const EngineRegistrationSchema: GenMessage<EngineRegistration> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 6);
+  messageDesc(file_dhole_v1_engine, 7);
 
 /**
  * InFlight is one job an engine is currently running.
@@ -457,7 +500,7 @@ export type InFlight = Message<"dhole.v1.InFlight"> & {
  */
 export const InFlightSchema: GenMessage<InFlight> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 7);
+  messageDesc(file_dhole_v1_engine, 8);
 
 /**
  * EngineHeartbeat proves an engine is alive and says what it is holding. A
@@ -483,7 +526,7 @@ export type EngineHeartbeat = Message<"dhole.v1.EngineHeartbeat"> & {
  */
 export const EngineHeartbeatSchema: GenMessage<EngineHeartbeat> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 8);
+  messageDesc(file_dhole_v1_engine, 9);
 
 /**
  * EngineMessage is the frame every engine-to-plane message travels in, and it
@@ -535,7 +578,7 @@ export type EngineMessage = Message<"dhole.v1.EngineMessage"> & {
  */
 export const EngineMessageSchema: GenMessage<EngineMessage> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 9);
+  messageDesc(file_dhole_v1_engine, 10);
 
 /**
  * Cancel stops one in-flight job.
@@ -570,7 +613,7 @@ export type Cancel = Message<"dhole.v1.Cancel"> & {
  */
 export const CancelSchema: GenMessage<Cancel> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 10);
+  messageDesc(file_dhole_v1_engine, 11);
 
 /**
  * Drain tells an engine to accept no new work and exit once idle.
@@ -592,7 +635,7 @@ export type Drain = Message<"dhole.v1.Drain"> & {
  */
 export const DrainSchema: GenMessage<Drain> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 11);
+  messageDesc(file_dhole_v1_engine, 12);
 
 /**
  * Attach asks an engine to open an interactive session against a running job.
@@ -629,7 +672,7 @@ export type Attach = Message<"dhole.v1.Attach"> & {
  */
 export const AttachSchema: GenMessage<Attach> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 12);
+  messageDesc(file_dhole_v1_engine, 13);
 
 /**
  * EngineControl is the only inbound message an engine accepts. Engines are
@@ -672,7 +715,46 @@ export type EngineControl = Message<"dhole.v1.EngineControl"> & {
  */
 export const EngineControlSchema: GenMessage<EngineControl> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_engine, 13);
+  messageDesc(file_dhole_v1_engine, 14);
+
+/**
+ * Acceptance is the control plane's answer to an engine asking to start a
+ * dispatch it pulled.
+ *
+ * @generated from enum dhole.v1.Acceptance
+ */
+export enum Acceptance {
+  /**
+   * The plane could not decide — it could not read the lease. An engine treats
+   * it exactly as no answer at all.
+   *
+   * @generated from enum value: ACCEPTANCE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The fence is the step's current lease, and the plane has accepted it for
+   * this engine: start the step.
+   *
+   * @generated from enum value: ACCEPTANCE_CURRENT = 1;
+   */
+  CURRENT = 1,
+
+  /**
+   * A newer attempt holds the step, or its lease is gone. Never start it:
+   * acknowledge the dispatch off the queue and publish nothing.
+   *
+   * @generated from enum value: ACCEPTANCE_FENCED = 2;
+   */
+  FENCED = 2,
+}
+
+/**
+ * Describes the enum dhole.v1.Acceptance.
+ */
+export const AcceptanceSchema: GenEnum<Acceptance> =
+  /*@__PURE__*/
+  enumDesc(file_dhole_v1_engine, 0);
 
 /**
  * Phase is where a job stands. Only terminal phases carry an exit code.
@@ -716,7 +798,7 @@ export enum Phase {
  */
 export const PhaseSchema: GenEnum<Phase> =
   /*@__PURE__*/
-  enumDesc(file_dhole_v1_engine, 0);
+  enumDesc(file_dhole_v1_engine, 1);
 
 /**
  * Stream distinguishes the two output streams of a step.
@@ -745,4 +827,4 @@ export enum Stream {
  */
 export const StreamSchema: GenEnum<Stream> =
   /*@__PURE__*/
-  enumDesc(file_dhole_v1_engine, 1);
+  enumDesc(file_dhole_v1_engine, 2);

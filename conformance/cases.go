@@ -86,6 +86,7 @@ func cases() []kase {
 		secretRedemptionCase(),
 		leaseRenewalCase(),
 		fenceRefusalCase(),
+		supersededDispatchCase(),
 	}
 }
 
@@ -717,6 +718,104 @@ func fenceRefusalCase() kase {
 					"got %s (error %q)", status.GetPhase(), status.GetError())
 			}
 			return h.checkFence(d, status)
+		},
+	}
+}
+
+// supersededDispatchCase: docs/wire-contract.md, "Confirming a dispatch before
+// starting it". Found on a real cluster: a dispatch superseded while it waited
+// in the queue was started anyway, beside the attempt that replaced it, and
+// only its report was discarded.
+func supersededDispatchCase() kase {
+	return kase{
+		name: "superseded-dispatch-never-started",
+		obligation: "A JobDispatch carrying confirm_acceptance is not started until the engine has asked on " +
+			"job.accept.<run>.<step> with its JobStatus{PHASE_ACCEPTED}, fence echoed. One the plane answers " +
+			"ACCEPTANCE_FENCED is never run — no status, no log — and is acknowledged off the work queue; one " +
+			"answered ACCEPTANCE_CURRENT runs as usual.",
+		timeout: 45 * time.Second,
+		run: func(ctx context.Context, h *harness) error {
+			stale := h.newDispatch("superseded")
+			stale.ConfirmAcceptance = true
+			stale.Command = []string{"sh", "-c", "printf 'ran for nobody\n'"}
+			h.answerAcceptance(stale.GetFenceToken(), dholev1.Acceptance_ACCEPTANCE_FENCED)
+			watch := h.watchStatus(stale)
+			if err := h.dispatch(ctx, stale); err != nil {
+				return err
+			}
+
+			asked := time.Now().Add(15 * time.Second)
+			for len(h.acceptRequests(stale)) == 0 {
+				if len(watch.ch) > 0 || len(h.logChunks(stale)) > 0 {
+					return fmt.Errorf("run %s step %s carried confirm_acceptance and the engine started it without "+
+						"asking on %s first; a dispatch superseded while it waited then runs beside the attempt "+
+						"that replaced it", stale.GetRunId(), stale.GetStepId(),
+						h.acceptSubject(stale))
+				}
+				if time.Now().After(asked) {
+					return fmt.Errorf("no acceptance request on %s within 15s for a dispatch carrying "+
+						"confirm_acceptance", h.acceptSubject(stale))
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			request := h.acceptRequests(stale)[0]
+			if request.GetPhase() != dholev1.Phase_PHASE_ACCEPTED || request.GetFenceToken() != stale.GetFenceToken() ||
+				request.GetAttempt() != stale.GetAttempt() {
+				return fmt.Errorf("the acceptance request carried phase %s, attempt %d and fence %q; expected "+
+					"PHASE_ACCEPTED for attempt %d under the dispatch's fence %q",
+					request.GetPhase(), request.GetAttempt(), request.GetFenceToken(),
+					stale.GetAttempt(), stale.GetFenceToken())
+			}
+
+			// Room for an engine that ignores the answer to start anyway.
+			time.Sleep(3 * time.Second)
+			if len(watch.ch) > 0 || len(h.logChunks(stale)) > 0 {
+				st := &dholev1.JobStatus{}
+				if len(watch.ch) > 0 {
+					st = <-watch.ch
+				}
+				return fmt.Errorf("the engine ran run %s step %s after the plane answered ACCEPTANCE_FENCED "+
+					"(first status %s, %d log chunks); a superseded attempt must never start",
+					stale.GetRunId(), stale.GetStepId(), st.GetPhase(), len(h.logChunks(stale)))
+			}
+			var queued uint64
+			for deadline := time.Now().Add(10 * time.Second); ; {
+				n, err := h.queuedDispatches(ctx)
+				if err != nil {
+					return fmt.Errorf("reading the work queue %s: %w", h.dispatchStream, err)
+				}
+				if queued = n; queued == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					return fmt.Errorf("the work queue %s still holds %d dispatch(es) 10s after the plane answered "+
+						"ACCEPTANCE_FENCED (asked %d time(s)); a refused dispatch is acknowledged, not left "+
+						"outstanding or nacked back onto the queue", h.dispatchStream, queued,
+						len(h.acceptRequests(stale)))
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			current := h.newDispatch("confirmed")
+			current.ConfirmAcceptance = true
+			current.Command = []string{"sh", "-c", "printf 'confirmed\n'"}
+			currentWatch := h.watchStatus(current)
+			if err := h.dispatch(ctx, current); err != nil {
+				return err
+			}
+			status, err := currentWatch.await(ctx, terminal, "a terminal JobStatus")
+			if err != nil {
+				return fmt.Errorf("%w; a dispatch the plane answered ACCEPTANCE_CURRENT must run as usual", err)
+			}
+			if status.GetPhase() != dholev1.Phase_PHASE_SUCCEEDED {
+				return fmt.Errorf("expected PHASE_SUCCEEDED for a confirmed dispatch, got %s (error %q)",
+					status.GetPhase(), status.GetError())
+			}
+			if len(h.acceptRequests(current)) == 0 {
+				return fmt.Errorf("the confirmed dispatch ran without an acceptance request; it carried " +
+					"confirm_acceptance")
+			}
+			return h.checkFence(current, status)
 		},
 	}
 }

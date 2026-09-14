@@ -1697,6 +1697,75 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       agent step can still have its external effect twice across a partition
       longer than the TTL, exactly as an engine step can; cancelling the body
       when renewal is fenced is the natural next step.
+- [x] **An engine starts a dispatch that was superseded while it waited.** Found
+      2026-09-14 on kw: a step's attempt was recorded STEP_ATTEMPT_LOST and
+      re-dispatched, and the engine started the superseded dispatch as well — a
+      third sandbox pod ran `build` for nobody for about five minutes. The item
+      above left it open: an engine never checks its fence before starting,
+      and the plane's refusal of a stale status only discards the RESULT. It
+      holds for any genuine loss, not only that race: a dispatch redelivered
+      after its engine died is still queued under a dead fence. For an
+      AT_MOST_ONCE step the external effect happens twice. The fix (ADR 0029):
+      a plane that serves `job.accept.<run>.<step>` sets
+      `JobDispatch.confirm_acceptance`; an engine handed one asks there with
+      its `JobStatus{PHASE_ACCEPTED}` once it holds a slot and before it holds
+      the job, starts only on `ACCEPTANCE_CURRENT` (the plane's `Renew`, which
+      accepts the lease), and on `ACCEPTANCE_FENCED` acks the message, publishes
+      nothing and frees the slot. No answer starts a pure or idempotent step and
+      keeps an at-most-once one asking. A heartbeat naming a fence `Renew`
+      refuses is answered with `EngineControl{Cancel}` under that fence, which
+      the engine's existing cancel path obeys. Files: `proto/dhole/v1/engine.proto`,
+      `internal/bus/subjects.go`, `internal/bus/embedded.go`,
+      `internal/tenant/nats_accounts.go`, `internal/engine/agent.go`,
+      `internal/engine/accept.go`, `internal/scheduler/scheduler.go`,
+      `internal/server/server.go`, `conformance/cases.go`, `conformance/suite.go`,
+      `testdata/engines/minimal-python/engine.py`, `docs/wire-contract.md`.
+      Interfaces: produces `bus.SubjectAccept(run, step string) string`,
+      `(*scheduler.Scheduler).Accept(ctx, *dholev1.JobStatus) (dholev1.Acceptance, error)`
+      and `scheduler.Config.ConfirmAcceptance`; consumes `lease.Manager.Renew`
+      and `bus.Bus.Request`. Tests, each written red first:
+      `TestADispatchSupersededBeforeItIsAcceptedIsNeverStarted` (no Acquire,
+      message gone from the queue, the one slot runs the next dispatch),
+      `TestTheCurrentDispatchOfAConfirmedStepRunsNormally`,
+      `TestADispatchFromAPlaneThatDoesNotConfirmStartsWithoutAsking`,
+      `TestAnUnansweredConfirmationStartsAPureStep`,
+      `TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts`,
+      `TestThePlaneAnswersAnAcceptanceRequestByTheLease`,
+      `TestAHeartbeatNamingASupersededFenceIsAnsweredWithACancel`,
+      `TestARunningAttemptWhoseLeaseIsSupersededIsCancelledWithinAHeartbeat`,
+      `TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance`, and the
+      conformance case `superseded-dispatch-never-started` for the Go and the
+      Python engine.
+      CLOSED: built as above. Also
+      `TestAPlaneThatAnswersAcceptanceSaysSoInItsDispatches`, and
+      `TestSubjectBuildersIncludeTenant` now covers both new builders. Red
+      first: the superseded dispatch ("the engine acquired a sandbox for a
+      dispatch the plane answered FENCED: a superseded attempt ran for
+      nobody"), the current one ("the engine must ask once before it
+      starts"), at-most-once ("an at-most-once step started with nobody to
+      confirm its fence"), the plane ("nothing on the plane answers an engine
+      asking to accept a dispatch"; "dispatched without confirm_acceptance,
+      so no engine asks"; "a heartbeat naming a superseded fence was not
+      answered with a Cancel"; "a running attempt whose lease was superseded
+      was still running two heartbeats later"), the tier permission ("a tier
+      engine cannot ask the plane…"), and the Python engine's conformance
+      case ("…the engine started it without asking on job.accept…"). The two
+      compatibility cases, the old plane and the unanswered pure step, passed
+      before the change on purpose: they guard what the change must not
+      break. Mutations, each restored with cp and checked with cmp, each red:
+      the engine never confirming; a refused dispatch nacked; left unacked;
+      keeping its slot; FENCED read as no answer; asking without the flag;
+      at-most-once starting on no answer; every class waiting; the plane not
+      stamping the flag; not serving acceptance; Accept validating without
+      renewing; Accept confirming a fenced lease; the heartbeat not fencing
+      out; the Cancel carrying no fence; the tier permission missing publish;
+      the tier permission granting subscribe; the tenant account missing
+      `job.accept.>`; and, through `dhole-conformance`, the Python engine
+      ignoring FENCED, the Python engine nacking, and the Go engine never
+      confirming. A superseded running attempt on the plane's own engine was
+      cancelled 4.8s after its lease was. No protocol version bump: the flag
+      is what tells an engine somebody answers (ADR 0029). `buf breaking`
+      against main is clean after the merge.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot

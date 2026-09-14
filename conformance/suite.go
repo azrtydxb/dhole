@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
@@ -275,6 +276,10 @@ type harness struct {
 	secrets    map[string]string
 	redeemed   map[string]int
 	seq        int
+	// verdicts is how the suite answers an acceptance request, by fence; a
+	// fence not in it is answered CURRENT. accepts is every request asked.
+	verdicts map[string]dholev1.Acceptance
+	accepts  []*dholev1.JobStatus
 }
 
 // secretSubjectName is where the suite serves secret redemption. The contract
@@ -298,6 +303,7 @@ func startHarness(ctx context.Context, cfg Config, root string) (*harness, error
 		logs:     map[string][]*dholev1.LogChunk{},
 		secrets:  map[string]string{},
 		redeemed: map[string]int{},
+		verdicts: map[string]dholev1.Acceptance{},
 	}
 	if err := os.MkdirAll(h.blobDir, 0o750); err != nil {
 		return nil, fmt.Errorf("conformance: blob directory: %w", err)
@@ -379,7 +385,72 @@ func (h *harness) subscribe(ctx context.Context) error {
 		return fmt.Errorf("conformance: serving %s: %w", secretSubjectName, err)
 	}
 	h.stop = append(h.stop, func() { _ = sub.Unsubscribe() })
+
+	// Acceptance requests (docs/wire-contract.md, "Confirming a dispatch
+	// before starting it"). Served for the whole run: only a dispatch that
+	// carries confirm_acceptance is asked about, and every other case sends
+	// none.
+	accepts, err := h.plane.Respond(ctx, bus.SubjectAcceptWildcard(), h.onAccept)
+	if err != nil {
+		return fmt.Errorf("conformance: serving %s: %w", bus.SubjectAcceptWildcard(), err)
+	}
+	h.stop = append(h.stop, accepts)
 	return nil
+}
+
+func (h *harness) onAccept(data []byte) (proto.Message, error) {
+	st := &dholev1.JobStatus{}
+	if err := proto.Unmarshal(data, st); err != nil {
+		h.logf("conformance: undecodable acceptance request (%d bytes): %v", len(data), err)
+		return &dholev1.AcceptReply{Error: "undecodable JobStatus"}, nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.accepts = append(h.accepts, st)
+	verdict, ok := h.verdicts[st.GetFenceToken()]
+	if !ok {
+		verdict = dholev1.Acceptance_ACCEPTANCE_CURRENT
+	}
+	return &dholev1.AcceptReply{Acceptance: verdict}, nil
+}
+
+// answerAcceptance decides how the suite answers an acceptance request naming
+// fence.
+func (h *harness) answerAcceptance(fence string, verdict dholev1.Acceptance) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.verdicts[fence] = verdict
+}
+
+// acceptRequests is every acceptance request asked about this dispatch.
+func (h *harness) acceptRequests(d *dholev1.JobDispatch) []*dholev1.JobStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []*dholev1.JobStatus
+	for _, st := range h.accepts {
+		if st.GetRunId() == d.GetRunId() && st.GetStepId() == d.GetStepId() {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// queuedDispatches is how many dispatches the tier's work queue still holds:
+// one delivered and never acknowledged is still there.
+func (h *harness) queuedDispatches(ctx context.Context) (uint64, error) {
+	js, err := jetstream.New(h.raw)
+	if err != nil {
+		return 0, err
+	}
+	stream, err := js.Stream(ctx, h.dispatchStream)
+	if err != nil {
+		return 0, err
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return info.State.Msgs, nil
 }
 
 func (h *harness) onStatus(data []byte) {
@@ -649,6 +720,9 @@ func (h *harness) negotiatedVersion() uint32 {
 func (h *harness) registrationSubject() string { return bus.SubjectEngineRegistration() }
 func (h *harness) controlSubject() string      { return bus.SubjectEngineControl(h.engineID) }
 func (h *harness) secretSubject() string       { return secretSubjectName }
+func (h *harness) acceptSubject(d *dholev1.JobDispatch) string {
+	return bus.SubjectAccept(d.GetRunId(), d.GetStepId())
+}
 func (h *harness) logsSubject(d *dholev1.JobDispatch) string {
 	return bus.SubjectLogs(d.GetRunId(), d.GetStepId())
 }

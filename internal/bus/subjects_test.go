@@ -22,6 +22,8 @@ func TestSubjectsMatchDocumentedContract(t *testing.T) {
 	require.Equal(t, "engine.control.e1", bus.SubjectEngineControl("e1"))
 	require.Equal(t, "engine.heartbeat.e1", bus.SubjectEngineHeartbeat("e1"))
 	require.Equal(t, "engine.registration", bus.SubjectEngineRegistration())
+	require.Equal(t, "job.accept.run-1.build", bus.SubjectAccept("run-1", "build"))
+	require.Equal(t, "job.accept.>", bus.SubjectAcceptWildcard())
 }
 
 // TestTierWildcardsScopeToOneTier is what the bus permissions are written

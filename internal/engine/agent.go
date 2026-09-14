@@ -584,7 +584,25 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message, stopRenew func()) {
 		"attempt", d.GetAttempt(), "tenant", d.GetTenant().GetId())
 
 	started := time.Now()
-	status := a.run(ctx, &d)
+	status, notStarted := a.run(ctx, &d)
+	switch notStarted {
+	case superseded:
+		// Acknowledged, not nacked: the dispatch is dead, and a nack would
+		// hand it to the next engine to be refused again. No status either —
+		// the plane discards a stale fence's report, and nobody is waiting
+		// for this attempt. Returning frees the slot at once.
+		slog.Info("step superseded before it started; not running it",
+			"engine", a.cfg.EngineID, "run", d.GetRunId(), "step", d.GetStepId(),
+			"attempt", d.GetAttempt())
+		outcome, stepErr = obs.OutcomeCancelled, errors.New("superseded before it started")
+		_ = msg.Ack()
+		return
+	case stopping:
+		outcome, stepErr = obs.OutcomeCancelled, ctx.Err()
+		_ = msg.Nak()
+		return
+	case start:
+	}
 	outcome, stepErr = outcomeOf(status)
 	a.logOutcome(&d, status, outcome, stepErr, time.Since(started))
 	// cache_hit is false here and can only be false here: a step served from
@@ -630,20 +648,32 @@ func (a *Agent) logOutcome(d *dholev1.JobDispatch, status *dholev1.JobStatus, ou
 }
 
 // run does the work and returns the terminal status for it. Every path through
-// it returns a status: silence would be indistinguishable from a dead engine,
-// and the step would hang until its lease expired.
-func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobStatus {
+// it that STARTS the step returns a status: silence would be indistinguishable
+// from a dead engine, and the step would hang until its lease expired. The one
+// path that returns none is a dispatch the control plane says was superseded
+// before it started, which nobody is waiting on — or an engine stopping before
+// it could confirm one; the verdict says which.
+func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) (*dholev1.JobStatus, verdict) {
 	if _, err := wire.Negotiate([]uint32{d.GetProtocolVersion()}); err != nil {
-		return a.failure(d, err.Error())
+		return a.failure(d, err.Error()), start
 	}
 	if d.GetTenant().GetId() == "" {
-		return a.failure(d, "dispatch carries no tenant; every stored object is tenant-scoped")
+		return a.failure(d, "dispatch carries no tenant; every stored object is tenant-scoped"), start
 	}
 	if err := a.checkSecrets(d); err != nil {
-		return a.failure(d, err.Error())
+		return a.failure(d, err.Error()), start
 	}
 	if len(d.GetCommand()) == 0 {
-		return a.failure(d, "dispatch carries no command")
+		return a.failure(d, "dispatch carries no command"), start
+	}
+
+	// Before the job is held, and so before anything is acquired, redeemed or
+	// run: a superseded dispatch must leave no trace but its acknowledgement.
+	// After the slot, not before it — an answer of CURRENT accepts the lease,
+	// and a lease accepted while the dispatch still waited for a slot, listed
+	// in no heartbeat, would be declared lost one TTL later (ADR 0029).
+	if v := a.confirm(ctx, d); v != start {
+		return nil, v
 	}
 
 	// From here the engine owns the step, so it says so before running it and
@@ -660,7 +690,7 @@ func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobSta
 	defer a.jobs.remove(key)
 
 	if err := a.publish(ctx, d, a.phase(d, dholev1.Phase_PHASE_ACCEPTED)); err != nil {
-		return a.failure(d, "publishing the accepted status: "+err.Error())
+		return a.failure(d, "publishing the accepted status: "+err.Error()), start
 	}
 
 	status := a.execute(jobCtx, d)
@@ -670,9 +700,9 @@ func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) *dholev1.JobSta
 	// opposite of what was asked for. The publish below uses the OUTER
 	// context, which is still live.
 	if jobCtx.Err() != nil && ctx.Err() == nil {
-		return a.phase(d, dholev1.Phase_PHASE_CANCELLED)
+		return a.phase(d, dholev1.Phase_PHASE_CANCELLED), start
 	}
-	return status
+	return status, start
 }
 
 // sandboxCapabilities drops the members a sandbox backend cannot answer for,

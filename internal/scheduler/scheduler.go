@@ -306,6 +306,15 @@ type Config struct {
 	// plane issues none, and a step declaring one is refused, naming it,
 	// before it is dispatched — never sent without it. See secrets.go.
 	Secrets StepSecrets
+	// ConfirmAcceptance says this plane serves acceptance requests on
+	// job.accept.* (see Accept), and so stamps confirm_acceptance on what it
+	// dispatches: an engine handed such a dispatch asks before it starts it,
+	// and never starts one whose fence was superseded while it waited
+	// (ADR 0029). False — a scheduler nobody serves Accept for — dispatches
+	// without the flag, and an engine then starts the step without asking,
+	// which is exactly what it did before the flag existed. Set it only where
+	// something really answers: an at-most-once step waits for an answer.
+	ConfirmAcceptance bool
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Log is where a tier whose engines disagree about their environment is
@@ -347,12 +356,13 @@ type Scheduler struct {
 	heldMu    sync.Mutex
 	held      map[string]func()
 
-	tier string
-	os   string
-	arch string
-	ttl  time.Duration
-	now  func() time.Time
-	log  *slog.Logger
+	tier    string
+	os      string
+	arch    string
+	ttl     time.Duration
+	confirm bool
+	now     func() time.Time
+	log     *slog.Logger
 
 	// reported is what has already been said about one SET of engines — a
 	// tier, narrowed to an engine kind when a step named one — so a fleet that
@@ -451,6 +461,7 @@ func New(cfg Config) (*Scheduler, error) {
 		built:    cfg.Builtins,
 		gate:     cfg.Gate,
 		secrets:  cfg.Secrets,
+		confirm:  cfg.ConfirmAcceptance,
 		tier:     cfg.Tier,
 		os:       cfg.OS,
 		arch:     cfg.Arch,
@@ -1320,6 +1331,43 @@ func (s *Scheduler) recordOrphan(ctx context.Context, orphan lease.Orphan) (bool
 	// already detected and written down.
 	s.releaseHold(orphan.TenantID, orphan.RunID, orphan.StepID)
 	return true, nil
+}
+
+// Accept answers an engine that asks, before it starts a dispatch, whether
+// the dispatch may still run (ADR 0029). st is the ACCEPTED status the engine
+// is about to publish.
+//
+// CURRENT is the engine accepting the lease — the same Renew its ACCEPTED
+// status and its heartbeat perform — so from the answer on, the attempt has a
+// heartbeat window. FENCED means a newer attempt holds the step or its lease
+// is gone, and the engine never starts it. It used to find out only when its
+// result was discarded: a dispatch that sat in the queue while its attempt
+// was declared lost and re-dispatched ran again for nobody, which for an
+// at-most-once step is its side effect happening twice.
+//
+// An error is a plane that cannot decide, and never a refusal: an engine
+// treats it as no answer.
+func (s *Scheduler) Accept(ctx context.Context, st *dholev1.JobStatus) (dholev1.Acceptance, error) {
+	if st == nil {
+		return dholev1.Acceptance_ACCEPTANCE_UNSPECIFIED, errors.New("scheduler: acceptance request is nil")
+	}
+	tenantID, token, err := DecodeFence(st.GetFenceToken())
+	if err != nil {
+		return dholev1.Acceptance_ACCEPTANCE_UNSPECIFIED,
+			fmt.Errorf("scheduler: acceptance for %s/%s: %w", st.GetRunId(), st.GetStepId(), err)
+	}
+	if tenantID == "" {
+		return dholev1.Acceptance_ACCEPTANCE_UNSPECIFIED, fmt.Errorf("scheduler: acceptance for %s/%s: %w",
+			st.GetRunId(), st.GetStepId(), runstore.ErrTenantRequired)
+	}
+	if err := s.leas.Renew(ctx, token); err != nil {
+		if errors.Is(err, lease.ErrFenced) {
+			return dholev1.Acceptance_ACCEPTANCE_FENCED, nil
+		}
+		return dholev1.Acceptance_ACCEPTANCE_UNSPECIFIED,
+			fmt.Errorf("scheduler: accepting the lease on %s/%s: %w", st.GetRunId(), st.GetStepId(), err)
+	}
+	return dholev1.Acceptance_ACCEPTANCE_CURRENT, nil
 }
 
 // OnStatus applies an engine's report and advances the run it belongs to.
@@ -2205,6 +2253,8 @@ func (s *Scheduler) buildDispatch(
 		Command:         command,
 		Env:             env,
 		Secrets:         secretRefs,
+		// Only a plane that answers says so: an engine asks nobody else.
+		ConfirmAcceptance: s.confirm,
 	}, nil
 }
 

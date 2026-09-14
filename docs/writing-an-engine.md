@@ -50,12 +50,18 @@ The shape of the loop, in any language:
    executor kind you advertise in `engine_types`: that is where a step naming
    `Step.engine_type` is published, and a subscriber on the shorter subject
    never receives it. Skip it and you simply never get kind-targeted work.
-4. For each `JobDispatch`: fetch the input ports, run the command, stream
-   `LogChunk`s on `job.logs.<run>.<step>`, write the output ports, and publish a
-   terminal `JobStatus` on `job.status.<run>.<step>`.
-5. Heartbeat on `engine.heartbeat.<engine-id>` while you hold work.
-6. Honour `EngineControl` — cancel, drain — and refuse any control message whose
-   fence token is not the one you hold.
+4. For each `JobDispatch` carrying `confirm_acceptance`, once you have a slot
+   for it and before anything else: ask on `job.accept.<run>.<step>` whether it
+   is still current, and never start one the plane answers
+   `ACCEPTANCE_FENCED` — acknowledge it and publish nothing. See "Confirming a
+   dispatch before starting it" for what no answer means.
+5. For each `JobDispatch` you start: fetch the input ports, run the command,
+   stream `LogChunk`s on `job.logs.<run>.<step>`, write the output ports, and
+   publish a terminal `JobStatus` on `job.status.<run>.<step>`.
+6. Heartbeat on `engine.heartbeat.<engine-id>` while you hold work.
+7. Honour `EngineControl` — cancel, drain — and refuse any control message whose
+   fence token is not the one you hold. A heartbeat naming a superseded attempt
+   is answered with exactly such a `Cancel`.
 
 `environment_identity` is what the control plane hashes the step cache against
 (ADR 0021), and it is the one field the plane cannot work out for itself: on a
@@ -96,19 +102,20 @@ you want while a case is failing.
 
 The cases, each named after the obligation it holds you to:
 
-| Case                               | What it proves                                                       |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| `registration`                     | you announce yourself in an `EngineMessage` frame, with a platform   |
-| `version-negotiation`              | you refuse a dispatch whose protocol version you do not speak        |
-| `dispatch-and-success`             | the ordinary path, end to end                                        |
-| `non-zero-exit`                    | a failing command is `PHASE_FAILED` carrying its `exit_code`         |
-| `cancellation`                     | a `Cancel` stops the work rather than being acknowledged and ignored |
-| `step-timeout`                     | you enforce the timeout you were given                               |
-| `log-throughput-10mb`              | log streaming does not fall over or lose chunks under volume         |
-| `binary-artifact-round-trip`       | an output port survives bytes that are not text                      |
-| `secret-redemption`                | you redeem a handle rather than expecting a value                    |
-| `lease-renewal-during-a-long-step` | a long step keeps its lease instead of being declared orphaned       |
-| `fenced-out-attempt-refused`       | you refuse work fenced out by a newer attempt                        |
+| Case                                | What it proves                                                        |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| `registration`                      | you announce yourself in an `EngineMessage` frame, with a platform    |
+| `version-negotiation`               | you refuse a dispatch whose protocol version you do not speak         |
+| `dispatch-and-success`              | the ordinary path, end to end                                         |
+| `non-zero-exit`                     | a failing command is `PHASE_FAILED` carrying its `exit_code`          |
+| `cancellation`                      | a `Cancel` stops the work rather than being acknowledged and ignored  |
+| `step-timeout`                      | you enforce the timeout you were given                                |
+| `log-throughput-10mb`               | log streaming does not fall over or lose chunks under volume          |
+| `binary-artifact-round-trip`        | an output port survives bytes that are not text                       |
+| `secret-redemption`                 | you redeem a handle rather than expecting a value                     |
+| `lease-renewal-during-a-long-step`  | a long step keeps its lease instead of being declared orphaned        |
+| `fenced-out-attempt-refused`        | you refuse work fenced out by a newer attempt                         |
+| `superseded-dispatch-never-started` | you ask before starting, and never start a dispatch the plane refuses |
 
 An engine that passes every case is an engine the control plane will treat as
 one of its own. Two of these — `secret-redemption` and `step-timeout` — depend
