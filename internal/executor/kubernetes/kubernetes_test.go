@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -144,6 +145,42 @@ func TestPodPerStepLeaseIsDeletedOnRelease(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(podsIn(t, cs)) == 0
 	}, 90*time.Second, time.Second, "the step sandbox's pod is still in the cluster after Release")
+}
+
+// TestASandboxPodCarriesTheConfiguredResources. The unit tests show podSpec
+// builds the right spec; this shows the pod the CLUSTER holds is sized, read
+// back through a client that is not the code under test. An admission webhook
+// or a field the API server drops would pass the first and fail this — and an
+// unsized pod is how a `go build` starved its engine for 36 seconds on kw.
+func TestASandboxPodCarriesTheConfiguredResources(t *testing.T) {
+	cs := clientFor(t)
+	e := newExecutor(t, func(c *k8sexec.Config) {
+		c.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("50m"),
+				corev1.ResourceMemory: resource.MustParse("32Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("250m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+		}
+	})
+
+	waitForEmptyNamespace(t, cs)
+	sb, err := e.Acquire(t.Context(), executor.Spec{Lease: executor.LeaseStep})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sb.Release(context.Background()) })
+
+	pods := podsIn(t, cs)
+	require.Len(t, pods, 1)
+	got := pods[0].Spec.Containers[0].Resources
+	require.True(t, got.Requests.Cpu().Equal(resource.MustParse("50m")), "cpu request in the cluster: %s", got.Requests.Cpu())
+	require.True(t, got.Requests.Memory().Equal(resource.MustParse("32Mi")), "memory request in the cluster: %s", got.Requests.Memory())
+	require.True(t, got.Limits.Cpu().Equal(resource.MustParse("250m")), "cpu limit in the cluster: %s", got.Limits.Cpu())
+	require.True(t, got.Limits.Memory().Equal(resource.MustParse("64Mi")), "memory limit in the cluster: %s", got.Limits.Memory())
+	require.Equal(t, corev1.PodQOSBurstable, pods[0].Status.QOSClass,
+		"a sized sandbox is Burstable; BestEffort means the kubelet saw no requests at all")
 }
 
 // TestPipelineLeaseReusesOnePodAcrossSteps. A lease scope that quietly created

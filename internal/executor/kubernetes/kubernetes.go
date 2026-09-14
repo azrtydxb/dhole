@@ -85,6 +85,30 @@ type Config struct {
 	// supplies the image and the security context; its command is replaced,
 	// because the pod exists to be entered rather than to run one program.
 	PodTemplate *corev1.PodSpec
+	// Resources sizes the step container of every sandbox pod: CPU and memory,
+	// requests and limits. Each key set here overrides the template's value
+	// for that key; keys left unset keep whatever the template says.
+	//
+	// It is configured per ENGINE, by the operator, and deliberately not per
+	// step. A resource field on a pipeline's Step would let a pipeline author
+	// decide how much of the cluster's nodes their pods take, which is a
+	// capacity decision belonging to whoever runs the fleet, not to whoever
+	// writes a build. A step that genuinely needs more belongs on a tier whose
+	// engines are sized for it.
+	//
+	// EXTENSION, NOT BUILT: a per-step REQUEST bounded above by this ceiling
+	// is the natural next step — the author says what the step needs, the
+	// operator's limit says what it may have. Nothing here should be read as
+	// ruling that out; it was simply not needed to stop a build starving its
+	// own engine.
+	//
+	// The zero value sets nothing, exactly as before this field existed. That
+	// default is kept on purpose rather than inventing a limit: there is no
+	// number that is right for both a Raspberry Pi and a 96-core node, and a
+	// guessed memory limit OOM-kills a step on a cluster whose operator never
+	// asked for one — a failure that looks like the step's own bug. Unsized is
+	// the behaviour the cluster's own policy (a LimitRange) can still govern.
+	Resources corev1.ResourceRequirements
 }
 
 // Executor hands out sandboxes that are pods.
@@ -227,6 +251,7 @@ func (e *Executor) podSpec(specImage string) *corev1.PodSpec {
 	spec.Containers[0].Command = []string{"sh", "-c",
 		fmt.Sprintf("mkdir -p %s; while :; do sleep 3600; done", sandboxRoot)}
 	spec.Containers[0].Args = nil
+	applyResources(&spec.Containers[0].Resources, e.cfg.Resources)
 	spec.RestartPolicy = corev1.RestartPolicyNever
 	if e.cfg.ServiceAccount != "" {
 		spec.ServiceAccountName = e.cfg.ServiceAccount
@@ -236,6 +261,28 @@ func (e *Executor) podSpec(specImage string) *corev1.PodSpec {
 	grace := int64(0)
 	spec.TerminationGracePeriodSeconds = &grace
 	return spec
+}
+
+// applyResources lays the operator's sandbox sizing over a container's, key by
+// key. Only the step container is sized: it is where the step's processes run,
+// and a template's sidecars are the template author's to size.
+//
+// It writes into maps podSpec owns — the container came out of DeepCopy — so the
+// shared template is never touched. Nothing configured writes nothing, not even
+// an empty map, so an unconfigured executor builds the pod it always built.
+func applyResources(dst *corev1.ResourceRequirements, cfg corev1.ResourceRequirements) {
+	for key, q := range cfg.Requests {
+		if dst.Requests == nil {
+			dst.Requests = corev1.ResourceList{}
+		}
+		dst.Requests[key] = q.DeepCopy()
+	}
+	for key, q := range cfg.Limits {
+		if dst.Limits == nil {
+			dst.Limits = corev1.ResourceList{}
+		}
+		dst.Limits[key] = q.DeepCopy()
+	}
 }
 
 // Acquire creates a pod and waits for it to be ready to run commands.

@@ -125,6 +125,31 @@ spec:
             - name: DHOLE_SANDBOX_SERVICE_ACCOUNT
               value: {{ . | quote }}
             {{- end }}
+            {{- /*
+              What each sandbox pod's step container may take. Only the keys
+              the operator set are rendered: an unset one leaves that value
+              unsized, as it was before these existed, and the engine refuses
+              to start on a value it cannot parse.
+            */}}
+            {{- $sandboxResources := $sandbox.resources | default dict }}
+            {{- $requests := $sandboxResources.requests | default dict }}
+            {{- $limits := $sandboxResources.limits | default dict }}
+            {{- with $requests.cpu }}
+            - name: DHOLE_SANDBOX_CPU_REQUEST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $limits.cpu }}
+            - name: DHOLE_SANDBOX_CPU_LIMIT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $requests.memory }}
+            - name: DHOLE_SANDBOX_MEMORY_REQUEST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $limits.memory }}
+            - name: DHOLE_SANDBOX_MEMORY_LIMIT
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- /*
               A backend's own configuration. The kubernetes backend needs a

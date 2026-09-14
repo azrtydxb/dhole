@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/azrtydxb/dhole/internal/executor/kubernetes"
 	"github.com/azrtydxb/dhole/internal/executor/process"
 )
 
@@ -51,4 +55,61 @@ func TestEveryAdvertisedExecutorKindCanBeChosen(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A sandbox limit the operator believes is in force and is not is worse than
+// no limit at all: they stop looking for the cause of a starved node. So a
+// value that does not parse stops the engine, and says which variable.
+func TestAMalformedSandboxQuantityIsAStartupErrorNamingTheVariable(t *testing.T) {
+	for _, key := range sandboxResourceVars {
+		// A negative quantity parses, and means nothing a pod can carry.
+		for _, bad := range []string{"two cores", "-1"} {
+			t.Run(key+"="+bad, func(t *testing.T) {
+				t.Setenv("DHOLE_EXECUTOR", kubernetes.Kind)
+				t.Setenv(key, bad)
+
+				_, err := chooseExecutor()
+				require.Error(t, err, "%s=%q was accepted", key, bad)
+				require.Contains(t, err.Error(), key, "the error does not name the variable to fix")
+			})
+		}
+	}
+}
+
+func TestSandboxResourcesAreReadFromTheEnvironment(t *testing.T) {
+	t.Setenv("DHOLE_SANDBOX_CPU_REQUEST", "500m")
+	t.Setenv("DHOLE_SANDBOX_CPU_LIMIT", "2")
+	t.Setenv("DHOLE_SANDBOX_MEMORY_REQUEST", "256Mi")
+	t.Setenv("DHOLE_SANDBOX_MEMORY_LIMIT", "1Gi")
+
+	cfg, err := kubernetesConfig()
+	require.NoError(t, err)
+	got := cfg.Resources
+	require.True(t, got.Requests.Cpu().Equal(resource.MustParse("500m")), "cpu request: %s", got.Requests.Cpu())
+	require.True(t, got.Limits.Cpu().Equal(resource.MustParse("2")), "cpu limit: %s", got.Limits.Cpu())
+	require.True(t, got.Requests.Memory().Equal(resource.MustParse("256Mi")), "memory request: %s", got.Requests.Memory())
+	require.True(t, got.Limits.Memory().Equal(resource.MustParse("1Gi")), "memory limit: %s", got.Limits.Memory())
+}
+
+// Unset variables must leave the pod unsized, exactly as before they existed.
+func TestUnsetSandboxResourcesConfigureNothing(t *testing.T) {
+	for _, key := range sandboxResourceVars {
+		t.Setenv(key, "")
+	}
+	got, err := sandboxResources()
+	require.NoError(t, err)
+	require.Empty(t, got.Requests)
+	require.Empty(t, got.Limits)
+}
+
+// The API server refuses a pod whose request exceeds its limit, so an engine
+// that started with one would fail EVERY step at acquire, far from the typo.
+func TestASandboxRequestAboveItsLimitIsAStartupError(t *testing.T) {
+	t.Setenv("DHOLE_SANDBOX_MEMORY_REQUEST", "2Gi")
+	t.Setenv("DHOLE_SANDBOX_MEMORY_LIMIT", "1Gi")
+
+	_, err := sandboxResources()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "DHOLE_SANDBOX_MEMORY_REQUEST")
+	require.Contains(t, err.Error(), "DHOLE_SANDBOX_MEMORY_LIMIT")
 }

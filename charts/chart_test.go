@@ -346,3 +346,52 @@ func TestAnEngineTierCanCarryItsBackendsOwnSettings(t *testing.T) {
 		t.Error("a vm-backed tier was given the kubernetes backend's sandbox namespace")
 	}
 }
+
+// An unsized sandbox pod takes the whole node: on kw a `go build` starved the
+// engine beside it for 36 seconds, past its lease. A tier's sandbox sizing has
+// to reach the engine that creates the pods, key for key.
+func TestATiersSandboxResourcesReachItsEngine(t *testing.T) {
+	out := render(t,
+		"--set", "engines[0].name=build",
+		"--set", "engines[0].tier=trusted",
+		"--set", "engines[0].sandbox.resources.requests.cpu=500m",
+		"--set", "engines[0].sandbox.resources.requests.memory=512Mi",
+		"--set-string", "engines[0].sandbox.resources.limits.cpu=2",
+		"--set", "engines[0].sandbox.resources.limits.memory=4Gi")
+
+	for name, value := range map[string]string{
+		"DHOLE_SANDBOX_CPU_REQUEST":    "500m",
+		"DHOLE_SANDBOX_MEMORY_REQUEST": "512Mi",
+		"DHOLE_SANDBOX_CPU_LIMIT":      "2",
+		"DHOLE_SANDBOX_MEMORY_LIMIT":   "4Gi",
+	} {
+		want := "- name: " + name + "\n              value: \"" + value + "\""
+		if !strings.Contains(out, want) {
+			t.Errorf("the tier's sandbox sizing did not reach its engine as %s=%s:\n%s", name, value, out)
+		}
+	}
+}
+
+// Nothing configured must render nothing: an empty variable is still a
+// variable, and the defaults must keep today's unsized pods rather than render
+// a value the operator never chose.
+func TestUnsizedSandboxesRenderNoResourceVariables(t *testing.T) {
+	out := render(t, "--set", "engines[0].sandbox.resources.limits.memory=1Gi")
+	require.Contains(t, out, "DHOLE_SANDBOX_MEMORY_LIMIT")
+	for _, name := range []string{"DHOLE_SANDBOX_CPU_REQUEST", "DHOLE_SANDBOX_CPU_LIMIT", "DHOLE_SANDBOX_MEMORY_REQUEST"} {
+		require.NotContains(t, out, name, "an unset key rendered a variable anyway")
+	}
+
+	require.NotContains(t, render(t), "DHOLE_SANDBOX_CPU_", "the default install sized sandboxes nobody asked to size")
+}
+
+// The engine's own CPU request is what keeps it renewing leases while its
+// sandboxes work: the scheduler reserves it and a contended node shares CPU by
+// it. A default engine with a token request is the one a build out-competes.
+func TestTheDefaultEngineRequestsRealCPU(t *testing.T) {
+	out := render(t)
+	engine := out[strings.Index(out, "app.kubernetes.io/component: engine"):]
+	m := regexp.MustCompile(`(?s)- name: engine\n.*?resources:\s*\n\s*limits:.*?\n\s*requests:\s*\n\s*cpu: (\S+)`).FindStringSubmatch(engine)
+	require.NotNil(t, m, "the default engine container has no CPU request:\n%s", engine)
+	require.Equal(t, "500m", m[1], "the default engine's CPU request changed; revisit the sizing rule in values.yaml")
+}

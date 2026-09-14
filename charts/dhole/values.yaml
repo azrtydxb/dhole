@@ -112,11 +112,44 @@ engines:
       # The identity sandbox pods run as. Empty leaves the namespace default,
       # which is what you want unless the steps themselves need credentials.
       serviceAccount: ""
+      # What each sandbox pod's step container may take — one pod per running
+      # step, so up to `slots` of them per engine at once.
+      #
+      # UNSET, a sandbox pod has no requests and no limits. The scheduler then
+      # counts it as free and packs it anywhere, and a `go build` takes the
+      # whole node: on kw the engine sharing that node took 36 seconds to pick
+      # up its next dispatch, past the 30 second lease, and the plane declared
+      # a live attempt lost and ran it again. Set this for any tier that runs
+      # real builds.
+      #
+      # Sizing is per tier and belongs to the operator; a pipeline cannot ask
+      # for more. A step that needs a bigger pod belongs on a tier sized for it.
+      #
+      # Size it against the node, with the engine's own request below intact:
+      #   slots x limits.cpu + resources.requests.cpu <= the node's allocatable CPU
+      # so a tier running every slot flat out still leaves the engine the CPU it
+      # asked for. Memory the same way, or a step's OOM becomes the engine's.
+      #
+      # A limit with no request makes Kubernetes use the limit as the request.
+      # A value the engine cannot parse, a negative one, or a request above its
+      # limit stops the engine at startup rather than being ignored. With this
+      # set, a LimitRange in the sandbox namespace is no longer needed.
+      #
+      #   resources:
+      #     requests: { cpu: 500m, memory: 512Mi }
+      #     limits: { cpu: "2", memory: 4Gi }
+      resources: {}
     image:
       repository: azrtydxb/dhole-engine
       tag: ""
+    # The engine's OWN pod. Its CPU request is what protects it from the steps
+    # it runs: the scheduler reserves it on the node, and a contended node
+    # shares CPU in proportion to requests. It has to stay responsive enough
+    # to renew leases, stream step logs and move artifacts in and out of its
+    # sandboxes; 500m is that with margin, where 200m was a floor. Keep the
+    # rule under sandbox.resources above true when you change either.
     resources:
-      requests: { cpu: 200m, memory: 512Mi }
+      requests: { cpu: 500m, memory: 512Mi }
       limits: { memory: 2Gi }
 
 objectStore:

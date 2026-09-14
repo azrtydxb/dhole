@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/executor/kubernetes"
 	"github.com/azrtydxb/dhole/internal/executor/process"
@@ -45,11 +48,11 @@ func chooseBackend() (executor.Executor, error) {
 	case process.Kind:
 		return process.New(), nil
 	case kubernetes.Kind:
-		return kubernetes.New(kubernetes.Config{
-			Kubeconfig:     os.Getenv("DHOLE_KUBECONFIG"),
-			Namespace:      os.Getenv("DHOLE_SANDBOX_NAMESPACE"),
-			ServiceAccount: os.Getenv("DHOLE_SANDBOX_SERVICE_ACCOUNT"),
-		})
+		cfg, err := kubernetesConfig()
+		if err != nil {
+			return nil, err
+		}
+		return kubernetes.New(cfg)
 	case vm.Kind:
 		return vm.New(vm.Config{
 			Backend:     vm.Backend(os.Getenv("DHOLE_VM_BACKEND")),
@@ -71,6 +74,95 @@ func chooseBackend() (executor.Executor, error) {
 // there is no registry to derive it from, and a name here that the switch does
 // not handle is caught by TestEveryAdvertisedExecutorKindCanBeChosen.
 var executorKinds = []string{process.Kind, kubernetes.Kind, vm.Kind}
+
+// kubernetesConfig reads the kubernetes backend's settings from the
+// environment. It is separate from New so what the engine was told can be
+// checked without a cluster to build a client against.
+func kubernetesConfig() (kubernetes.Config, error) {
+	resources, err := sandboxResources()
+	if err != nil {
+		return kubernetes.Config{}, err
+	}
+	return kubernetes.Config{
+		Kubeconfig:     os.Getenv("DHOLE_KUBECONFIG"),
+		Namespace:      os.Getenv("DHOLE_SANDBOX_NAMESPACE"),
+		ServiceAccount: os.Getenv("DHOLE_SANDBOX_SERVICE_ACCOUNT"),
+		Resources:      resources,
+	}, nil
+}
+
+// The variables sizing a kubernetes sandbox pod's step container. They are
+// per engine, which in the chart is per tier (engines[].sandbox.resources):
+// sizing a sandbox is the operator's capacity decision, not a pipeline
+// author's — see kubernetes.Config.Resources for why, and for the per-step
+// request that would be the natural extension.
+const (
+	envSandboxCPURequest    = "DHOLE_SANDBOX_CPU_REQUEST"
+	envSandboxCPULimit      = "DHOLE_SANDBOX_CPU_LIMIT"
+	envSandboxMemoryRequest = "DHOLE_SANDBOX_MEMORY_REQUEST"
+	envSandboxMemoryLimit   = "DHOLE_SANDBOX_MEMORY_LIMIT"
+)
+
+// sandboxResourceVars lists them for tests and error messages.
+var sandboxResourceVars = []string{
+	envSandboxCPURequest, envSandboxCPULimit, envSandboxMemoryRequest, envSandboxMemoryLimit,
+}
+
+// sandboxResources reads the sandbox sizing from the environment. Unset
+// variables configure nothing, and the pod stays unsized as it always was.
+//
+// Unlike envInt below, a value that does not parse is an ERROR naming the
+// variable, and so is a negative one or a request above its limit. The
+// difference is what a wrong guess costs: a VM that boots with one vcpu is
+// slower and says so, but a limit the operator believes is in force and is not
+// leaves a build free to take the node — the 36-second starvation this setting
+// exists to prevent — while everyone looks for the cause somewhere else. A
+// request above its limit is refused by the API server on every pod, so
+// accepting one would move the failure from startup to every step.
+func sandboxResources() (corev1.ResourceRequirements, error) {
+	var out corev1.ResourceRequirements
+	quantities := map[string]resource.Quantity{}
+	for _, key := range sandboxResourceVars {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			return out, fmt.Errorf("%s=%q is not a Kubernetes quantity (like 500m, 2 or 1Gi): %w", key, raw, err)
+		}
+		if q.Sign() < 0 {
+			return out, fmt.Errorf("%s=%q is negative", key, raw)
+		}
+		quantities[key] = q
+	}
+	set := func(list *corev1.ResourceList, name corev1.ResourceName, key string) {
+		if q, ok := quantities[key]; ok {
+			if *list == nil {
+				*list = corev1.ResourceList{}
+			}
+			(*list)[name] = q
+		}
+	}
+	set(&out.Requests, corev1.ResourceCPU, envSandboxCPURequest)
+	set(&out.Limits, corev1.ResourceCPU, envSandboxCPULimit)
+	set(&out.Requests, corev1.ResourceMemory, envSandboxMemoryRequest)
+	set(&out.Limits, corev1.ResourceMemory, envSandboxMemoryLimit)
+
+	for _, pair := range [][2]string{
+		{envSandboxCPURequest, envSandboxCPULimit},
+		{envSandboxMemoryRequest, envSandboxMemoryLimit},
+	} {
+		req, hasReq := quantities[pair[0]]
+		limit, hasLimit := quantities[pair[1]]
+		if hasReq && hasLimit && req.Cmp(limit) > 0 {
+			return corev1.ResourceRequirements{}, fmt.Errorf(
+				"%s=%s exceeds %s=%s: the API server refuses such a pod, so every step would fail to acquire a sandbox",
+				pair[0], req.String(), pair[1], limit.String())
+		}
+	}
+	return out, nil
+}
 
 // envInt reads a numeric setting, treating anything unparseable as unset.
 //

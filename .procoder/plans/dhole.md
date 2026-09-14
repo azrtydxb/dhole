@@ -1383,7 +1383,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       as long as renewal starts at FETCH rather than at handle. Alternatively
       one consumer with several filter subjects, which is one pump and no
       competition at all.
-- [ ] **A sandbox pod has no resources, and a heavy step starves its own
+- [x] **A sandbox pod has no resources, and a heavy step starves its own
       engine.** Found 2026-09-11 running a real CI/CD pipeline on kw. Sandbox
       pods are created with no requests and no limits — `executor.Spec` has no
       resource field, `kubernetes.podSpec` never sets one, and the chart's
@@ -1403,6 +1403,26 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       costs a step the ability to ask for more. Whichever lands, the engine's
       own pod must be protected from the steps it runs: an engine that misses
       a lease because its own sandbox out-competed it is the failure above.
+      CLOSED — OPERATOR-SIZED. `kubernetes.Config.Resources` (requests and
+      limits, CPU and memory) is applied key by key to the step container in
+      `podSpec`; unset stays unsized, exactly as before, because no invented
+      default suits every node and a guessed memory limit OOM-kills steps on a
+      cluster that never asked for one. The engine reads
+      `DHOLE_SANDBOX_{CPU,MEMORY}_{REQUEST,LIMIT}`; an unparseable or negative
+      quantity, or a request above its limit, is a startup error naming the
+      variable. The chart renders them from `engines[].sandbox.resources`, and
+      the default engine CPU request is 500m, with the sizing rule
+      `slots × sandbox limits.cpu + engine requests.cpu <= node allocatable`
+      in values.yaml and docs/executors/kubernetes.md. Not per step: a field on
+      `Step` would let a pipeline author size the cluster's pods, a capacity
+      decision that belongs to whoever runs the fleet. A per-step REQUEST
+      within the operator's ceiling is the natural extension and is NOT built.
+      Verified on kw: a created sandbox pod carries the limits and is
+      Burstable; mutations dropping the apply, inventing a default, replacing
+      the template's resources wholesale, ignoring a bad quantity, omitting the
+      variable name, accepting request > limit, not rendering the chart
+      variables, rendering them empty, and a 200m engine request each fail a
+      test. kw's LimitRange in `dhole` can go once its values set this.
 - [ ] **A denial cannot say why, and the field's own comment says it should.**
       Found 2026-09-11 building the editor's approval gate.
       `DecideApprovalRequest` carries `run_id`, `step_id` and `approved` and
