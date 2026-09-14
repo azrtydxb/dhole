@@ -1235,6 +1235,56 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       .procoder/ask/decisions.md: `dhole serve` wires no dispatch policy, so none of this is
       evaluated on the single binary or the chart until one is chosen. Dispatch-time taint
       (`input.tainted`) is still never set; it is ADR 0015's propagation work, not a secrets item.
+- [ ] **A secret handle lives in the memory of the plane that issued it.** Left open by the
+      revocation item above; decided by ADR 0031. With `controlPlane.replicas` above one, a
+      redemption answered by another replica is refused and spends nothing, and an attempt's
+      end, or a cancel, processed by another replica revokes nothing. Files:
+      `internal/secrets/handles.go` (new), `internal/secrets/secrets.go`,
+      `internal/secrets/step.go`, `internal/secrets/plane.go`, `internal/server/server.go`,
+      `internal/server/api.go`, `docs/secrets.md`, `docs/wire-contract.md`.
+      Interfaces: produces `secrets.Handles` (`Put`, `Spend`, `Drop`, `List`) with
+      `secrets.NewMemoryHandles()` and `secrets.NewKVHandles(ctx, *nats.Conn)` over bucket
+      `secrets.HandleBucket`; `secrets.Reference{Source, Secret, Binding}` with `secrets.SourceStep`
+      and `secrets.SourcePlane`; `secrets.NewBroker(...secrets.BrokerOption)` and
+      `secrets.WithHandles`; `(*secrets.Broker).Issue(ctx, scope, ref, ttl)`,
+      `.Redeem(ctx, handle)`, `.RedeemFor(ctx, tenantID, handle)`,
+      `.RevokeAttempt(ctx, scope) (int, error)`, `.RevokeRun(ctx, tenantID, runID) (int, error)`,
+      `.RevokeHandles(ctx, handles...) (int, error)`. The step issuer and the plane resolver
+      lend the broker the source their handles resolve from.
+      Tests, red first: `TestAHandleIssuedOnOnePlaneIsRedeemedOnAnother`,
+      `TestAHandleIsSpentOnceWhicheverPlanesPresentItConcurrently` (`-count=20`),
+      `TestAHandleRevokedOnOnePlaneIsRefusedOnAnother`, `TestAnExpiredSharedHandleIsRefused`,
+      `TestTheHandleBucketHoldsNoSecretValue` (secrets, two brokers over one embedded bus).
+- [ ] **Every plane answers a redemption, and the engine takes whichever reply is first.**
+      Decided by ADR 0031. Files: `internal/bus/nats.go`, `internal/secrets/secrets.go`.
+      Interfaces: produces `(*bus.NATS).RespondRawSubjectQueue(ctx, subject, queue, fn)` and
+      `secrets.RedeemQueue`; `secrets.SubjectResponder` requires it.
+      Tests, red first: `TestExactlyOnePlaneAnswersARedemption` (secrets).
+- [ ] **A run the scheduler fails on its own leaves its queued siblings' handles live.** Left
+      open by the revocation item above; decided by ADR 0031. Run-terminal paths: `RUN_FAILED`
+      from attempts exhausted (a step that failed or timed out), a policy denial, a secret
+      refusal or a `builtin:` secret refusal, all through `Scheduler.fail`; `RUN_COMPLETED`
+      through `Scheduler.complete`; `RUN_CANCELLED` through `api.CancelRun`, already revoking;
+      `RUN_FAILED` written outside the scheduler by an approval denied
+      (`internal/steps/approval`) and a halting `builtin:llm` step (`internal/steps/llm`).
+      Unschedulable does not end a run. Files: `internal/scheduler/secrets.go`,
+      `internal/scheduler/scheduler.go` (`fail`, `complete`), `internal/secrets/secrets.go`,
+      `internal/server/server.go` (`sweepLoop`).
+      Interfaces: `scheduler.StepSecrets` gains `RevokeRun(ctx, tenantID, runID)`;
+      produces `(*secrets.Broker).RevokeClosedRuns(ctx, open secrets.OpenRuns) (int, error)`.
+      Tests, red first: `TestEveryRunTerminalPathRevokesTheRunsHandles` (scheduler: exhausted,
+      policy denial, secret refusal, builtin secret refusal, completed),
+      `TestAHandleOfARunClosedOutsideTheSchedulerIsRevokedBySweep` (secrets).
+- [ ] **A plane serves redemption only in its own NATS account.** Left open by the redemption
+      subject item above; decided by ADR 0031. A tenant whose engines hold credentials for its
+      own account (ADR 0014) requests where nothing answers. Files:
+      `internal/secrets/secrets.go`, `internal/server/server.go`, `cmd/dhole/cli/serve.go`,
+      `docs/secrets.md`.
+      Interfaces: produces `secrets.ServeAccount(ctx, r, broker, tenantID, base) (func(), error)`,
+      `server.Config.SecretAccounts map[string]string` (tenant to account credential URL) and
+      `dhole serve --secret-account TENANT=ENVVAR`.
+      Tests, red first: `TestATenantInItsOwnAccountRedeemsThroughTheEmbeddedServer` (server,
+      a tenant account and tier user provisioned on the embedded server).
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So
