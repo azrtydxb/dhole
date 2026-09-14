@@ -13,7 +13,7 @@ package bus
 //	engine.heartbeat.<engine-id>       engine -> plane    EngineHeartbeat
 //	engine.registration                engine -> plane    EngineRegistration
 //	secret.redeem.<tenant>             engine -> plane    handle -> value (raw)
-//	secret.redeem                      engine -> plane    deprecated, unscoped (ADR 0029)
+//	secret.redeem                      engine -> plane    deprecated, unscoped (ADR 0030)
 
 // SubjectDispatch carries one JobDispatch to the tier and capability set it was
 // scheduled for. It is a work queue: exactly one engine receives each dispatch.
@@ -86,7 +86,7 @@ func SubjectEngineRegistration() string {
 }
 
 // SubjectSecretRedeem is the UNSCOPED redemption subject, and it is
-// deprecated (ADR 0029). An engine written before the subject named its
+// deprecated (ADR 0030). An engine written before the subject named its
 // tenant requests here, and the plane goes on answering — taking the tenant
 // from the handle, as it always did — for as long as it accepts protocol
 // version 3, the version that change was made under. It is also the BASE a

@@ -1,4 +1,4 @@
-# 0029 — A secret is redeemed on its tenant's subject and issued under policy
+# 0030 — A secret is redeemed on its tenant's subject and issued under policy
 
 Status: accepted
 Date: 2026-09-14

@@ -175,7 +175,7 @@ type Config struct {
 	// with the same rule.
 	Control EngineControl
 	// Secrets revokes the unspent secret handles of a run that is cancelled
-	// (ADR 0029). Optional: without one, a cancelled run's queued dispatch
+	// (ADR 0030). Optional: without one, a cancelled run's queued dispatch
 	// keeps its handles until they expire.
 	Secrets SecretRevoker
 	// Tier is the trust tier steps would be dispatched to, and must match the

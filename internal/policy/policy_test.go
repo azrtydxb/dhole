@@ -479,7 +479,7 @@ func TestAPolicyRuleCanRefuseAnAgentWhatItAllowsAPerson(t *testing.T) {
 // TestTheSecretNameIsReadableByARuleAndEmptyOtherwise: ADR 0012 names the
 // secret resolver as a policy caller, and a rule could not tell one secret
 // from another — `input` held no key for it, and naming a missing key is an
-// evaluation error, which denies. The key is ALWAYS present (ADR 0029): empty
+// evaluation error, which denies. The key is ALWAYS present (ADR 0030): empty
 // for a decision about anything that is not a secret, so a rule reading it
 // does not start refusing every step.
 func TestTheSecretNameIsReadableByARuleAndEmptyOtherwise(t *testing.T) {

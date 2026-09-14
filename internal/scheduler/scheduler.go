@@ -546,7 +546,7 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		}
 		// A step the plane hosts cannot be given the secrets it declares, and
 		// is refused before the cache, a plane worker or a gate can make it
-		// look as though it was (ADR 0029).
+		// look as though it was (ADR 0030).
 		if refused, err := s.refuseBuiltinSecrets(ctx, tenantID, runID, step); refused || err != nil {
 			return err
 		}
@@ -1710,7 +1710,7 @@ func (s *Scheduler) permit(
 		return false, err
 	}
 	// Each secret the step declares is a decision of its own (ADR 0012: the
-	// secret resolver is a policy caller; ADR 0029). Same facts as the step's,
+	// secret resolver is a policy caller; ADR 0030). Same facts as the step's,
 	// plus the secret's name, so a rule that does not read input.secret_name
 	// answers exactly as it just did for the step.
 	for _, decl := range step.GetSecrets() {
@@ -1887,7 +1887,7 @@ func (s *Scheduler) dispatch(
 	// those is a slot leaked for the life of the bucket's max age.
 	committed := false
 	// Handles minted for a dispatch that then does not commit belong to no
-	// attempt anyone will run, and are revoked with the slot (ADR 0029).
+	// attempt anyone will run, and are revoked with the slot (ADR 0030).
 	var issued []*dholev1.SecretRef
 	defer func() {
 		if !committed {
@@ -2446,7 +2446,7 @@ type PolicyDenied struct {
 	Signed    bool   `json:"signed"`
 	Upstream  string `json:"upstream,omitempty"`
 	// Secret names the declared step secret the rule refused, when the
-	// decision was about one rather than about the step (ADR 0029).
+	// decision was about one rather than about the step (ADR 0030).
 	Secret string `json:"secret,omitempty"`
 }
 

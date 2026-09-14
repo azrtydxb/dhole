@@ -1070,7 +1070,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       a `builtin:` step's declared secrets are ignored rather than refused; and the policy items
       above.
 - [x] **Secret redemption names no tenant, so the plane cannot refuse a handle from the wrong
-      one.** Left open by the item above; decided by ADR 0029. The plane serves `secret.redeem`
+      one.** Left open by the item above; decided by ADR 0030. The plane serves `secret.redeem`
       from one connection and one broker that answers by handle alone, so wherever tenants
       share an account nothing on the path knows whose request it is.
       Files: `internal/bus/subjects.go`, `internal/bus/nats.go`, `internal/bus/embedded.go`,
@@ -1116,7 +1116,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       renders no NATS permissions, and engine credentials come from `tenancy.EngineCredentials`.
       LEFT OPEN: a plane serving several NATS accounts serves redemption only in its own.
 - [x] **An attempt's unspent secret handles outlive it by up to ten minutes.** Left open by the
-      step-secrets item; decided by ADR 0029. Files: `internal/secrets/secrets.go`,
+      step-secrets item; decided by ADR 0030. Files: `internal/secrets/secrets.go`,
       `internal/secrets/step.go`, `internal/scheduler/secrets.go`, `internal/scheduler/scheduler.go`
       (the three places a step leaves flight, and the uncommitted-dispatch path),
       `internal/api/engines.go`, `internal/api/server.go`, `internal/server/server.go`.
@@ -1156,7 +1156,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `TestPostgresRefusesASecondStepVerdict` covers it and was not run: no
       `DHOLE_TEST_POSTGRES_DSN` locally.
 - [x] **A `builtin:` step's declared secrets are silently ignored.** Left open by the
-      step-secrets item; decided by ADR 0029. A plane-hosted step never has a `JobDispatch`,
+      step-secrets item; decided by ADR 0030. A plane-hosted step never has a `JobDispatch`,
       and gates are armed and builtins taken before `refuseSecrets` runs. There is no
       step-shape validation at revision save to put it in, so it is refused where the step is
       judged ready. Files: `internal/scheduler/secrets.go`, `internal/scheduler/scheduler.go`
@@ -1169,7 +1169,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       STEP_SECRET_UNAVAILABLE event explains the refusal". Mutations: the call removed (both red);
       the prefix narrowed to `builtin:wait` (the `builtin:llm` subtest red).
 - [x] **Nothing evaluates policy for a secret.** ADR 0012 names the secret resolver as a policy
-      caller; decided by ADR 0029. Files: `internal/policy/policy.go`, `internal/policy/cel.go`,
+      caller; decided by ADR 0030. Files: `internal/policy/policy.go`, `internal/policy/cel.go`,
       `internal/scheduler/scheduler.go` (`permit`), `docs/policy.md`, `docs/secrets.md`.
       Interfaces: produces `policy.Input.SecretName` read as `input.secret_name`, and
       `scheduler.PolicyDenied.Secret`.

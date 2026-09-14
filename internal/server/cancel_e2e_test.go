@@ -247,7 +247,7 @@ func awaitFleet(
 // dispatch sitting in a work queue, which no engine holds and so no Cancel can
 // reach. Its handles used to stay redeemable, so the engine that eventually
 // took it would be handed the credential for a run nobody wants any more
-// (ADR 0029). The handle here stands for exactly that dispatch: issued for the
+// (ADR 0030). The handle here stands for exactly that dispatch: issued for the
 // run, for a step no engine has accepted.
 func TestCancellingARunRevokesItsHandles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

@@ -89,7 +89,7 @@ key is not readable by pipeline steps unless it is also configured here.
 4. When the attempt ends — succeeded, failed, cancelled or lost — the plane
    revokes whichever of its handles were not redeemed. Cancelling a run revokes
    every handle of the run, including those of a dispatch still waiting in a
-   queue ([ADR 0029](../.procoder/adr/0029-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
+   queue ([ADR 0030](../.procoder/adr/0030-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
 
 A retry gets new handles. A dispatch that waits longer than the handle's expiry
 has its redemption refused, fails, and is retried under its effect class.

@@ -181,7 +181,7 @@ func (s *Server) CancelRun(
 	// Every unspent handle of the run, before any engine is told. A dispatch
 	// still waiting in a work queue is held by no engine, so no Cancel below
 	// can reach it; the engine that takes it later must not be handed the
-	// credential for a run nobody wants (ADR 0029).
+	// credential for a run nobody wants (ADR 0030).
 	if s.secrets != nil {
 		s.secrets.RevokeRun(ctx, p.TenantID, runID)
 	}

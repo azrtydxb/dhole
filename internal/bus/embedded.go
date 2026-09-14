@@ -48,7 +48,7 @@ func StartEmbedded(dir string) (*Embedded, error) {
 //
 // tenantID is the one tenant the tier users belong to: a tier credential is
 // always ONE tenant's, and the redemption subject it may request on is that
-// tenant's (ADR 0029). It is required whenever tiers are.
+// tenant's (ADR 0030). It is required whenever tiers are.
 func StartEmbeddedWithTiers(dir, tenantID string, tiers []string) (*Embedded, error) {
 	opts := &server.Options{
 		Host:      "127.0.0.1",
@@ -208,7 +208,7 @@ func (e *Embedded) Close() {
 // tenantID names the tenant whose redemption subject the credential may
 // request on, and it must be one subject token for the same reason: a tenant
 // of `*` would let the credential redeem on every tenant's subject, which is
-// the thing a tenant in the subject exists to refuse (ADR 0029).
+// the thing a tenant in the subject exists to refuse (ADR 0030).
 func TierPermissions(tenantID, tier string) (*server.Permissions, error) {
 	if err := validTenantToken(tenantID); err != nil {
 		return nil, err
@@ -246,9 +246,9 @@ func tierPermissions(tenantID, tier string) *server.Permissions {
 		// would be able to answer a sibling's redemption with a value
 		// of its own choosing — credential substitution inside the
 		// tier this account exists to contain. And only on its OWN
-		// tenant's subject (ADR 0029).
+		// tenant's subject (ADR 0030).
 		SubjectSecretRedeemFor(tenantID),
-		// Deprecated: an engine written before ADR 0029 redeems on the
+		// Deprecated: an engine written before ADR 0030 redeems on the
 		// unscoped subject. Withdrawn with the plane's support for
 		// protocol version 3.
 		SubjectSecretRedeem(),

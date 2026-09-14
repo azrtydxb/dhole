@@ -55,7 +55,7 @@ func TestTheControlPlaneAnswersASecretRedemptionOnTheContractsSubject(t *testing
 }
 
 // TestTheLegacyRedemptionSubjectStillServesAnOlderEngine is the N-1 half of
-// ADR 0029. An engine written before the redemption subject named its tenant
+// ADR 0030. An engine written before the redemption subject named its tenant
 // requests on the bare secret.redeem, and the plane must go on answering it
 // for as long as it accepts that engine's protocol version — the tenant coming
 // from the handle, exactly as it did before.

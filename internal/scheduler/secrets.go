@@ -43,7 +43,7 @@ type StepSecrets interface {
 	// Issue mints one handle per declaration for exactly this attempt.
 	Issue(ctx context.Context, scope secrets.Scope, step *dholev1.Step, ttl time.Duration) ([]*dholev1.SecretRef, error)
 	// Revoke forgets the unspent handles of exactly one attempt, when that
-	// attempt ends (ADR 0029).
+	// attempt ends (ADR 0030).
 	Revoke(ctx context.Context, scope secrets.Scope)
 	// Discard forgets handles issued for a dispatch that never committed.
 	Discard(ctx context.Context, refs []*dholev1.SecretRef)
@@ -101,7 +101,7 @@ const builtinScheme = "builtin:"
 // it is served from cache, taken by a plane worker or armed as a gate. A step
 // the plane hosts never has a JobDispatch, so its declared secrets would go
 // nowhere and the author would believe a credential had been delivered. A
-// builtin that needs one names it in its own configuration (ADR 0024, 0029).
+// builtin that needs one names it in its own configuration (ADR 0024, 0030).
 //
 // It reports whether the step was refused.
 func (s *Scheduler) refuseBuiltinSecrets(
@@ -156,7 +156,7 @@ func (s *Scheduler) secretRefs(
 }
 
 // revokeSecrets forgets the unspent handles of one attempt that has ended —
-// succeeded, failed, cancelled, or lost with its engine (ADR 0029). Handles
+// succeeded, failed, cancelled, or lost with its engine (ADR 0030). Handles
 // live in the memory of the plane that issued them, so on any other plane this
 // revokes nothing and the handle's expiry remains the backstop.
 func (s *Scheduler) revokeSecrets(ctx context.Context, tenantID, runID, stepID string, attempt uint32) {

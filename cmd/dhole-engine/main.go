@@ -111,7 +111,7 @@ func run() error {
 	// thing that decides whether it advertises CAPABILITY_SECRETS at all. It
 	// defaults to the base the wire contract names, on the connection the
 	// engine already opened; each redemption is asked on `<base>.<tenant>`
-	// for the dispatch's tenant (ADR 0029). DHOLE_SECRET_SUBJECT overrides the
+	// for the dispatch's tenant (ADR 0030). DHOLE_SECRET_SUBJECT overrides the
 	// base for a deployment — or a conformance harness — that serves
 	// redemption elsewhere.
 	//
