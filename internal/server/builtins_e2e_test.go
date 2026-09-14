@@ -139,7 +139,7 @@ func TestAnApprovalStepHoldsTheRunUntilTheServerIsToldSomebodyDecided(t *testing
 		"the run finished with nobody having decided its approval; log: %s", describe(events))
 
 	decidedAt := time.Now().UTC()
-	require.NoError(t, srv.Approve(ctx, tenantID, runID, "approve", approver, true))
+	require.NoError(t, srv.Approve(ctx, tenantID, runID, "approve", approver, true, "the e2e gate is meant to open"))
 
 	events = awaitRunCompleted(ctx, t, srv, runID)
 	requireStepSucceeded(t, events, "approve")
@@ -177,7 +177,7 @@ func TestAnApprovalStepRefusesAnApproverTheTenantDoesNotKnow(t *testing.T) {
 	require.NoError(t, err)
 	awaitStepEvent(ctx, t, srv, runID, "approve", scheduler.StepAwaitingApproval)
 
-	err = srv.Approve(ctx, tenantID, runID, "approve", "somebody-else", true)
+	err = srv.Approve(ctx, tenantID, runID, "approve", "somebody-else", true, "a stranger says so")
 	require.ErrorIs(t, err, approval.ErrUnknownApprover)
 }
 

@@ -341,6 +341,20 @@ message DecideApprovalRequest {
   // decision rather than a pause: a run that stopped for no stated reason is
   // the worst possible record of one.
   bool approved = 3;
+  // Why, in the decider's own words. REQUIRED for an approval and a denial
+  // alike: "approved because the scan was a false positive" is worth as much
+  // six months later as a refusal, and a rule that only denials need a reason
+  // teaches people that approving is the unexamined default. It is recorded on
+  // the decision event beside the approver, trimmed.
+  //
+  // The field is additive, but the requirement is a behaviour change for a
+  // caller written before it existed: a request with no reason, or one that is
+  // only whitespace, is refused with INVALID_ARGUMENT naming the missing field
+  // rather than recorded without one. A stale client gets a refusal that says
+  // what to send; the alternative was a silently reason-less record of an
+  // at-most-once decision, which is the defect this field closes. The N-1
+  // compatibility promise is the engine protocol's, not this API's.
+  string reason = 4;
 }
 
 // DecideApprovalResponse is the decision as it was recorded, including the
@@ -351,6 +365,8 @@ message DecideApprovalResponse {
   string step_id = 2;
   string approver = 3;
   bool approved = 4;
+  // The reason as it was recorded: trimmed, beside the approver.
+  string reason = 5;
 }
 
 // GetPluginRequest asks the catalog what one published plugin declares.

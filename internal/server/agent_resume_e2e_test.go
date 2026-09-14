@@ -68,7 +68,7 @@ func TestAParkedAgentStepResumesAtTheCallItStoppedOnAfterAPersonApprovesItsGate(
 	approver := registerApprover(ctx, t, dir, "release-boss")
 	token := issueToken(ctx, t, dir, approver)
 	decided, err := decideApproval(ctx, apiClient(t, srv), token, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "triage", Approved: true,
+		RunId: runID, StepId: "triage", Approved: true, Reason: "the agent may start the run it asked for",
 	})
 	require.NoError(t, err, "the gate a parked agent opened could not be decided")
 	require.Equal(t, approver, decided.GetApprover())
@@ -129,7 +129,7 @@ func TestAParkedAgentStepEndsWhenItsGateIsDenied(t *testing.T) {
 	approver := registerApprover(ctx, t, dir, "release-boss")
 	token := issueToken(ctx, t, dir, approver)
 	_, err = decideApproval(ctx, apiClient(t, srv), token, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "triage", Approved: false,
+		RunId: runID, StepId: "triage", Approved: false, Reason: "the agent is not to start runs today",
 	})
 	require.NoError(t, err)
 

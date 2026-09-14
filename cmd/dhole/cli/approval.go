@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
@@ -21,25 +22,38 @@ import (
 // definition to active before anything runs. This decides a gate a RUN has
 // stopped at.
 func runApproveCmd(o *options) *cobra.Command {
-	var deny bool
+	var (
+		deny   bool
+		reason string
+	)
 	cmd := &cobra.Command{
-		Use:   "approve <run-id> <step-id>",
+		Use:   "approve <run-id> <step-id> --reason <why>",
 		Short: "decide an approval gate a run is waiting at",
 		Long: "The step is named because a run may hold more than one gate. The\n" +
 			"decision is recorded against the principal this credential\n" +
 			"authenticates as, and a gate that already has one is refused rather\n" +
 			"than decided twice: the two decisions may disagree.\n" +
-			"With --deny the run fails, naming the approver and the step.",
+			"With --deny the run fails, naming the approver and the step.\n" +
+			"--reason is required for an approval and a denial alike, and is\n" +
+			"recorded on the decision beside the approver.",
 		Args: exactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := o.checkOutput(cmd); err != nil {
 				return err
 			}
+			// Refused before anything is sent. The server refuses it too, but
+			// the person typing is the one who knows why, and the flag they
+			// left out is best named here.
+			if strings.TrimSpace(reason) == "" {
+				return &usageError{cmd: cmd, err: fmt.Errorf(
+					"--reason is required: a decision recorded with no reason beside it, approval or denial, " +
+						"is indistinguishable from a misclick six months later")}
+			}
 			ctx, cancel := o.context(cmd)
 			defer cancel()
 
 			res, err := o.client().DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
-				RunId: args[0], StepId: args[1], Approved: !deny,
+				RunId: args[0], StepId: args[1], Approved: !deny, Reason: reason,
 			}))
 			if err != nil {
 				return o.fail("decide approval", err)
@@ -49,11 +63,12 @@ func runApproveCmd(o *options) *cobra.Command {
 				if !res.Msg.GetApproved() {
 					verdict = "denied"
 				}
-				_, _ = fmt.Fprintf(w, "%s/%s %s by %s\n",
-					res.Msg.GetRunId(), res.Msg.GetStepId(), verdict, res.Msg.GetApprover())
+				_, _ = fmt.Fprintf(w, "%s/%s %s by %s: %s\n",
+					res.Msg.GetRunId(), res.Msg.GetStepId(), verdict, res.Msg.GetApprover(), res.Msg.GetReason())
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&deny, "deny", false, "refuse the gate, failing the run")
+	cmd.Flags().StringVar(&reason, "reason", "", "why, recorded beside the approver (required)")
 	return cmd
 }

@@ -968,14 +968,15 @@ func structuredSchema(step *dholev1.Step) string {
 }
 
 // Approve decides an approval gate a `builtin:approval` step armed, and lets
-// the run continue.
+// the run continue. The reason is required, for an approval as much as a
+// denial, and is recorded beside the approver.
 //
 // It is on Server because the gate is the plane's, not a caller's: the store
 // it is written to, the principals the approver is checked against and the
 // scheduler that advances the run afterwards are all this server's. A CLI or
 // an approval RPC calls this and does not assemble its own.
 func (s *Server) Approve(
-	ctx context.Context, tenantID, runID, stepID, approver string, approved bool,
+	ctx context.Context, tenantID, runID, stepID, approver string, approved bool, reason string,
 ) error {
 	s.mu.Lock()
 	running, built := s.running, s.builtins
@@ -990,7 +991,7 @@ func (s *Server) Approve(
 	if err != nil {
 		return err
 	}
-	return gate.Decide(ctx, runID, stepID, approver, approved)
+	return gate.Decide(ctx, runID, stepID, approver, approved, reason)
 }
 
 // newBuiltins assembles the plane's step types over the infrastructure it

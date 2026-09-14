@@ -48,6 +48,12 @@ var (
 	// ErrApproverRequired: a decision by nobody.
 	ErrApproverRequired = errors.New("approval: an approver is required")
 
+	// ErrReasonRequired: a decision with no stated reason. Approvals and
+	// denials alike: "approved because the scan was a false positive" is worth
+	// as much six months later as a refusal, and a rule that only denials need
+	// a reason teaches people that approving is the unexamined default.
+	ErrReasonRequired = errors.New("approval: a reason is required for an approval or a denial")
+
 	// ErrUnknownApprover: a subject that is not a principal of this tenant.
 	// However plausible the string, it is not a person this system knows.
 	ErrUnknownApprover = errors.New("approval: unknown approver")
@@ -76,9 +82,12 @@ type Request struct {
 
 // Decision is the payload of a STEP_APPROVAL_DECIDED event.
 type Decision struct {
-	Approver string    `json:"approver"`
-	Approved bool      `json:"approved"`
-	At       time.Time `json:"at"`
+	Approver string `json:"approver"`
+	Approved bool   `json:"approved"`
+	// Reason is what the approver said, beside their name. A decision event
+	// written before reasons were required has none, and reads as "".
+	Reason string    `json:"reason,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // Denial is the payload of the RUN_FAILED event a refusal writes.
@@ -211,7 +220,9 @@ func (s *Step) request(ctx context.Context, runID, stepID, prompt string, parks 
 	})
 }
 
-// Decide records a named person's answer and lifts the gate.
+// Decide records a named person's answer, and the reason they gave for it, and
+// lifts the gate. A decision without a reason is refused with
+// ErrReasonRequired before anything is written, approval and denial alike.
 //
 // An approval appends the decision and the step's own STEP_SUCCEEDED, and the
 // run advances. A denial appends the decision, the step's STEP_FAILED and a
@@ -220,13 +231,20 @@ func (s *Step) request(ctx context.Context, runID, stepID, prompt string, parks 
 //
 // Both write every event in ONE transaction. A decision recorded without the
 // verdict it implies would leave a gate that is decided and still shut.
-func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, approved bool) error {
+func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, approved bool, reason string) error {
 	if runID == "" || stepID == "" {
 		return errors.New("approval: a run and a step are required")
 	}
 	approver = strings.TrimSpace(approver)
 	if approver == "" {
 		return ErrApproverRequired
+	}
+	// Refused before the approver is even looked up: nothing about a
+	// decision with no reason is worth writing, and a caller who left it out
+	// learns so without a round trip to the principal store.
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ErrReasonRequired
 	}
 	// Verified BEFORE anything is written: an approval whose approver is not
 	// a principal of this tenant is not an approval, and a log that records
@@ -250,7 +268,7 @@ func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, appro
 		if !gate.awaiting {
 			return fmt.Errorf("%w for %s/%s", ErrNotAwaiting, runID, stepID)
 		}
-		events, err := s.decision(runID, stepID, approver, approved, gate.parks)
+		events, err := s.decision(runID, stepID, approver, reason, approved, gate.parks)
 		if err != nil {
 			return err
 		}
@@ -285,10 +303,10 @@ func (s *Step) Decide(ctx context.Context, runID, stepID, approver string, appro
 // step's own verdict comes from that next attempt. Writing STEP_SUCCEEDED here
 // instead reported an agent's answer that no model had given.
 func (s *Step) decision(
-	runID, stepID, approver string, approved, parks bool,
+	runID, stepID, approver, reason string, approved, parks bool,
 ) ([]runstore.Event, error) {
 	at := s.now().UTC()
-	decision, err := json.Marshal(Decision{Approver: approver, Approved: approved, At: at})
+	decision, err := json.Marshal(Decision{Approver: approver, Approved: approved, Reason: reason, At: at})
 	if err != nil {
 		return nil, fmt.Errorf("approval: deciding %s/%s: %w", runID, stepID, err)
 	}
@@ -323,7 +341,7 @@ func (s *Step) decision(
 		Steps:    []string{stepID},
 		Approver: approver,
 		StepID:   stepID,
-		Reason:   fmt.Sprintf("approval of %q denied by %s", stepID, approver),
+		Reason:   fmt.Sprintf("approval of %q denied by %s: %s", stepID, approver, reason),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("approval: deciding %s/%s: %w", runID, stepID, err)
@@ -342,7 +360,11 @@ func (s *Step) refuseDecided(runID, stepID string, gate gateState) error {
 	if gate.approved {
 		verdict = "approved"
 	}
-	return fmt.Errorf("%w: %s/%s was %s by %s", ErrAlreadyDecided, runID, stepID, verdict, gate.approver)
+	if gate.reason == "" {
+		return fmt.Errorf("%w: %s/%s was %s by %s", ErrAlreadyDecided, runID, stepID, verdict, gate.approver)
+	}
+	return fmt.Errorf("%w: %s/%s was %s by %s: %s",
+		ErrAlreadyDecided, runID, stepID, verdict, gate.approver, gate.reason)
 }
 
 // gateState is what the log says about one gate.
@@ -351,6 +373,7 @@ type gateState struct {
 	decided  bool
 	approved bool
 	approver string
+	reason   string
 	// parks is Request.Parks, read back off the standing request: what an
 	// approval MEANS depends on it, and the request is the only place it was
 	// ever written down.
@@ -398,6 +421,7 @@ func (s *Step) read(ctx context.Context, tx runstore.Tx, runID, stepID string) (
 			state.decided = true
 			state.approved = decision.Approved
 			state.approver = decision.Approver
+			state.reason = decision.Reason
 		}
 	}
 	if err := rows.Err(); err != nil {

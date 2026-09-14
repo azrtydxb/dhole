@@ -202,13 +202,13 @@ func TestAnApprovalGateIsDecidedThroughTheServedContractAndReleasesTheRun(t *tes
 	// No credential: refused like every other RPC. A gate anybody could open
 	// is not a gate.
 	_, err := client.DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "approve", Approved: true,
+		RunId: runID, StepId: "approve", Approved: true, Reason: "no credential, and a reason is not one",
 	}))
 	require.Error(t, err, "the API decided an approval for a call that carried no credential")
 	require.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
 
 	decided, err := decideApproval(ctx, client, approverToken, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "approve", Approved: true,
+		RunId: runID, StepId: "approve", Approved: true, Reason: shipReason,
 	})
 	require.NoError(t, err, "the gate could not be decided through the contract")
 
@@ -217,6 +217,7 @@ func TestAnApprovalGateIsDecidedThroughTheServedContractAndReleasesTheRun(t *tes
 	// that did not happen.
 	require.Equal(t, releaseManager, decided.GetApprover())
 	require.True(t, decided.GetApproved())
+	require.Equal(t, shipReason, decided.GetReason(), "the served answer does not carry the recorded reason")
 
 	// And the decision RELEASED the run, rather than only being recorded: the
 	// step the gate held reaches its verdict and the run ends.
@@ -233,6 +234,8 @@ func TestAnApprovalGateIsDecidedThroughTheServedContractAndReleasesTheRun(t *tes
 			require.Equal(t, releaseManager, decision.Approver,
 				"the log names an approver nobody authenticated")
 			require.True(t, decision.Approved)
+			require.Equal(t, shipReason, decision.Reason,
+				"the log records the decision without the reason given over the wire")
 		case string(runstore.StepSucceeded):
 			sawSucceeded = e.GetStepId() == "approve"
 		case string(runstore.StepDispatched):
@@ -249,11 +252,14 @@ func TestAnApprovalGateIsDecidedThroughTheServedContractAndReleasesTheRun(t *tes
 	// "done": the two decisions may disagree, and the second decider would
 	// otherwise be told theirs took effect.
 	_, err = decideApproval(ctx, client, approverToken, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "approve", Approved: false,
+		RunId: runID, StepId: "approve", Approved: false, Reason: "changed my mind, too late",
 	})
 	require.Error(t, err, "a gate with a standing decision was decided a second time")
 	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }
+
+// shipReason is the reason the served-contract test decides its gate with.
+const shipReason = "release 4.2 passed its soak, see REL-42"
 
 // TestATokenFromTheSupportedMintingPathIsAcceptedAsAnApprover is the identity
 // half, and it is the sharper of the two: a credential's identity and an
@@ -278,7 +284,7 @@ func TestATokenFromTheSupportedMintingPathIsAcceptedAsAnApprover(t *testing.T) {
 	plane.armTheGate(ctx, t, runID, "approve")
 
 	decided, err := decideApproval(ctx, client, approverToken, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "approve", Approved: true,
+		RunId: runID, StepId: "approve", Approved: true, Reason: "a minted token may approve",
 	})
 	require.NoError(t, err,
 		"a token from the supported minting path was refused by the approval subsystem")
@@ -305,7 +311,7 @@ func TestDecidingAGateNobodyOpenedIsRefused(t *testing.T) {
 	runID := startUngatedRun(ctx, t, client, srv.BootstrapToken(), approverToken, "no-gate-here")
 
 	_, err := decideApproval(ctx, client, approverToken, &dholev1.DecideApprovalRequest{
-		RunId: runID, StepId: "work", Approved: true,
+		RunId: runID, StepId: "work", Approved: true, Reason: "there is nothing here to approve",
 	})
 	require.Error(t, err, "a step nobody asked an approval for was marked approved")
 	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))

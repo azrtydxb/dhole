@@ -895,7 +895,7 @@ Interfaces: produces `effects.RetryPolicy(step *dholev1.Step) effects.Policy`; `
 ## Task 20: Durable waits, timers and human approval
 
 Files: `internal/wait/wait.go`, `internal/wait/timer.go`, `internal/wait/wait_test.go`, `internal/steps/approval/approval.go`, `internal/steps/approval/approval_test.go`
-Interfaces: produces `wait.Timers` with `Schedule(ctx, tenantID, runID, stepID string, at time.Time) error`, `Due(ctx, now time.Time) ([]wait.Due, error)`; `approval.Step` with `Request(ctx, runID, stepID string, prompt string) error`, `Decide(ctx, runID, stepID string, approver string, approved bool) error`.
+Interfaces: produces `wait.Timers` with `Schedule(ctx, tenantID, runID, stepID string, at time.Time) error`, `Due(ctx, now time.Time) ([]wait.Due, error)`; `approval.Step` with `Request(ctx, runID, stepID string, prompt string) error`, `Decide(ctx, runID, stepID string, approver string, approved bool, reason string) error` (the reason was added by the denial-reason item below; an empty one is refused with `approval.ErrReasonRequired`).
 
 - [x] Write `internal/wait/wait_test.go` asserting `TestDurableWaitSurvivesRestart`: schedule a timer 200ms out, stop and restart the server, and require the run resumes and completes. Run — expect FAIL with "undefined: wait.Timers".
 - [x] Add `TestMissedScheduleWindowFiresOnceOnRecovery` asserting a timer whose due time passed entirely while the server was down fires exactly once, not once per missed interval.
@@ -1423,7 +1423,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       variable name, accepting request > limit, not rendering the chart
       variables, rendering them empty, and a 200m engine request each fail a
       test. kw's LimitRange in `dhole` can go once its values set this.
-- [ ] **A denial cannot say why, and the field's own comment says it should.**
+- [x] **A denial cannot say why, and the field's own comment says it should.**
       Found 2026-09-11 building the editor's approval gate.
       `DecideApprovalRequest` carries `run_id`, `step_id` and `approved` and
       nothing else, while the comment on `approved` reads "a denial is a
@@ -1439,6 +1439,43 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       shown. Decide deliberately whether it is required for a DENIAL only or
       for both: "approved because the scan was a false positive" is worth as
       much six months later as the refusal.
+      DECIDED 2026-09-14: required for BOTH. A rule that only denials need a
+      reason teaches people that approving is the unexamined default.
+      `approval.Step.Decide` takes the reason and refuses an empty or
+      whitespace-only one with `approval.ErrReasonRequired` before anything is
+      written; `DecideApproval` maps that to `InvalidArgument` naming the
+      missing field; `Decision.Reason` sits beside the approver on
+      STEP_APPROVAL_DECIDED (and on the STEP_FAILED/STEP_RESUMED that reuse
+      that payload), the denial's RUN_FAILED reason quotes it, and
+      `DecideApprovalResponse.reason = 5` returns it. `dhole run approve`
+      requires `--reason` and prints it; denying stays `--deny`, so no second
+      command. The agent contract's `decide_approval` action carries `reason`.
+      The editor passes the gate's reason into the call.
+      COMPATIBILITY, deliberately: the schema change is additive, but an
+      existing client that never sends `reason` is now REFUSED rather than
+      recorded reason-less. The spec's N-1 promise is the ENGINE protocol's
+      (ADR 0004: engines are the polyglot third parties); DecideApproval is an
+      API call made by the GUI and CLI shipped in the same binary, and by
+      agents going through the contract invoker in-tree. A clear refusal that
+      names the missing field is the right failure for a stale client; a
+      silently reason-less record of an at-most-once decision is the defect
+      this item exists to close.
+      CLOSED: red first at every layer, each behaviour killed by a hand
+      mutation — the gate refuses "" and whitespace for approve and deny
+      (`TestDecideRefusesADecisionWithNoReason`) and records the trimmed
+      reason on the decision and in the denial's RUN_FAILED
+      (`TestDecisionRecordsItsReason`); the RPC answers InvalidArgument and
+      returns the recorded reason (`internal/api/approval_test.go`); the
+      served binary's gate test asserts the reason on the wire and in the
+      log; `dhole run approve` refuses to send without `--reason` and prints
+      it; the agent contract passes it through; the editor's
+      `decideGate` (vitest) sends the gate's reason, and `GateDecision`
+      makes dropping it a type error in `Editor.tsx`. `buf breaking` clean.
+      LEFT OPEN, outside this item's files: the run view (`web/src/run/`) and
+      the text form of `dhole run logs` show no decision at all, reason or
+      approver — the payload carries both and `--output json` shows them;
+      and a resumed agent is still told only "approved by <approver>"
+      (`internal/server/agent.go` builds `agent.Decision` without the reason).
 - [ ] Add `TestLazyPullFetchesFewerBytesThanFullImage` — STILL SKIPPED, and honestly. Task 36's `containerd.New` now exists to drive the pull, so the missing halves are a containerd whose stargz snapshotter WORKS and an eStargz fixture image big enough for the byte count to mean anything. Working is the operative word: the one real containerd this was run against (a k3s node) advertises a stargz snapshotter that cannot create a container, which is why Task 36's executor demotes it empirically instead of trusting the plugin list. `SelectPullMode` and its fallback warning ARE tested. A byte count against a mock registry would prove nothing, so none was written — the skip names exactly what is missing.
 - [x] Implement `internal/executor/pool/pool.go` keyed on `(tenant, engine kind, spec hash)` with an idle reaper, and `lazypull.go` enabling stargz snapshotter when available and falling back to a full pull with a logged warning.
 - [x] Run `make test-integration` — expect PASS. Commit.

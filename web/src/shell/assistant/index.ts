@@ -12,3 +12,5 @@ export { DiffReview } from "./DiffReview.js";
 export type { ReviewChange, ReviewChangeKind } from "./DiffReview.js";
 export { ApprovalGate } from "./ApprovalGate.js";
 export type { GateRun, GateStep } from "./ApprovalGate.js";
+export { decideGate } from "./decide.js";
+export type { GateDecision, GateDecisionClient } from "./decide.js";

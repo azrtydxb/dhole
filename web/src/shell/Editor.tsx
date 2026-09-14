@@ -21,7 +21,12 @@ import { Shell } from "./Shell.js";
 import { Sidebar } from "./Sidebar.js";
 import { StatusBar, type EngineStatus } from "./StatusBar.js";
 import { Toolbar, type ToolbarAction } from "./Toolbar.js";
-import { ApprovalGate, AssistantPanel } from "./assistant/index.js";
+import {
+  ApprovalGate,
+  AssistantPanel,
+  decideGate,
+  type GateDecision,
+} from "./assistant/index.js";
 import {
   CommandPalette,
   EnginesModal,
@@ -208,13 +213,9 @@ export function Editor({
   const blocked = run.nodes.find((node) => statusOf(node) === "blocked");
 
   const decide = useMutation({
-    mutationFn: (approved: boolean) =>
-      pipelineClient.decideApproval({
-        runId: run.runId,
-        stepId: gateFor ?? "",
-        approved,
-      }),
-    onSuccess: (_response, approved) => {
+    mutationFn: (decision: GateDecision) =>
+      decideGate(pipelineClient, run.runId, gateFor ?? "", decision),
+    onSuccess: (_response, { approved }) => {
       setGateFor(null);
       setNotice(approved ? "gate approved" : "gate denied");
     },
@@ -589,7 +590,9 @@ export function Editor({
                 effect: "at-most-once",
               }}
               busy={decide.isPending}
-              onDecide={(approved) => decide.mutate(approved)}
+              onDecide={(approved, reason) =>
+                decide.mutate({ approved, reason })
+              }
               onClose={() => setGateFor(null)}
             />
           )}
