@@ -59,7 +59,7 @@ func (i *StepIssuer) Check(ctx context.Context, tenantID string, step *dholev1.S
 	if tenantID == "" {
 		return errors.New("secrets: a tenant is required to resolve a step's secrets")
 	}
-	if err := validDeclarations(step); err != nil {
+	if err := ValidateDeclarations(step); err != nil {
 		return err
 	}
 	for _, decl := range step.GetSecrets() {
@@ -88,7 +88,7 @@ func (i *StepIssuer) Issue(
 	case i == nil || i.broker == nil:
 		return nil, errors.New("secrets: this control plane has no broker to issue step secrets through")
 	}
-	if err := validDeclarations(step); err != nil {
+	if err := ValidateDeclarations(step); err != nil {
 		return nil, err
 	}
 	refs := make([]*dholev1.SecretRef, 0, len(step.GetSecrets()))
@@ -119,9 +119,17 @@ func (i *StepIssuer) value(ctx context.Context, tenantID, name string) (string, 
 	return value, nil
 }
 
-// validDeclarations refuses a declaration that would bind a value nowhere, or
-// somewhere the step did not mean.
-func validDeclarations(step *dholev1.Step) error {
+// ValidateDeclarations refuses a declaration that would bind a value nowhere,
+// or somewhere the step did not mean, and a step declaring secrets without
+// CAPABILITY_SECRETS.
+//
+// It is exported so that the API's Validate reports a definition's secret
+// declarations in the words the scheduler refuses to dispatch them in — one
+// wording, not two that drift (ADR 0028).
+func ValidateDeclarations(step *dholev1.Step) error {
+	if len(step.GetSecrets()) == 0 {
+		return nil
+	}
 	if !slices.Contains(step.GetCapabilities(), dholev1.Capability_CAPABILITY_SECRETS) {
 		return fmt.Errorf("%w: step %q declares %d secret(s)", ErrUndeclaredCapability,
 			step.GetId(), len(step.GetSecrets()))
@@ -131,7 +139,7 @@ func validDeclarations(step *dholev1.Step) error {
 		switch {
 		case decl.GetName() == "":
 			return fmt.Errorf("secrets: step %q secret #%d names no secret", step.GetId(), n+1)
-		case !isEnvName(decl.GetEnv()):
+		case !IsEnvName(decl.GetEnv()):
 			return fmt.Errorf("secrets: step %q binds the secret named %q to %q, which is not an environment variable name",
 				step.GetId(), decl.GetName(), decl.GetEnv())
 		case seen[decl.GetEnv()]:
@@ -142,8 +150,9 @@ func validDeclarations(step *dholev1.Step) error {
 	return nil
 }
 
-// isEnvName is the portable shell variable name: [A-Za-z_][A-Za-z0-9_]*.
-func isEnvName(s string) bool {
+// IsEnvName reports whether s is a portable shell variable name:
+// [A-Za-z_][A-Za-z0-9_]*.
+func IsEnvName(s string) bool {
 	if s == "" {
 		return false
 	}

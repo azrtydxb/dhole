@@ -42,9 +42,10 @@ message RemoveEdge {
 }
 
 // SetProperty changes one scalar property of one step. The property is named
-// by its protobuf field name — "plugin_ref", "effect_class", "lease_scope" —
-// and the value is its text form, so an enum travels as its declared name
-// rather than an integer nobody can read in an audit log.
+// by its protobuf field name — "plugin_ref", "effect_class", "lease_scope",
+// "image", "engine_type", "timeout_seconds" — and the value is its text form,
+// so an enum travels as its declared name rather than an integer nobody can
+// read in an audit log, and a timeout as its decimal ("0" is unbounded).
 message SetProperty {
   string step_id = 1;
   string property = 2;
@@ -68,6 +69,56 @@ message SetStepConfig {
   string value = 3;
   // Remove the key instead of setting it. value is ignored.
   bool remove = 4;
+}
+
+// SetStepSecret binds, rebinds or unbinds the secret one environment variable
+// of a step receives (ADR 0027, ADR 0028).
+//
+// The binding's identity is its env. One binding at a time, and never the
+// whole list, so every edit has an exact inverse expressible as another
+// SetStepSecret: binding an env the step lacks inverts to removing it,
+// rebinding one inverts to restoring the name it had, and removing one
+// inverts to binding it back AT THE INDEX IT HELD — the order of a repeated
+// field is part of the content hash, so an inverse that appended would land
+// on a different revision.
+//
+// Refused, identically in both directions: an env that is not a valid
+// environment variable name; removing an env that is not bound; an index past
+// the end of the list, or any index on a rebind; and an env the step already
+// binds more than once, which names no single binding.
+//
+// Whether the step also declares CAPABILITY_SECRETS is NOT checked here: a
+// refusal on that would refuse the inverse of the edit that repairs a step.
+// Validate reports it, in the scheduler's words.
+message SetStepSecret {
+  string step_id = 1;
+  // The environment variable the step sees the value as. Required.
+  string env = 2;
+  // The secret's name as the operator configured it. Ignored on remove.
+  string name = 3;
+  // Unbind the env instead of binding it.
+  bool remove = 4;
+  // Where a NEW binding is inserted. Unset appends. Refused on a rebind and
+  // ignored on remove.
+  optional uint32 index = 5;
+}
+
+// SetStepCapability declares or withdraws one capability of a step (ADR
+// 0028).
+//
+// The inverse of declaring one is withdrawing it, and of withdrawing one is
+// declaring it back at the index it held. Declaring a capability the step
+// already has is refused, as connecting an existing edge is: its "inverse"
+// would withdraw something the step had before the edit. Withdrawing one it
+// lacks, CAPABILITY_UNSPECIFIED, an undeclared value, an index past the end,
+// and a capability the step lists more than once are refused too.
+message SetStepCapability {
+  string step_id = 1;
+  Capability capability = 2;
+  // Withdraw the capability instead of declaring it.
+  bool remove = 3;
+  // Where a declared capability is inserted. Unset appends. Ignored on remove.
+  optional uint32 index = 4;
 }
 
 // Rename changes a step's display name.
@@ -123,6 +174,8 @@ message Operation {
     RemoveStep remove_step = 6;
     SetStepConfig set_step_config = 7;
     SetFile set_file = 8;
+    SetStepSecret set_step_secret = 9;
+    SetStepCapability set_step_capability = 10;
   }
 }
 

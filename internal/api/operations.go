@@ -4,17 +4,22 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/secrets"
 )
 
 // settableProperties are the step fields set_property may change, named by
 // their protobuf field names. A step's name is Rename's business and its id is
-// its identity, so neither is here.
-var settableProperties = []string{"effect_class", "lease_scope", "plugin_ref"}
+// its identity, so neither is here; its lists each have an operation of their
+// own that edits one element (ADR 0028).
+var settableProperties = []string{
+	"effect_class", "engine_type", "image", "lease_scope", "plugin_ref", "timeout_seconds",
+}
 
 // Apply applies one operation to a pipeline and returns the result, the diff,
 // and the operation that undoes it.
@@ -63,6 +68,10 @@ func Apply(
 		change, inverse, err = applySetProperty(next, kind.SetProperty)
 	case *dholev1.Operation_SetStepConfig:
 		change, inverse, err = applySetStepConfig(next, kind.SetStepConfig)
+	case *dholev1.Operation_SetStepSecret:
+		change, inverse, err = applySetStepSecret(next, kind.SetStepSecret)
+	case *dholev1.Operation_SetStepCapability:
+		change, inverse, err = applySetStepCapability(next, kind.SetStepCapability)
 	case *dholev1.Operation_SetFile:
 		change, inverse, err = applySetFile(next, kind.SetFile)
 	case *dholev1.Operation_Rename:
@@ -224,6 +233,24 @@ func applySetProperty(p *dholev1.Pipeline, op *dholev1.SetProperty) (*dholev1.Ch
 		}
 		old = dholev1.LeaseScope_name[int32(step.GetLeaseScope())]
 		step.LeaseScope = dholev1.LeaseScope(value)
+	case "image":
+		old = step.GetImage()
+		step.Image = op.GetValue()
+	case "engine_type":
+		old = step.GetEngineType()
+		step.EngineType = op.GetValue()
+	case "timeout_seconds":
+		// Parsed as exactly the field's width. A value that does not fit is
+		// refused rather than truncated: a truncated timeout is a limit
+		// nobody asked for, and its inverse would not restore the text sent.
+		value, err := strconv.ParseUint(op.GetValue(), 10, 32)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"set_property: %q is not a timeout_seconds; expected a whole number of seconds, 0 for unbounded",
+				op.GetValue())
+		}
+		old = strconv.FormatUint(uint64(step.GetTimeoutSeconds()), 10)
+		step.TimeoutSeconds = uint32(value)
 	default:
 		return nil, nil, fmt.Errorf("set_property: unknown property %q on step %q; settable properties are %s",
 			op.GetProperty(), op.GetStepId(), strings.Join(settableProperties, ", "))
@@ -303,6 +330,175 @@ func applySetStepConfig(p *dholev1.Pipeline, op *dholev1.SetStepConfig) (*dholev
 
 	return &dholev1.Change{Kind: kind, StepId: op.GetStepId(), Summary: summary},
 		&dholev1.Operation{Kind: &dholev1.Operation_SetStepConfig{SetStepConfig: inverse}}, nil
+}
+
+// applySetStepSecret binds, rebinds or unbinds the secret one environment
+// variable of a step receives (ADR 0027, ADR 0028).
+//
+// The inverse is exact in all three directions, POSITION included: the order
+// of a repeated field is part of the content hash, so the inverse of a removal
+// binds the env back at the index it held rather than appending it.
+//
+// Every refusal here holds identically for the inverse, which is what keeps
+// the set closed: the env is carried by both, an env bound twice is ambiguous
+// in both, and an index the inverse carries is always in range. Whether the
+// step declares CAPABILITY_SECRETS is deliberately NOT checked — see
+// Validate and ADR 0028.
+func applySetStepSecret(p *dholev1.Pipeline, op *dholev1.SetStepSecret) (*dholev1.Change, *dholev1.Operation, error) {
+	step := findStep(p, op.GetStepId())
+	if step == nil {
+		return nil, nil, fmt.Errorf("set_step_secret: no step %q in this pipeline", op.GetStepId())
+	}
+	env := op.GetEnv()
+	if !secrets.IsEnvName(env) {
+		return nil, nil, fmt.Errorf("set_step_secret: %q is not an environment variable name", env)
+	}
+	at, count := -1, 0
+	for n, decl := range step.GetSecrets() {
+		if decl.GetEnv() == env {
+			if at < 0 {
+				at = n
+			}
+			count++
+		}
+	}
+	if count > 1 {
+		return nil, nil, fmt.Errorf(
+			"set_step_secret: step %q binds %s more than once, so no single binding is named; replace the step",
+			op.GetStepId(), env)
+	}
+
+	inverse := &dholev1.SetStepSecret{StepId: op.GetStepId(), Env: env}
+	var (
+		kind    dholev1.ChangeKind
+		summary string
+	)
+	switch {
+	case op.GetRemove():
+		if at < 0 {
+			return nil, nil, fmt.Errorf("set_step_secret: step %q binds no secret to %s to remove", op.GetStepId(), env)
+		}
+		removed := step.GetSecrets()[at]
+		inverse.Name = removed.GetName()
+		inverse.Index = proto.Uint32(uint32(at))
+		step.Secrets = slices.Delete(step.Secrets, at, at+1)
+		// An empty list and no list are the same to a reader and different
+		// bytes to the content hash; the step that never had one encodes as
+		// unset, so that is what the inverse of the first binding lands on.
+		if len(step.GetSecrets()) == 0 {
+			step.Secrets = nil
+		}
+		kind = dholev1.ChangeKind_CHANGE_KIND_REMOVED
+		summary = fmt.Sprintf("unbound %s of step %q, which received secret %q", env, op.GetStepId(), removed.GetName())
+	case at >= 0:
+		if op.Index != nil {
+			return nil, nil, fmt.Errorf(
+				"set_step_secret: step %q already binds %s, and a rebinding keeps its place; "+
+					"remove it and bind it again to move it", op.GetStepId(), env)
+		}
+		old := step.GetSecrets()[at].GetName()
+		inverse.Name = old
+		step.Secrets[at] = &dholev1.StepSecret{Name: op.GetName(), Env: env}
+		kind = dholev1.ChangeKind_CHANGE_KIND_CHANGED
+		summary = fmt.Sprintf("rebound %s of step %q from secret %q to %q", env, op.GetStepId(), old, op.GetName())
+	default:
+		position := len(step.GetSecrets())
+		if op.Index != nil {
+			if int(op.GetIndex()) > position {
+				return nil, nil, fmt.Errorf("set_step_secret: index %d is past the end of step %q's %d secret(s)",
+					op.GetIndex(), op.GetStepId(), position)
+			}
+			position = int(op.GetIndex())
+		}
+		inverse.Remove = true
+		step.Secrets = slices.Insert(step.Secrets, position, &dholev1.StepSecret{Name: op.GetName(), Env: env})
+		kind = dholev1.ChangeKind_CHANGE_KIND_ADDED
+		summary = fmt.Sprintf("bound %s of step %q to secret %q", env, op.GetStepId(), op.GetName())
+	}
+
+	return &dholev1.Change{Kind: kind, StepId: op.GetStepId(), Summary: summary},
+		&dholev1.Operation{Kind: &dholev1.Operation_SetStepSecret{SetStepSecret: inverse}}, nil
+}
+
+// applySetStepCapability declares or withdraws one capability of a step (ADR
+// 0028). The inverse of a withdrawal declares the capability back at the index
+// it held; the inverse of a declaration withdraws it.
+func applySetStepCapability(
+	p *dholev1.Pipeline, op *dholev1.SetStepCapability,
+) (*dholev1.Change, *dholev1.Operation, error) {
+	step := findStep(p, op.GetStepId())
+	if step == nil {
+		return nil, nil, fmt.Errorf("set_step_capability: no step %q in this pipeline", op.GetStepId())
+	}
+	capability := op.GetCapability()
+	name, declared := dholev1.Capability_name[int32(capability)]
+	if !declared || capability == dholev1.Capability_CAPABILITY_UNSPECIFIED {
+		return nil, nil, fmt.Errorf("set_step_capability: %v is not a capability; expected one of %s",
+			capability, enumNames(withoutUnspecified(dholev1.Capability_name)))
+	}
+	at, count := -1, 0
+	for n, c := range step.GetCapabilities() {
+		if c == capability {
+			if at < 0 {
+				at = n
+			}
+			count++
+		}
+	}
+	if count > 1 {
+		return nil, nil, fmt.Errorf(
+			"set_step_capability: step %q lists %s more than once, so no single entry is named; replace the step",
+			op.GetStepId(), name)
+	}
+
+	inverse := &dholev1.SetStepCapability{StepId: op.GetStepId(), Capability: capability}
+	var (
+		kind    dholev1.ChangeKind
+		summary string
+	)
+	if op.GetRemove() {
+		if at < 0 {
+			return nil, nil, fmt.Errorf("set_step_capability: step %q does not declare %s", op.GetStepId(), name)
+		}
+		inverse.Index = proto.Uint32(uint32(at))
+		step.Capabilities = slices.Delete(step.Capabilities, at, at+1)
+		if len(step.GetCapabilities()) == 0 {
+			step.Capabilities = nil
+		}
+		kind = dholev1.ChangeKind_CHANGE_KIND_REMOVED
+		summary = fmt.Sprintf("withdrew %s from step %q", name, op.GetStepId())
+	} else {
+		if at >= 0 {
+			return nil, nil, fmt.Errorf("set_step_capability: step %q already declares %s", op.GetStepId(), name)
+		}
+		position := len(step.GetCapabilities())
+		if op.Index != nil {
+			if int(op.GetIndex()) > position {
+				return nil, nil, fmt.Errorf("set_step_capability: index %d is past the end of step %q's %d capabilities",
+					op.GetIndex(), op.GetStepId(), position)
+			}
+			position = int(op.GetIndex())
+		}
+		inverse.Remove = true
+		step.Capabilities = slices.Insert(step.Capabilities, position, capability)
+		kind = dholev1.ChangeKind_CHANGE_KIND_ADDED
+		summary = fmt.Sprintf("declared %s on step %q", name, op.GetStepId())
+	}
+
+	return &dholev1.Change{Kind: kind, StepId: op.GetStepId(), Summary: summary},
+		&dholev1.Operation{Kind: &dholev1.Operation_SetStepCapability{SetStepCapability: inverse}}, nil
+}
+
+// withoutUnspecified drops the zero value from an enum's names, for an error
+// that lists only the values an operation accepts.
+func withoutUnspecified(names map[int32]string) map[int32]string {
+	out := make(map[int32]string, len(names))
+	for n, name := range names {
+		if n != 0 {
+			out[n] = name
+		}
+	}
+	return out
 }
 
 // applySetFile attaches, replaces or detaches one file the definition carries

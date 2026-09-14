@@ -31,6 +31,30 @@ steps:
 The definition carries the names only, so it is safe to mirror to git and to
 archive with every run.
 
+## Adding a secret to an existing step
+
+A secret binding and a capability are each one editing operation
+([ADR 0028](../.procoder/adr/0028-a-steps-declarations-are-edited-one-element-at-a-time.md)),
+so declaring a secret on a step that already exists does not mean replacing the
+step. From the CLI, two edits — each prints the operation that undoes it:
+
+```sh
+dhole pipeline apply ci --base "$REV" \
+  --operation '{"setStepSecret":{"stepId":"image","env":"NEXUS_PASSWORD","name":"nexus-push"}}'
+dhole pipeline apply ci --base "$NEXT_REV" \
+  --operation '{"setStepCapability":{"stepId":"image","capability":"CAPABILITY_SECRETS"}}'
+```
+
+`setStepSecret` with an env the step already binds rebinds it in place, and
+`"remove":true` unbinds it. `setStepCapability` with `"remove":true` withdraws
+the capability. In the editor, the inspector shows both lists for the selected
+step and makes the same operations.
+
+Neither operation refuses a step that binds secrets without
+`CAPABILITY_SECRETS`, so the two edits above may come in either order. `dhole
+pipeline validate` reports such a step as an error, in the words the scheduler
+refuses it in.
+
 ## Providing a secret as an operator
 
 Step secrets are configured per tenant, explicitly, even while a deployment

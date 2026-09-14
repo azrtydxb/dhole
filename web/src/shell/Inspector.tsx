@@ -39,7 +39,7 @@ const effectExplains: Record<EffectClass, string> = {
     "never cached · never auto-retried · a failure waits for a person to replay it",
 };
 
-function Label({ children }: { readonly children: React.ReactNode }) {
+export function Label({ children }: { readonly children: React.ReactNode }) {
   return (
     <div
       style={{
@@ -60,6 +60,7 @@ export function Inspector({
   step,
   onEffect,
   children,
+  declarations,
   logs,
 }: {
   readonly tab: "properties" | "logs";
@@ -69,6 +70,10 @@ export function Inspector({
   /** The parameter form. It is passed in rather than built here because the
    * fields come from the plugin's own schema and that form already exists. */
   readonly children?: React.ReactNode;
+  /** The step's capabilities and secret bindings, each edited by an operation
+   * of its own (ADR 0028). A slot for the same reason the parameters are: the
+   * inspector draws, and whoever holds the revision applies. */
+  readonly declarations?: React.ReactNode;
   readonly logs?: React.ReactNode;
 }) {
   return (
@@ -239,6 +244,8 @@ export function Inspector({
             >
               {step.engine === "" ? "any · auto-assigned" : step.engine}
             </div>
+
+            {declarations}
 
             <Label>PARAMETERS · from plugin schema</Label>
             {children ?? (

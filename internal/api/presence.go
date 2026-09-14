@@ -395,6 +395,10 @@ func touchedBy(op *dholev1.Operation) map[string]bool {
 		touched["step:"+kind.SetProperty.GetStepId()] = true
 	case *dholev1.Operation_SetStepConfig:
 		touched["step:"+kind.SetStepConfig.GetStepId()] = true
+	case *dholev1.Operation_SetStepSecret:
+		touched["step:"+kind.SetStepSecret.GetStepId()] = true
+	case *dholev1.Operation_SetStepCapability:
+		touched["step:"+kind.SetStepCapability.GetStepId()] = true
 	case *dholev1.Operation_Connect:
 		edge := kind.Connect.GetEdge()
 		touched["edge:"+edgeKey(edge)] = true

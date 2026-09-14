@@ -16,6 +16,8 @@ import { useTheme } from "../design/useTheme.js";
 import { Canvas } from "../canvas/Canvas.js";
 import { Diagnostics, type Diagnostic } from "./Diagnostics.js";
 import { Inspector, type EffectClass } from "./Inspector.js";
+import { StepDeclarations } from "./StepDeclarations.js";
+import { useStepEdits } from "./useStepEdits.js";
 import { MenuBar, type Menu } from "./MenuBar.js";
 import { Shell } from "./Shell.js";
 import { Sidebar } from "./Sidebar.js";
@@ -44,6 +46,7 @@ import { asPortTypeName } from "../design/PortGlyph.js";
 import { statusOf } from "../canvas/stepStatus.js";
 import { useRunModel } from "../run/useRunModel.js";
 import { EffectClass as EffectClass_ } from "../gen/dhole/v1/common_pb.js";
+import type { Operation } from "../gen/dhole/v1/api_pb.js";
 
 const menus: readonly Menu[] = [
   {
@@ -156,6 +159,20 @@ export function Editor({
     queryFn: () => pipelineClient.getPipeline({ pipelineId, revisionId }),
   });
 
+  // The revision the inspector's edits are based on, and the definition the
+  // last one produced — see useStepEdits for why that is a chain.
+  const say = useCallback((text: string, tone: ToastTone = "info") => {
+    const id = `${Date.now()}-${text}`;
+    setToasts((current) => [...current, { id, text, tone }]);
+  }, []);
+  const applyAt = useCallback(
+    (baseRevision: string, operation: Operation) =>
+      pipelineClient.applyOperation({ pipelineId, baseRevision, operation }),
+    [pipelineId],
+  );
+  const edits = useStepEdits(revisionId, applyAt, say);
+  const head = edits.head;
+
   const engines = useQuery({
     queryKey: ["engines"],
     queryFn: () => engineClient.listEngines({}),
@@ -165,7 +182,7 @@ export function Editor({
   });
 
   const validate = useMutation({
-    mutationFn: () => pipelineClient.validate({ pipelineId, revisionId }),
+    mutationFn: () => pipelineClient.validate({ pipelineId, revisionId: head }),
   });
 
   const plan = useMutation({
@@ -198,8 +215,8 @@ export function Editor({
 
   const revision = pipeline.data?.revision;
   const steps = useMemo(
-    () => pipeline.data?.pipeline?.steps ?? [],
-    [pipeline.data],
+    () => edits.pipeline?.steps ?? pipeline.data?.pipeline?.steps ?? [],
+    [edits.pipeline, pipeline.data],
   );
 
   const selectedStep = useMemo(
@@ -314,11 +331,6 @@ export function Editor({
       })),
     [engines.data],
   );
-
-  const say = useCallback((text: string, tone: ToastTone = "info") => {
-    const id = `${Date.now()}-${text}`;
-    setToasts((current) => [...current, { id, text, tone }]);
-  }, []);
 
   const onCommand = useCallback(
     (_menuId: string, itemId: string) => {
@@ -486,6 +498,16 @@ export function Editor({
                         : undefined,
                   ),
                 }
+          }
+          declarations={
+            selectedStep === null ? undefined : (
+              <StepDeclarations
+                key={selectedStep.id}
+                step={selectedStep}
+                busy={edits.busy}
+                onOperation={(operation) => void edits.apply(operation)}
+              />
+            )
           }
           onEffect={() =>
             setNotice(
