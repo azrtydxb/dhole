@@ -1069,6 +1069,60 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `STEP_SECRET_UNAVAILABLE` (two racing advances can record it twice — the run fails once);
       a `builtin:` step's declared secrets are ignored rather than refused; and the policy items
       above.
+- [ ] **Secret redemption names no tenant, so the plane cannot refuse a handle from the wrong
+      one.** Left open by the item above; decided by ADR 0028. The plane serves `secret.redeem`
+      from one connection and one broker that answers by handle alone, so wherever tenants
+      share an account nothing on the path knows whose request it is.
+      Files: `internal/bus/subjects.go`, `internal/bus/nats.go`, `internal/bus/embedded.go`,
+      `internal/tenant/nats_accounts.go`, `internal/secrets/secrets.go`,
+      `internal/secrets/plane.go`, `internal/server/server.go`, `internal/engine/agent.go`,
+      `cmd/dhole-engine/main.go`, `conformance/suite.go`, `conformance/cases.go`,
+      `testdata/engines/minimal-python/engine.py`, `docs/wire-contract.md`.
+      Interfaces: produces `bus.SubjectSecretRedeemFor(tenantID) string`
+      (`secret.redeem.<tenant>`), `bus.SubjectSecretRedeemAny() string` (`secret.redeem.*`),
+      `bus.TierPermissions(tenantID, tier)`, `bus.StartEmbeddedWithTiers(dir, tenantID, tiers)`,
+      `(*bus.NATS).RespondRawSubject(ctx, subject, fn func(subject string, body []byte) []byte)`,
+      `secrets.Redeemer.Redeem(ctx, tenantID, ref)`, `secrets.ServeTenants(ctx, r, broker, base)`,
+      `(*secrets.Broker).RedeemFor(tenantID, handle)`; keeps `bus.SubjectSecretRedeem()` as the
+      deprecated legacy subject.
+      Tests, red first: `TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd` (server e2e,
+      embedded plane and engine), `TestAHandleIsRefusedOnAnotherTenantsSubject` (secrets),
+      `TestATierEngineMayRedeemOnlyOnItsOwnTenantsSubject` (bus),
+      `TestAnEngineFallsBackToTheLegacySubjectWhenNothingServesTheScopedOne` (secrets),
+      `TestTheLegacyRedemptionSubjectStillServesAnOlderEngine` (server).
+- [ ] **An attempt's unspent secret handles outlive it by up to ten minutes.** Left open by the
+      step-secrets item; decided by ADR 0028. Files: `internal/secrets/secrets.go`,
+      `internal/secrets/step.go`, `internal/scheduler/secrets.go`, `internal/scheduler/scheduler.go`
+      (the three places a step leaves flight, and the uncommitted-dispatch path),
+      `internal/api/engines.go`, `internal/api/server.go`, `internal/server/server.go`.
+      Interfaces: produces `(*secrets.Broker).IssueFor(scope, name, value, ttl)`,
+      `(*secrets.Broker).RevokeAttempt(scope) int`, `(*secrets.Broker).RevokeRun(tenantID, runID) int`,
+      `scheduler.StepSecrets.Revoke(ctx, scope)`, `api.SecretRevoker{RevokeRun(ctx, tenantID, runID)}`
+      on `api.Config.Secrets`.
+      Tests, red first: `TestAnEndedAttemptsUnspentHandlesAreRevoked` (scheduler: succeeded,
+      failed, cancelled, lost), `TestRevokingAnAttemptLeavesEveryOtherAttemptsHandles` (secrets),
+      `TestCancellingARunRevokesItsHandles` (server e2e).
+- [ ] **Two plane passes can record `STEP_SECRET_UNAVAILABLE` twice for one step.** Left open
+      by the step-secrets item. Files: `internal/runstore/migrations/0026_secret_unavailable_once.sql`,
+      `internal/runstore/verdict_test.go`. Interfaces: none new; the store absorbs the second
+      append the way migration 0021 does for `STEP_POLICY_DENIED`.
+      Tests, red first: `TestAStepHoldsAtMostOneVerdictOfEachKind/STEP_SECRET_UNAVAILABLE`,
+      `TestOpeningADatabaseThatAlreadyHoldsTwoStepVerdictsRepairsIt` extended to it.
+- [ ] **A `builtin:` step's declared secrets are silently ignored.** Left open by the
+      step-secrets item; decided by ADR 0028. A plane-hosted step never has a `JobDispatch`,
+      and gates are armed and builtins taken before `refuseSecrets` runs. There is no
+      step-shape validation at revision save to put it in, so it is refused where the step is
+      judged ready. Files: `internal/scheduler/secrets.go`, `internal/scheduler/scheduler.go`
+      (`Advance`). Interfaces: none new.
+      Tests, red first: `TestABuiltinStepDeclaringASecretIsRefused` (scheduler, a plane worker
+      and a gate).
+- [ ] **Nothing evaluates policy for a secret.** ADR 0012 names the secret resolver as a policy
+      caller; decided by ADR 0028. Files: `internal/policy/policy.go`, `internal/policy/cel.go`,
+      `internal/scheduler/scheduler.go` (`permit`), `docs/policy.md`, `docs/secrets.md`.
+      Interfaces: produces `policy.Input.SecretName` read as `input.secret_name`, and
+      `scheduler.PolicyDenied.Secret`.
+      Tests, red first: `TestPolicyDecidesEachSecretAStepDeclares` (scheduler),
+      `TestTheSecretNameIsReadableByARuleAndEmptyOtherwise` (policy).
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

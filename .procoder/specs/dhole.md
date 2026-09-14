@@ -106,7 +106,10 @@ and agent orchestration are profiles over a shared core.
   scoped to the step's tenant, from a source the operator configures explicitly per tenant
   (`dhole serve --secret`, `controlPlane.secrets`) and kept separate from the plane's own
   model credentials (ADR 0027). A declared secret the plane does not hold refuses the step
-  before anything is dispatched, naming the secret.
+  before anything is dispatched, naming the secret. An engine redeems on its tenant's
+  subject and the plane refuses a handle presented for another tenant; an attempt's unspent
+  handles are revoked when it ends; a `builtin:` step declaring secrets is refused; and a
+  configured dispatch policy decides each declared secret (ADR 0028).
 
 ## Out of scope
 
@@ -164,7 +167,8 @@ and agent orchestration are profiles over a shared core.
   DAG, cache-hit prediction, engine assignment per step).
 - Bus subject layout as an engine-author-facing contract: `job.dispatch.<tier>.<caps>`,
   `job.status.<run>.<step>`, `job.logs.<run>.<step>`, `engine.control.<engine-id>`,
-  `engine.heartbeat.<engine-id>`.
+  `engine.heartbeat.<engine-id>`, `secret.redeem.<tenant>` (and the deprecated unscoped
+  `secret.redeem`, served while the plane accepts protocol version 3).
 - Executor interface: `acquire`, `exec`, `put`/`get`, `signal`, `release`.
 
 ## Data
@@ -205,6 +209,9 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
 - Cache hit on a step whose recorded output blob has been garbage collected.
 - A step declaring a secret the plane does not hold for its tenant, or declaring one without
   `CAPABILITY_SECRETS`; a dispatch that waits in a queue past its secret handles' expiry.
+- A secret handle presented on another tenant's redemption subject; an attempt that ends,
+  or a run cancelled with its dispatch still queued, while its handles are unspent; a
+  `builtin:` step declaring secrets; two plane passes refusing the same step's secret.
 - Two engines claiming the same step after a partition; a zombie engine reporting a result
   for an attempt that has already been superseded.
 - An engine registering with a protocol version the control plane no longer supports, or
@@ -380,6 +387,14 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
       fails naming it and is never dispatched —
       `TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere`,
       `TestAStepDeclaringASecretThePlaneDoesNotHoldIsNeverDispatched`.
+- [ ] [S-23] An engine redeems a handle on its tenant's subject through the embedded plane and
+      a redemption of that handle on another tenant's subject is refused; an attempt's unspent
+      handles cannot be redeemed after it ends; a `builtin:` step declaring a secret fails the
+      run naming the reason; and a dispatch policy rule on `input.secret_name` refuses the step —
+      `TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd`,
+      `TestAnEndedAttemptsUnspentHandlesAreRevoked`,
+      `TestABuiltinStepDeclaringASecretIsRefused`,
+      `TestPolicyDecidesEachSecretAStepDeclares`.
 - [ ] [S-1] [S-9] [S-6] `TestAcceptanceCICacheHit` (`make acceptance-ci`): the CI acceptance
       pipeline builds a container image and hits the cache on a second run with unchanged
       inputs; fails if the second run rebuilds the image or reports no cache hit.
