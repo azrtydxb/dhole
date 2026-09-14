@@ -217,6 +217,9 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   at all, including where the pipeline was retyped after the trigger was configured.
 - A schedule trigger whose window was missed entirely because the control plane was down.
 - Clock skew between control plane and engines affecting lease expiry.
+- More ready steps than engine slots, so a dispatch waits in the work queue longer than a
+  heartbeat window — it is waiting, not lost, and only an engine's acceptance starts its
+  lease; one that no remaining engine can take is reported unschedulable while it waits.
 - A step producing an output larger than the object-storage part limit, or producing no
   output where one was declared.
 - A run whose definition revision was superseded, or whose approval was revoked, while it
@@ -236,8 +239,8 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   in-flight work continues. NATS is the availability floor.
 - **Control plane down** — in-flight work continues and publishes; pending work queues;
   recovery is replay from the durable consumer position. No run is lost.
-- **Engine dies** — heartbeat lease expires, step becomes redeliverable; fencing tokens
-  reject results from the zombie.
+- **Engine dies** — the heartbeat lease of the attempt it accepted expires, step becomes
+  redeliverable; fencing tokens reject results from the zombie.
 - **Object storage unavailable** — authoritative logs and large artifacts cannot be
   written; step must fail rather than report success with missing outputs.
 - **Registry/upstream unreachable** — resolution falls back to local mirror; a plugin not

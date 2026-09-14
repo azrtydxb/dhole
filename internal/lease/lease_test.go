@@ -330,3 +330,90 @@ func TestSupersededRenewalDoesNotExtendTheNewLease(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond,
 		"the old fence's renewal must not keep the new holder's lease alive")
 }
+
+// TestAnOfferNobodyHasAcceptedDoesNotExpire is the kw defect at the level it
+// lives. A dispatch waits in a work queue for an engine slot for as long as the
+// fleet is busy, and a lease whose deadline started at dispatch declared every
+// such step lost after one TTL — before any engine could have started it. An
+// offer has a fence from the start, and no deadline until a holder accepts it.
+func TestAnOfferNobodyHasAcceptedDoesNotExpire(t *testing.T) {
+	ctx := testContext(t)
+	mgr := newManager(ctx, t)
+
+	token, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, 100*time.Millisecond)
+	require.NoError(t, err)
+
+	time.Sleep(400 * time.Millisecond)
+
+	orphans, err := mgr.Expire(ctx)
+	require.NoError(t, err)
+	require.Empty(t, orphans, "a step waiting in the queue was expired as if its holder had died")
+	require.NoError(t, mgr.Validate(ctx, token), "the waiting dispatch's fence must still be current")
+
+	waiting, err := mgr.Unaccepted(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []lease.Waiting{{
+		TenantID: "tenant-a", RunID: "run-1", StepID: "step-1", Attempt: 1, Fence: token.Fence,
+	}}, waiting, "the scheduler must be able to see what is still waiting")
+}
+
+// TestAnAcceptedOfferExpiresOneTTLAfterItsLastRenewal: the first renewal is the
+// acceptance, and from then on the offer is a lease like any other. An engine
+// that accepted a step after a long wait and died straight after must be lost
+// one heartbeat window later — the wait before acceptance buys it nothing.
+func TestAnAcceptedOfferExpiresOneTTLAfterItsLastRenewal(t *testing.T) {
+	ctx := testContext(t)
+	mgr := newManager(ctx, t)
+
+	const ttl = 200 * time.Millisecond
+	token, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, ttl)
+	require.NoError(t, err)
+	time.Sleep(3 * ttl)
+
+	require.NoError(t, mgr.Renew(ctx, token))
+	accepted := time.Now()
+
+	waiting, err := mgr.Unaccepted(ctx)
+	require.NoError(t, err)
+	require.Empty(t, waiting, "an accepted offer is no longer waiting")
+
+	var found []lease.Orphan
+	require.Eventually(t, func() bool {
+		got, expErr := mgr.Expire(ctx)
+		require.NoError(t, expErr)
+		found = append(found, got...)
+		return len(found) > 0
+	}, 5*time.Second, 20*time.Millisecond, "an accepted offer whose holder went silent never expired")
+	require.GreaterOrEqual(t, time.Since(accepted), ttl,
+		"an accepted offer expired before its heartbeat window had passed")
+	require.Equal(t, token.Fence, found[0].Fence)
+}
+
+// TestASupersededHoldersRenewalDoesNotAcceptTheOfferThatReplacedIt. Fencing
+// has to hold for acceptance as it does for results: an engine that accepted
+// attempt 1 and was presumed dead keeps heartbeating the old fence, and if that
+// counted as accepting attempt 2 — still waiting in the queue — attempt 2 would
+// be expired one TTL later for an engine that never had it.
+func TestASupersededHoldersRenewalDoesNotAcceptTheOfferThatReplacedIt(t *testing.T) {
+	ctx := testContext(t)
+	mgr := newManager(ctx, t)
+
+	const ttl = 100 * time.Millisecond
+	old, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, ttl)
+	require.NoError(t, err)
+	require.NoError(t, mgr.Renew(ctx, old))
+
+	fresh, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 2, ttl)
+	require.NoError(t, err)
+	require.ErrorIs(t, mgr.Renew(ctx, old), lease.ErrFenced)
+
+	time.Sleep(4 * ttl)
+	orphans, err := mgr.Expire(ctx)
+	require.NoError(t, err)
+	require.Empty(t, orphans, "the new offer was expired on the strength of the old holder's renewal")
+
+	waiting, err := mgr.Unaccepted(ctx)
+	require.NoError(t, err)
+	require.Len(t, waiting, 1)
+	require.Equal(t, fresh.Fence, waiting[0].Fence)
+}

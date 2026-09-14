@@ -1382,7 +1382,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       ack wait and asserts ONE sandbox acquisition; removing the renewal fails
       it with "the dispatch was delivered more than once while the step was
       still running".
-- [ ] **Work queued behind a busy engine is declared lost before anyone could
+- [x] **Work queued behind a busy engine is declared lost before anyone could
       start it.** Found 2026-09-11 running a real CI/CD pipeline on kw, and it
       is the one that matters. A lease starts when the plane DISPATCHES, and
       `DefaultLeaseTTL` expires it 30 seconds later whether or not any engine
@@ -1402,6 +1402,72 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       that is sitting in a queue it can see. Until then the operational
       workaround is slots >= the pipeline's widest parallel rank, which is not
       something a pipeline author should have to know about the fleet.
+      CLOSED: the lease starts at ACCEPTANCE. A dispatch `lease.Offer`s its
+      lease — the fence exists from the start because it travels in the
+      dispatch, but there is no deadline until the first `Renew`, which is the
+      engine's ACCEPTED/RUNNING status (`Scheduler.OnStatus`, after the fence
+      is validated) or the first heartbeat naming the job (`renewHeld`); from
+      then on `DefaultLeaseTTL` is the heartbeat window, measured from the last
+      renewal only. The patience option was rejected: any finite patience
+      thrashes a queue deeper than it, each expiry strands a stale copy of the
+      dispatch for an engine to run for nobody, and there is nothing for a
+      timer to catch — the queue redelivers a dispatch whose fetcher died
+      before accepting. What can strand a waiting dispatch is the fleet losing
+      every engine able to take it, so `SweepOrphans` now also walks
+      `lease.Unaccepted` and records STEP_UNSCHEDULABLE with `Explain`'s
+      reason for any whose step `Match`es nothing, leaving the dispatch queued
+      so a returning engine runs it as the same attempt; STEP_DISPATCHED now
+      clears a step's earlier unschedulable reason so the second strand is
+      not deduplicated into silence. No ADR changed: 0004's heartbeat leases
+      still detect a dead engine, and now only an engine that holds a step.
+      Tests, each red before the change:
+      `TestAStepThatWaitsInTheQueueLongerThanTheLeaseTTLIsNotDeclaredLost`
+      ("a step still waiting in the queue was declared lost"),
+      `TestADispatchNoEngineCanTakeAnyMoreIsReportedUnschedulableWhileItWaits`
+      ("the step was stranded, not lost"),
+      `TestAnEngineThatAcceptsAStepAndThenDiesStillLosesItWithinTheHeartbeatWindow`,
+      `TestAnOfferNobodyHasAcceptedDoesNotExpire`,
+      `TestASupersededHoldersRenewalDoesNotAcceptTheOfferThatReplacedIt`,
+      `TestAHeartbeatIsAnEngineAcceptingAQueuedStep`. Mutations — dispatch
+      claiming instead of offering, ACCEPTED not renewing, no fence check in
+      OnStatus, no stranded surfacing, the stale reason kept, a renewal not
+      accepting an offer, any fence's renewal accepting, the heartbeat
+      consumer not renewing — each fail at least one of them.
+      The full suite then caught what dispatch-time expiry had been hiding:
+      `TestLocalRun*` hung about one run in fifteen under load, the log showing
+      STEP_DISPATCHED b once and the engine's reports fenced at 4 against a
+      lease at 5. Two Advances of one run (the open-run tick and an arriving
+      status) both offered b; the loser's offer landed after the winner
+      committed and superseded the committed dispatch's fence. The old claim
+      expired 30s later and the step came back; an unaccepted offer never
+      expires, so the run waited forever. Closed in the same change: the fold
+      records each step's dispatched fence, and a plane whose re-read finds
+      the attempt dispatched under an OLDER fence than its own offer records
+      that attempt lost (`recordFencedOut`, through recordOrphan's guards);
+      the sweeper does the same for an unaccepted offer newer than the
+      dispatched fence, for a plane that died before noticing.
+      `TestADispatchFencedOutByARacingOfferIsNotLeftWaitingForever` and
+      `TestTheSweeperRecoversADispatchFencedOutByAPlaneThatDiedBeforeNoticing`
+      were red first and each fails with its half removed; 80 local runs
+      under load then passed. Left open: an engine still runs a stale queued
+      copy after a genuine loss and re-dispatch (it does not check its fence
+      before starting), and a capable engine whose consumer never fetches
+      leaves a dispatch waiting without a reason, which is the next item's
+      territory.
+- [ ] **Two Advances racing on one step cost that step an attempt.** Found
+      2026-09-14 closing the item above. `dispatch` claims its lease BEFORE it
+      re-reads the log, and a claim always supersedes, so the plane that loses
+      the race to dispatch a step fences out the dispatch the winner already
+      committed. It is no longer a hang (`recordFencedOut` records the attempt
+      lost and the step is re-dispatched), but it is a wasted attempt, a
+      stale copy an engine runs for nobody, and for an AT_MOST_ONCE step a
+      person asked to approve a replay nothing required. It happens inside ONE
+      plane: the open-run tick and the status consumer both Advance the same
+      run. The fix is for an offer never to supersede an offer of the same
+      attempt — a compare-and-set on the claim key refusing when the current
+      record's attempt is at least the one being offered — with the sweeper
+      withdrawing, at its revision, an unaccepted offer the log shows was never
+      dispatched once it is old enough that no commit can still be on its way.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
@@ -1410,8 +1476,9 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       queue: with `{NETWORK, SECRETS}` that is eight consumers sharing, on kw,
       two slots. Seven of them are usually empty, and the one holding work
       waits its turn behind them. At the original three-second yield the worst
-      case was 24 seconds; the plane declares a dispatch nobody accepted lost
-      after 30. Observed: a step dispatched at 08:18:37, declared lost at
+      case was 24 seconds; the plane declared a dispatch nobody accepted lost
+      after 30 (no longer: see the item above — a dispatch now waits until
+      accepted, so this costs latency rather than attempts). Observed: a step dispatched at 08:18:37, declared lost at
       08:19:10, accepted by the engine at 08:19:13 — three seconds after the
       plane gave up, and it then ran to completion for nobody.
       Mitigated by dropping `slotYield` to 250ms, which puts the worst case at

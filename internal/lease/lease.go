@@ -50,26 +50,57 @@ type Orphan struct {
 	Fence uint64
 }
 
+// Waiting is a step offered to a work queue that no holder has accepted yet.
+// It is not an orphan and nothing about it has expired: it is reported so the
+// scheduler can ask whether anything in the fleet is still able to take it.
+type Waiting struct {
+	TenantID string
+	RunID    string
+	StepID   string
+	Attempt  uint32
+	Fence    uint64
+}
+
 // Manager hands out leases and detects the ones that died.
 //
-// Claim always supersedes: a step re-dispatched to a new engine takes a strictly
-// higher fence, and the previous holder is fenced out from that moment. Renew
-// deliberately leaves the fence alone — a holder must not invalidate its own
-// dispatch token by proving it is alive.
+// Claim and Offer always supersede: a step re-dispatched to a new engine takes
+// a strictly higher fence, and the previous holder is fenced out from that
+// moment. Renew deliberately leaves the fence alone — a holder must not
+// invalidate its own dispatch token by proving it is alive.
+//
+// A lease's heartbeat deadline belongs to a HOLDER. Claim is for a caller that
+// is the holder from the first instant (the plane running its own step), so
+// the deadline starts at once. Offer is for a dispatch put on a work queue,
+// where the attempt may wait any length of time for an engine slot: the fence
+// exists from the start because it must travel inside the dispatch, but there
+// is no deadline until the first Renew — which is an engine's ACCEPTED status
+// or the first heartbeat naming the job. Timing out a dispatch nobody has
+// taken was the kw defect: every step that had to wait for a slot was declared
+// lost after one TTL, re-dispatched, and lost again.
 type Manager interface {
 	// Claim takes the lease on a step for one attempt, superseding any current
-	// holder, and returns the token that must travel with the dispatch.
+	// holder, and returns the token that must travel with the dispatch. The
+	// claimer is the holder, so the ttl runs from now.
 	Claim(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error)
-	// Renew extends the lease behind t without moving its fence. A token that
-	// is no longer current is refused with ErrFenced and extends nothing.
+	// Offer takes the lease on a step for an attempt handed to a work queue,
+	// superseding any current holder. It does not expire until it has been
+	// accepted by a Renew; from then on ttl is its heartbeat window.
+	Offer(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error)
+	// Renew extends the lease behind t without moving its fence, and accepts
+	// it if it was an offer. A token that is no longer current is refused with
+	// ErrFenced and extends nothing.
 	Renew(ctx context.Context, t Token) error
 	// Validate reports whether t is still the current lease. Anything else is
 	// ErrFenced and its report must be discarded as stale.
 	Validate(ctx context.Context, t Token) error
-	// Expire claims and returns the leases that have passed their deadline. It
-	// is safe to run on several control planes at once: each orphan is handed
-	// to exactly one of them.
+	// Expire claims and returns the leases that have passed their deadline. An
+	// offer nobody has accepted has no deadline and is never returned. It is
+	// safe to run on several control planes at once: each orphan is handed to
+	// exactly one of them.
 	Expire(ctx context.Context) ([]Orphan, error)
+	// Unaccepted lists the current offers no holder has accepted yet. It
+	// changes nothing.
+	Unaccepted(ctx context.Context) ([]Waiting, error)
 }
 
 var _ Manager = (*KV)(nil)

@@ -785,11 +785,15 @@ func (s *Server) beat(ctx context.Context, beat *dholev1.EngineHeartbeat) {
 	// The leases FIRST, and whatever the registry then makes of the engine.
 	//
 	// A heartbeat is the only evidence a step is still being worked on: a
-	// lease expires thirty seconds after it is claimed, and the sweeper takes
+	// held lease expires one TTL after its last renewal, and the sweeper takes
 	// every expired one as an engine that died. Renewing on what the engine
 	// says it holds is what stops a step longer than a lease TTL from being
 	// re-dispatched out from under the engine running it
 	// (docs/wire-contract.md, "Heartbeats and orphans").
+	//
+	// It is also ACCEPTANCE. A dispatch is only offered to the work queue and
+	// has no deadline until an engine takes it, so the first renewal of a
+	// queued step is what starts its heartbeat window.
 	//
 	// It happens even for an engine the registry refuses. The refusal is about
 	// what the engine can be given NEXT — a heartbeat cannot describe a fleet
@@ -819,7 +823,11 @@ func logHeartbeatRefusal(log *slog.Logger, engineID string, err error) {
 	log.Error("engine heartbeat refused", "engine", engineID, "error", err)
 }
 
-// renewHeld extends the lease behind every job an engine says it is holding.
+// renewHeld extends the lease behind every job an engine says it is holding,
+// and accepts any of them that were still only offered: an engine lists a job
+// from the moment it takes it off the queue, so being named here is the engine
+// saying it holds the step, whether or not its ACCEPTED status has been
+// applied yet.
 //
 // A fence that is no longer current is not an error and not news: the engine
 // has been superseded and is about to find out, and renewing nothing is

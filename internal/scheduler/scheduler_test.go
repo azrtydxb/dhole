@@ -668,7 +668,9 @@ type gatingLeases struct {
 	release chan struct{}
 }
 
-func (g *gatingLeases) Claim(
+// Offer, because a dispatch offers its lease to the queue rather than claiming
+// it for a holder (see scheduler.dispatch).
+func (g *gatingLeases) Offer(
 	ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration,
 ) (lease.Token, error) {
 	select {
@@ -677,7 +679,7 @@ func (g *gatingLeases) Claim(
 		close(g.entered)
 	}
 	<-g.release
-	return g.Manager.Claim(ctx, tenantID, runID, stepID, attempt, ttl)
+	return g.Manager.Offer(ctx, tenantID, runID, stepID, attempt, ttl)
 }
 
 // TestAdvanceSkipsAStepAnotherPlaneDispatchedWhileItWasClaiming. Claiming a
@@ -713,6 +715,82 @@ func TestAdvanceSkipsAStepAnotherPlaneDispatchedWhileItWasClaiming(t *testing.T)
 		"the plane that was overtaken must not record a second dispatch")
 	require.Equal(t, []string{"a"}, h.drain(ctx, t),
 		"and must not put a second dispatch on the bus")
+}
+
+// TestADispatchFencedOutByARacingOfferIsNotLeftWaitingForever is the other
+// side of that race, and the one the lease fix turned from slow into fatal.
+//
+// The overtaken plane's offer came back AFTER the other plane had committed,
+// so it superseded the fence the committed dispatch carries. Every report from
+// the engine running that dispatch is now stale and discarded. While a lease
+// expired a TTL after dispatch, that orphaned offer expired too and the step
+// was re-dispatched thirty seconds later; an offer nobody accepts never
+// expires, so the run waited forever. Found by `dhole local run`, where the
+// open-run tick and an arriving status are two Advances of the same run, and
+// the log showed STEP_DISPATCHED b once with its engine's reports fenced at 4
+// against a lease at 5.
+func TestADispatchFencedOutByARacingOfferIsNotLeftWaitingForever(t *testing.T) {
+	ctx := testContext(t)
+	h := newHarness(ctx, t, readyEngine("e1"))
+
+	gate := &gatingLeases{
+		Manager: h.leases,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	slow := h.planeWithLeases(ctx, t, gate)
+
+	done := make(chan error, 1)
+	go func() { done <- slow.Advance(ctx, testTenant, testRun) }()
+	<-gate.entered
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+	close(gate.release)
+	require.NoError(t, <-done)
+
+	// The engine runs the dispatch it was given and reports, as it would.
+	committed := h.latestDispatch(t, "a")
+	h.report(ctx, t, h.sched, committed, dholev1.Phase_PHASE_ACCEPTED)
+	h.succeed(ctx, t, "a")
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+
+	if h.countEvents(ctx, t, runstore.StepSucceeded, "a") == 1 {
+		return // the committed dispatch survived the race: nothing to recover
+	}
+	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"),
+		"a dispatch whose fence was superseded can never report, and nothing said so")
+	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t),
+		"the step whose only dispatch was fenced out was never dispatched again, so the run waits forever")
+}
+
+// TestTheSweeperRecoversADispatchFencedOutByAPlaneThatDiedBeforeNoticing. The
+// plane whose offer superseded a committed dispatch is the one that records
+// it — unless it died between offering and re-reading the log. Then the only
+// trace is an offer nobody will ever accept, and the sweeper, which already
+// walks those, is what must notice.
+func TestTheSweeperRecoversADispatchFencedOutByAPlaneThatDiedBeforeNoticing(t *testing.T) {
+	ctx := testContext(t)
+	h := newHarness(ctx, t, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	// Another plane offers the same attempt and dies on the spot.
+	_, err := h.leases.Offer(ctx, testTenant, testRun, "a", 1, scheduler.DefaultLeaseTTL)
+	require.NoError(t, err)
+
+	_, err = h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"),
+		"an attempt nobody can report on was left in flight")
+	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t), "and was never dispatched again")
+
+	// Sweeping again changes nothing: the new attempt is simply waiting.
+	_, err = h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"))
+	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t))
 }
 
 // TestRunCompletesAndStopsAdvancing walks the whole diamond. Two things are
@@ -767,6 +845,8 @@ func TestAnOrphanedAttemptIsRecordedAndReDispatched(t *testing.T) {
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"a"}, h.drain(ctx, t))
 	first := h.bus.dispatches(t)[0]
+	// An engine takes the step: only a HELD lease can have a holder die.
+	h.report(ctx, t, h.sched, first, dholev1.Phase_PHASE_ACCEPTED)
 
 	// Nobody renews. The holder is gone.
 	time.Sleep(2 * ttl)
@@ -807,6 +887,7 @@ func TestAnOrphanedAtMostOnceStepIsNotSilentlyRepeated(t *testing.T) {
 
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+	h.report(ctx, t, h.sched, h.latestDispatch(t, "a"), dholev1.Phase_PHASE_ACCEPTED)
 
 	time.Sleep(2 * ttl)
 	lost, err := h.sched.SweepOrphans(ctx)
@@ -817,6 +898,193 @@ func TestAnOrphanedAtMostOnceStepIsNotSilentlyRepeated(t *testing.T) {
 		"an at-most-once step whose engine died must not be dispatched again on its own")
 	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAwaitingReplay, "a"),
 		"and the run must say so, because nothing will move until a person acts")
+}
+
+// latestDispatch is the most recent dispatch of one step on the bus.
+func (h *harness) latestDispatch(t *testing.T, stepID string) *dholev1.JobDispatch {
+	t.Helper()
+	var latest *dholev1.JobDispatch
+	for _, d := range h.bus.dispatches(t) {
+		if d.GetStepId() == stepID {
+			latest = d
+		}
+	}
+	require.NotNil(t, latest, "step %q was never dispatched", stepID)
+	return latest
+}
+
+// report delivers one status for a dispatch, exactly as the engine holding it
+// would: echoing its fence unchanged.
+func (h *harness) report(
+	ctx context.Context, t *testing.T, sched *scheduler.Scheduler, d *dholev1.JobDispatch, phase dholev1.Phase,
+) {
+	t.Helper()
+	require.NoError(t, sched.OnStatus(ctx, &dholev1.JobStatus{
+		RunId:      d.GetRunId(),
+		StepId:     d.GetStepId(),
+		Attempt:    d.GetAttempt(),
+		FenceToken: d.GetFenceToken(),
+		Phase:      phase,
+	}))
+}
+
+// TestAStepThatWaitsInTheQueueLongerThanTheLeaseTTLIsNotDeclaredLost is the
+// defect found on kw. A lease used to start when the plane DISPATCHED, so a
+// step waiting in the work queue for an engine slot was declared lost 30
+// seconds later — before anything could have started it — and re-dispatched,
+// and lost again: a pipeline wider than its engine's slots thrashed through
+// attempt after attempt while the engine did exactly what it should. Observed:
+// dispatched 08:18:37, declared lost 08:19:10, accepted by the engine 08:19:13
+// and run to completion for nobody.
+//
+// A dispatch nobody has accepted is waiting, not late.
+func TestAStepThatWaitsInTheQueueLongerThanTheLeaseTTLIsNotDeclaredLost(t *testing.T) {
+	ctx := testContext(t)
+	const ttl = 250 * time.Millisecond
+	h := newHarnessWithLeaseTTL(ctx, t, diamond(), ttl, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	// The step sits in the queue behind a busy engine for many lease TTLs,
+	// with the sweeper running the whole time as it does in the plane.
+	for range 4 {
+		time.Sleep(ttl)
+		lost, err := h.sched.SweepOrphans(ctx)
+		require.NoError(t, err)
+		require.Zero(t, lost, "a step still waiting in the queue was declared lost")
+	}
+
+	// A slot frees up: the engine accepts it, runs it, and reports.
+	queued := h.latestDispatch(t, "a")
+	h.report(ctx, t, h.sched, queued, dholev1.Phase_PHASE_ACCEPTED)
+	h.succeed(ctx, t, "a")
+
+	require.Zero(t, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"),
+		"waiting for capacity is not an engine dying")
+	require.Equal(t, 1, h.countEvents(ctx, t, runstore.StepDispatched, "a"),
+		"a step that waited its turn runs as exactly one attempt")
+	require.Equal(t, 1, h.countEvents(ctx, t, runstore.StepSucceeded, "a"),
+		"and the result of that attempt is the one recorded")
+}
+
+// TestAnEngineThatAcceptsAStepAndThenDiesStillLosesItWithinTheHeartbeatWindow
+// is what the fix above must not cost. Once an engine has ACCEPTED a step, its
+// heartbeat is the only evidence the step is being worked on, and silence for
+// a lease TTL means the engine is gone — however long the step waited in the
+// queue before that. The re-dispatch goes out under a new fence, and a report
+// from the dead attempt is discarded.
+func TestAnEngineThatAcceptsAStepAndThenDiesStillLosesItWithinTheHeartbeatWindow(t *testing.T) {
+	ctx := testContext(t)
+	const ttl = 250 * time.Millisecond
+	h := newHarnessWithLeaseTTL(ctx, t, diamond(), ttl, readyEngine("e1"))
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+	first := h.latestDispatch(t, "a")
+
+	// Queued well past the heartbeat window, then accepted.
+	time.Sleep(3 * ttl)
+	h.report(ctx, t, h.sched, first, dholev1.Phase_PHASE_ACCEPTED)
+
+	// The engine dies straight after accepting: no heartbeat, no status.
+	deadline := time.Now().Add(4 * ttl)
+	lost := 0
+	for lost == 0 && time.Now().Before(deadline) {
+		time.Sleep(ttl / 5)
+		n, err := h.sched.SweepOrphans(ctx)
+		require.NoError(t, err)
+		lost += n
+	}
+	require.Equal(t, 1, lost,
+		"an accepted attempt whose engine stopped answering must be lost within the heartbeat window")
+	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t), "and dispatched again")
+	second := h.latestDispatch(t, "a")
+	require.Equal(t, uint32(2), second.GetAttempt())
+	require.NotEqual(t, first.GetFenceToken(), second.GetFenceToken())
+
+	// The dead engine was only wedged, and reports late. Both reports belong
+	// to a superseded attempt and change nothing.
+	h.report(ctx, t, h.sched, first, dholev1.Phase_PHASE_ACCEPTED)
+	h.report(ctx, t, h.sched, first, dholev1.Phase_PHASE_SUCCEEDED)
+	require.Zero(t, h.countEvents(ctx, t, runstore.StepSucceeded, "a"),
+		"the superseded attempt's result must not be recorded")
+
+	// And its late ACCEPTED did not start the heartbeat clock of the attempt
+	// now waiting in the queue: that one is still nobody's, so still not late.
+	time.Sleep(3 * ttl)
+	n, err := h.sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.Zero(t, n, "a stale ACCEPTED was taken as acceptance of the attempt that superseded it")
+}
+
+// TestADispatchNoEngineCanTakeAnyMoreIsReportedUnschedulableWhileItWaits is
+// the price of letting a queued dispatch wait: waiting must not become hiding.
+// A step matched an engine when it was dispatched, and every engine able to
+// run it then left before accepting it. Nothing will ever take it off the
+// queue, plan() counts it in flight, and without this the run would sit there
+// saying nothing. It says what STEP_UNSCHEDULABLE always says about a step that
+// cannot be placed — and when an engine that can run it comes back, the
+// dispatch that waited is the one that runs, as the same single attempt.
+func TestADispatchNoEngineCanTakeAnyMoreIsReportedUnschedulableWhileItWaits(t *testing.T) {
+	ctx := testContext(t)
+	const ttl = 250 * time.Millisecond
+	h := newHarnessWithLeaseTTL(ctx, t, diamond(), ttl)
+
+	// The run is submitted before any engine exists, which is recorded, and
+	// then an engine arrives and the step is dispatched to the queue.
+	fleet := &mutableFleet{}
+	sched, err := scheduler.New(scheduler.Config{
+		Store:       h.store,
+		Outbox:      h.outbox,
+		Leases:      h.leases,
+		Fleet:       fleet,
+		Definitions: h.defs,
+		Tier:        testTier,
+		OS:          "linux",
+		Arch:        "amd64",
+		LeaseTTL:    ttl,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, sched.Advance(ctx, testTenant, testRun))
+	require.Empty(t, h.drain(ctx, t))
+	fleet.set(readyEngine("e1"))
+	require.NoError(t, sched.Advance(ctx, testTenant, testRun))
+	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+
+	// Every engine that could run the step leaves before any of them took it.
+	fleet.set()
+	time.Sleep(3 * ttl)
+	_, err = sched.SweepOrphans(ctx)
+	require.NoError(t, err)
+	require.NoError(t, sched.Advance(ctx, testTenant, testRun))
+
+	events, err := h.store.Replay(ctx, testTenant, testRun)
+	require.NoError(t, err)
+	var reasons []string
+	for _, e := range events {
+		if e.Type == scheduler.StepUnschedulable && e.StepID == "a" {
+			reason, uerr := scheduler.UnmarshalUnschedulable(e.Payload)
+			require.NoError(t, uerr)
+			reasons = append(reasons, reason.Reason)
+		}
+	}
+	require.Equal(t, []string{"no engine is registered", "no engine is registered"}, reasons,
+		"a queued step no engine can take must say why, once for each time it became stuck — "+
+			"the reason it could not be placed BEFORE its dispatch does not describe it after one")
+
+	// An engine able to run it comes back and takes the dispatch that waited.
+	fleet.set(readyEngine("e2"))
+	queued := h.latestDispatch(t, "a")
+	h.report(ctx, t, sched, queued, dholev1.Phase_PHASE_ACCEPTED)
+	h.report(ctx, t, sched, queued, dholev1.Phase_PHASE_SUCCEEDED)
+
+	require.Zero(t, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"),
+		"the step was stranded, not lost: nothing had started it")
+	require.Equal(t, 1, h.countEvents(ctx, t, runstore.StepDispatched, "a"),
+		"the dispatch that waited is the one that ran; there is no second attempt")
+	require.Equal(t, 1, h.countEvents(ctx, t, runstore.StepSucceeded, "a"))
 }
 
 // TestADispatchIsWrittenAtTheHighestVersionEveryMatchedEngineSpeaks is what
@@ -1043,6 +1311,7 @@ func TestAStepParkedAtAGateIsNotSweptAndIsDispatchedAgainWhenReleased(t *testing
 
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+	h.report(ctx, t, h.sched, h.latestDispatch(t, "a"), dholev1.Phase_PHASE_ACCEPTED)
 
 	// The step parks: it asks for an approval and stops renewing, exactly as
 	// an agent step does when its model asks for an at-most-once action.
