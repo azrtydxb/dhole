@@ -230,7 +230,12 @@ type BuiltinSteps interface {
 	// then waits for days; a model call is taken and then runs. What it means
 	// is that this pass must not dispatch it, and that whoever took it will
 	// write the step's terminal event when there is one.
-	Take(ctx context.Context, tenantID, runID string, step *dholev1.Step) (bool, error)
+	//
+	// attempt is the attempt this pass found the step ready for, off the log
+	// it read. A step that executes is run under exactly that attempt or not
+	// at all: another pass, on this plane or another, may have read the same
+	// log and taken the same step, and only one of them may run it.
+	Take(ctx context.Context, tenantID, runID string, step *dholev1.Step, attempt uint32) (bool, error)
 }
 
 // Config is everything the scheduler needs. All of it is durable
@@ -548,19 +553,23 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		// ADR 0009's "skipped and its recorded outputs reused": a step that
 		// has already been done under this exact key is finished by writing
 		// the result down, not by doing it again.
-		hit, err := s.serveFromCache(ctx, tenantID, runID, pipeline, step, state)
-		if err != nil {
+		switch outcome, err := s.serveFromCache(ctx, tenantID, runID, pipeline, step, state); {
+		case err != nil:
 			return err
-		}
-		if hit {
+		case outcome == cacheServed:
 			served = true
+			continue
+		case outcome == cachePlacedElsewhere:
+			// Another pass holds this attempt. It is neither ours to run nor
+			// a reason to advance again: re-advancing would find the same
+			// step ready behind the same lease and recurse until it moved.
 			continue
 		}
 		// A step type the PLANE hosts is not dispatched anywhere, and is not
 		// queued either: a durable timer, an approval gate, a model call and a
 		// bounded loop take no engine slot, so putting them through the fair
 		// queue would charge a tenant's share for work no engine does.
-		taken, err := s.takeBuiltin(ctx, tenantID, runID, step)
+		taken, err := s.takeBuiltin(ctx, tenantID, runID, step, state.attempts[step.GetId()]+1)
 		if err != nil {
 			return err
 		}
@@ -650,20 +659,34 @@ func (s *Scheduler) graphOf(
 // only walk the same log again. The 250ms advance tick is what picks both up,
 // which is the same mechanism a restart relies on (ADR 0003).
 func (s *Scheduler) takeBuiltin(
-	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, attempt uint32,
 ) (bool, error) {
 	if s.built == nil {
 		return false, nil
 	}
-	taken, err := s.built.Take(ctx, tenantID, runID, step)
+	taken, err := s.built.Take(ctx, tenantID, runID, step, attempt)
 	if err != nil {
 		return false, fmt.Errorf("scheduler: run %q step %q: %w", runID, step.GetId(), err)
 	}
 	return taken, nil
 }
 
+// cacheOutcome is what serving a step from the cache came to.
+type cacheOutcome int
+
+const (
+	// cacheMiss: there is nothing to serve, and the step is run for real.
+	cacheMiss cacheOutcome = iota
+	// cacheServed: the step's history is written and it has succeeded.
+	cacheServed
+	// cachePlacedElsewhere: another pass — on this plane or another — holds
+	// or has placed this attempt. This pass writes nothing and does nothing
+	// more with the step.
+	cachePlacedElsewhere
+)
+
 // serveFromCache finishes a step from what an earlier run recorded, and
-// reports whether it did.
+// reports what came of trying.
 //
 // Whether a step MAY be served is cache.Eligible's decision and nobody else's.
 // Restating any part of it here — "pure only", "step-scoped leases only" —
@@ -675,20 +698,20 @@ func (s *Scheduler) serveFromCache(
 	pipeline *dholev1.Pipeline,
 	step *dholev1.Step,
 	state *runState,
-) (bool, error) {
+) (cacheOutcome, error) {
 	if s.cache == nil {
-		return false, nil
+		return cacheMiss, nil
 	}
 	key, ok, err := s.cacheKey(ctx, tenantID, pipeline, step, state)
 	if err != nil || !ok {
-		return false, err
+		return cacheMiss, err
 	}
 	outputs, hit, err := s.cache.Lookup(ctx, tenantID, key)
 	if err != nil {
-		return false, fmt.Errorf("scheduler: cache lookup for %s/%s: %w", runID, step.GetId(), err)
+		return cacheMiss, fmt.Errorf("scheduler: cache lookup for %s/%s: %w", runID, step.GetId(), err)
 	}
 	if !hit {
-		return false, nil
+		return cacheMiss, nil
 	}
 
 	// The bytes have to still BE there, and this run has to hold a reference
@@ -700,9 +723,9 @@ func (s *Scheduler) serveFromCache(
 	for _, out := range outputs {
 		switch err := s.refs.Reference(ctx, tenantID, out.GetDigest(), runID); {
 		case errors.Is(err, cas.ErrNotFound):
-			return false, nil
+			return cacheMiss, nil
 		case err != nil:
-			return false, fmt.Errorf("scheduler: pinning cached blobs for %s/%s: %w",
+			return cacheMiss, fmt.Errorf("scheduler: pinning cached blobs for %s/%s: %w",
 				runID, step.GetId(), err)
 		}
 	}
@@ -721,27 +744,41 @@ func (s *Scheduler) serveFromCache(
 // The lease is claimed, re-read and validated exactly as a dispatch's is, for
 // the same reason: two control planes advancing one run must not both decide
 // to serve this hit and write the step's success twice.
+//
+// And the claim refuses an attempt already leased, exactly as a dispatch's
+// offer does. One pass finding no entry dispatches attempt N while another,
+// which looked an instant later, serves attempt N from the cache; a claim that
+// superseded unconditionally could land after that dispatch committed, take
+// the only fence its engine can report with, and cost the attempt a TTL later.
 func (s *Scheduler) recordCacheHit(
 	ctx context.Context,
 	tenantID, runID string,
 	step *dholev1.Step,
 	outputs []*dholev1.OutputRef,
 	state *runState,
-) (bool, error) {
+) (cacheOutcome, error) {
 	started := s.now()
 	attempt := state.attempts[step.GetId()] + 1
 	token, err := s.leas.Claim(ctx, tenantID, runID, step.GetId(), attempt, s.ttl)
+	if errors.Is(err, lease.ErrAlreadyOffered) {
+		// Somebody is dispatching, serving or has placed this attempt. It is
+		// theirs; the fence they hold is untouched.
+		return cachePlacedElsewhere, nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("scheduler: claiming %s/%s: %w", runID, step.GetId(), err)
+		return cacheMiss, fmt.Errorf("scheduler: claiming %s/%s: %w", runID, step.GetId(), err)
 	}
 	fresh, err := s.load(ctx, tenantID, runID)
 	if err != nil {
-		return false, err
+		return cacheMiss, err
 	}
 	if fresh.attempts[step.GetId()] >= attempt {
-		// Another plane got there first. The step is placed either way, so
-		// this one must not dispatch it.
-		return true, nil
+		// Another plane got there first, and its lease was already gone when
+		// ours was taken — withdrawn in the instant its commit landed. Our
+		// claim superseded the fence that dispatch carries, so say so now, as
+		// dispatch does, rather than leave the attempt in flight with nobody
+		// able to report on it.
+		return cachePlacedElsewhere, s.recordFencedOut(ctx, tenantID, runID, step.GetId(), token.Fence, fresh)
 	}
 
 	dispatchPayload, err := MarshalDispatched(Dispatched{
@@ -751,7 +788,7 @@ func (s *Scheduler) recordCacheHit(
 		CacheHit:  true,
 	})
 	if err != nil {
-		return false, err
+		return cacheMiss, err
 	}
 	statusPayload, err := proto.Marshal(&dholev1.JobStatus{
 		RunId:      runID,
@@ -762,7 +799,7 @@ func (s *Scheduler) recordCacheHit(
 		Outputs:    outputs,
 	})
 	if err != nil {
-		return false, fmt.Errorf("scheduler: encoding the cached result for %s/%s: %w",
+		return cacheMiss, fmt.Errorf("scheduler: encoding the cached result for %s/%s: %w",
 			runID, step.GetId(), err)
 	}
 
@@ -794,16 +831,16 @@ func (s *Scheduler) recordCacheHit(
 	case errors.Is(err, lease.ErrFenced):
 		// Superseded between the claim and the commit. Nothing was written,
 		// and the plane that owns the attempt will place it.
-		return true, nil
+		return cachePlacedElsewhere, nil
 	case err != nil:
-		return false, fmt.Errorf("scheduler: recording the cached result for %s/%s: %w",
+		return cacheMiss, fmt.Errorf("scheduler: recording the cached result for %s/%s: %w",
 			runID, step.GetId(), err)
 	}
 
 	// The one metric label that could not be true before: a step whose
 	// duration is the time it took to NOT run it.
 	obs.RecordStepDuration(ctx, tenantID, s.now().Sub(started), true, obs.OutcomeSucceeded)
-	return true, nil
+	return cacheServed, nil
 }
 
 // recordCacheEntry stores what a step produced, so the next run that asks the
@@ -2089,9 +2126,10 @@ func (s *Scheduler) offerGrace() time.Duration {
 // An offer no longer supersedes an offer of the same attempt, so the common
 // race is refused before it gets here. This remains the backstop for what can
 // still move a committed dispatch's fence: a sweeper withdrawing an offer in
-// the instant its commit lands (bounded, not excluded, by offerGrace), a cache
-// hit's Claim — which always supersedes — landing on a dispatched attempt, and
-// a plane from before the compare-and-set during a rolling upgrade.
+// the instant its commit lands (bounded, not excluded, by offerGrace) followed
+// by any other lease of that attempt — a racing offer or a cache hit's claim,
+// both compare-and-sets now — and a plane from before the compare-and-set
+// during a rolling upgrade.
 func (s *Scheduler) recordFencedOut(
 	ctx context.Context, tenantID, runID, stepID string, current uint64, state *runState,
 ) error {

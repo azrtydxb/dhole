@@ -26,12 +26,13 @@ import (
 // The caller's duty is to discard whatever the token was carrying.
 var ErrFenced = errors.New("lease: fence superseded")
 
-// ErrAlreadyOffered refuses an Offer for an attempt the step's lease already
-// carries — or a later one. Two Advances of one run that both find a step
-// ready both offer it, and the one that comes second must not take the fence
-// the first may already have dispatched under. Like ErrFenced it is a normal
-// outcome: somebody else is placing this attempt, and the refused caller
-// dispatches nothing.
+// ErrAlreadyOffered refuses an Offer or a Claim for an attempt the step's
+// lease already carries — or a later one. Two Advances of one run that both
+// find a step ready both lease it, whether to dispatch it, serve it from the
+// cache or run it on the plane, and the one that comes second must not take
+// the fence the first may already have acted under. Like ErrFenced it is a
+// normal outcome: somebody else is placing this attempt, and the refused
+// caller does nothing.
 var ErrAlreadyOffered = errors.New("lease: attempt already offered")
 
 // ErrTenantRequired refuses an unscoped lease. Every stored record in Dhole
@@ -85,13 +86,13 @@ func (w Waiting) Token() Token {
 
 // Manager hands out leases and detects the ones that died.
 //
-// Claim always supersedes: a step re-dispatched to a new engine takes a
+// Claim and Offer supersede only an EARLIER attempt: a step retried takes a
 // strictly higher fence, and the previous holder is fenced out from that
-// moment. Offer supersedes only an EARLIER attempt: an offer of an attempt the
-// lease already carries is refused with ErrAlreadyOffered, because the offer
-// it would replace may already have gone out in a dispatch. Renew deliberately
-// leaves the fence alone — a holder must not invalidate its own dispatch token
-// by proving it is alive.
+// moment. Leasing an attempt the lease already carries is refused with
+// ErrAlreadyOffered, because the lease it would replace may already have gone
+// out in a dispatch, a cache hit or a step the plane is running. Renew
+// deliberately leaves the fence alone — a holder must not invalidate its own
+// dispatch token by proving it is alive.
 //
 // A lease's heartbeat deadline belongs to a HOLDER. Claim is for a caller that
 // is the holder from the first instant (the plane running its own step), so
@@ -103,9 +104,11 @@ func (w Waiting) Token() Token {
 // taken was the kw defect: every step that had to wait for a slot was declared
 // lost after one TTL, re-dispatched, and lost again.
 type Manager interface {
-	// Claim takes the lease on a step for one attempt, superseding any current
-	// holder, and returns the token that must travel with the dispatch. The
-	// claimer is the holder, so the ttl runs from now.
+	// Claim takes the lease on a step for one attempt, superseding a holder
+	// of an earlier attempt and refusing, with ErrAlreadyOffered, when the
+	// lease is already at this attempt or a later one. It returns the token
+	// the attempt's result is recorded under. The claimer is the holder, so
+	// the ttl runs from now.
 	Claim(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error)
 	// Offer takes the lease on a step for an attempt handed to a work queue,
 	// superseding a holder of an earlier attempt and refusing, with

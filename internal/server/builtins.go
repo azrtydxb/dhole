@@ -222,11 +222,13 @@ type builtinJob struct {
 	tenantID string
 	runID    string
 	step     *dholev1.Step
+	// attempt is the attempt the advancing pass found the step ready for.
+	attempt uint32
 }
 
 // Take implements scheduler.BuiltinSteps.
 func (b *builtins) Take(
-	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, attempt uint32,
 ) (bool, error) {
 	if !strings.HasPrefix(step.GetPluginRef(), BuiltinScheme) {
 		return false, nil
@@ -249,7 +251,7 @@ func (b *builtins) Take(
 	b.mu.Unlock()
 
 	select {
-	case b.jobs <- builtinJob{tenantID: tenantID, runID: runID, step: step}:
+	case b.jobs <- builtinJob{tenantID: tenantID, runID: runID, step: step, attempt: attempt}:
 		return true, nil
 	case <-ctx.Done():
 		b.release(key)
@@ -386,15 +388,33 @@ func (b *builtins) gate(tenantID string) (*approval.Step, error) {
 // flight forever. The lease is claimed BEFORE the dispatch event, because a
 // dispatch that is recorded and then fails to be leased is the same
 // unrecoverable step this closes.
+//
+// And it is placed EXACTLY ONCE, across planes, by the discipline a dispatch to
+// an engine uses. Two planes whose Advances read the same log both hand the
+// step to their own dispatcher, and `running` is one process's memory; before
+// this, both claimed — the second superseding the first — both appended
+// STEP_DISPATCHED and both ran the step, which for a model call or an agent
+// calling tools is the effect twice. So: the attempt is the one the advancing
+// pass planned, never one counted afresh (a stale pass would count one past a
+// step that just finished and run it again); the claim is a compare-and-set
+// refused for an attempt already leased; the log is re-read after the claim,
+// for a dispatch whose lease had already gone; and STEP_DISPATCHED commits in
+// a transaction that validates the fence last. Only then does the step run.
+// A job that loses at any of those writes nothing and reports nothing: the
+// step is another pass's, and a failure recorded here would decide it.
 func (b *builtins) attempt(
 	ctx context.Context, job builtinJob,
 	do func(ctx context.Context, job builtinJob, attempt uint32) ([]*dholev1.OutputRef, error),
 ) (lease.Token, error) {
-	attempt, err := b.nextAttempt(ctx, job)
-	if err != nil {
-		return lease.Token{}, err
+	attempt := job.attempt
+	if attempt == 0 {
+		return lease.Token{}, errors.New("a builtin step was taken with no attempt to run it under")
 	}
 	token, err := b.claim(ctx, job, attempt)
+	if errors.Is(err, lease.ErrAlreadyOffered) {
+		// Another pass holds this attempt, or a later one.
+		return lease.Token{}, nil
+	}
 	if err != nil {
 		return lease.Token{}, err
 	}
@@ -403,6 +423,20 @@ func (b *builtins) attempt(
 	// was still working would have its own step swept out from under it.
 	stopRenewing := b.renew(ctx, token)
 	defer stopRenewing()
+
+	// The claim was a round trip. A pass whose lease had already expired and
+	// been swept may have recorded this attempt, and a claim over a swept key
+	// succeeds; the log is what says so.
+	dispatched, err := b.attemptOf(ctx, job)
+	if err != nil {
+		return token, err
+	}
+	if dispatched >= attempt {
+		// Left to expire unrenewed. The sweeper finds the attempt already
+		// recorded — finished, or lost with the lease that was swept — and
+		// records nothing more for it.
+		return lease.Token{}, nil
+	}
 
 	payload, err := scheduler.MarshalDispatched(scheduler.Dispatched{
 		Attempt: attempt,
@@ -415,14 +449,26 @@ func (b *builtins) attempt(
 	if err != nil {
 		return token, err
 	}
-	if err := b.store.Append(ctx, job.tenantID, runstore.Event{
-		RunID:   job.runID,
-		StepID:  job.step.GetId(),
-		Attempt: attempt,
-		Type:    runstore.StepDispatched,
-		Payload: payload,
-		At:      time.Now().UTC(),
-	}); err != nil {
+	err = b.store.WithTx(ctx, func(tx runstore.Tx) error {
+		if err := tx.Append(ctx, job.tenantID, runstore.Event{
+			RunID:   job.runID,
+			StepID:  job.step.GetId(),
+			Attempt: attempt,
+			Type:    runstore.StepDispatched,
+			Payload: payload,
+			At:      time.Now().UTC(),
+		}); err != nil {
+			return err
+		}
+		// Last, as a dispatch's is: a plane superseded since it claimed — its
+		// lease swept while it stalled — rolls the dispatch back here, and the
+		// plane that holds the attempt now is the only one that runs it.
+		return b.leases.Validate(ctx, token)
+	})
+	if errors.Is(err, lease.ErrFenced) {
+		return lease.Token{}, nil
+	}
+	if err != nil {
 		return token, err
 	}
 
