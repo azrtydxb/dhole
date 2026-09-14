@@ -439,6 +439,10 @@ func fullPipeline() *dholev1.Pipeline {
 				// mirror that dropped the binding would export a step reading
 				// nothing.
 				FileInputs: []*dholev1.FileInput{{Port: "status", Path: "Dockerfile"}},
+				// The secrets it asks for, by name (ADR 0027). A mirror that
+				// dropped them would export a step that is refused for want
+				// of a credential it no longer declares.
+				Secrets: []*dholev1.StepSecret{{Name: "harbor-robot", Env: "REGISTRY_PASSWORD"}},
 			},
 		},
 		Files: []*dholev1.File{{
