@@ -38,11 +38,11 @@ import (
 //     DHOLE_BLOB_DIR, because it starts no bucket. The SHAPE of a key is
 //     likewise the contract's: a key k for tenant t resolves at <tenant>/<key>
 //     and a content-addressed object at <tenant>/<algo>/<first two hex>/<hex>.
-//  3. HOW A SECRET IS REDEEMED. The contract says a handle is redeemed and
-//     never says on what subject or with what message. The suite serves a
-//     core-NATS request/reply on DHOLE_SECRET_SUBJECT: the request body is the
-//     handle, the reply body is the value, and a reply beginning "ERR " is a
-//     refusal.
+//  3. WHERE A SECRET IS REDEEMED. The exchange itself is the contract's now
+//     ("The redemption exchange"): a raw request carrying the handle on
+//     <base>.<tenant>, a raw reply carrying the value, "ERR " for a refusal.
+//     The BASE is the harness's to choose, and it hands it to the engine as
+//     DHOLE_SECRET_SUBJECT.
 //  4. HOW A FENCE IS COMPARED. Fence tokens are opaque strings with no stated
 //     ordering, so no case asks an engine to decide which of two fences is
 //     newer — only whether a fence EQUALS the one it holds.
@@ -517,9 +517,9 @@ func binaryArtifactCase() kase {
 func secretRedemptionCase() kase {
 	return kase{
 		name: "secret-redemption",
-		obligation: "An engine redeems a SecretRef handle for its value, binds it to the step, and never lets the " +
-			"VALUE appear in a LogChunk, in the authoritative log, in an OutputRef, or in a JobStatus error. " +
-			"(The redemption subject and reply shape are a harness convention: the contract does not define them.)",
+		obligation: "An engine redeems a SecretRef handle for its value on <DHOLE_SECRET_SUBJECT>.<tenant>, binds it " +
+			"to the step, and never lets the VALUE appear in a LogChunk, in the authoritative log, in an OutputRef, " +
+			"or in a JobStatus error.",
 		run: func(ctx context.Context, h *harness) error {
 			const value = "correcthorsebatterystaple"
 			handle := h.issueSecret(value)
@@ -552,7 +552,13 @@ func secretRedemptionCase() kase {
 			if n := h.redemptions(handle); n == 0 {
 				return fmt.Errorf("the engine never redeemed handle %q on %s; a SecretRef carries no value, so a "+
 					"step whose environment holds the handle instead of the secret sees a meaningless string",
-					handle, h.secretSubject())
+					handle, h.secretSubject()+"."+dispatchTenant)
+			}
+			if n := h.unscopedRedemptions(); n > 0 {
+				return fmt.Errorf("the engine redeemed %d time(s) on the unscoped %s; the contract requires "+
+					"<DHOLE_SECRET_SUBJECT>.<tenant> — here %s.%s — so the plane can refuse a handle of another "+
+					"tenant (docs/wire-contract.md, \"The redemption exchange\")",
+					n, h.secretSubject(), h.secretSubject(), dispatchTenant)
 			}
 			if len(status.GetOutputs()) != 1 {
 				return fmt.Errorf("expected 1 OutputRef for port \"proof\", got %d", len(status.GetOutputs()))

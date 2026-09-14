@@ -27,7 +27,7 @@ func TestAnEngineCannotBindAWorkQueueFilteredToAnotherTier(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"trusted", "untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 
@@ -78,7 +78,7 @@ func TestAnEngineCannotReachTheConsumerCreateEndpointsThatHideTheFilterSubject(t
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"trusted", "untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 
@@ -215,7 +215,7 @@ func TestAnEngineCannotPullFromAConsumerAnotherTiersEngineCreated(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"trusted", "untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 

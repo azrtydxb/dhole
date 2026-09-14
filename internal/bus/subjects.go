@@ -12,7 +12,8 @@ package bus
 //	engine.control.<engine-id>         plane  -> engine   EngineControl
 //	engine.heartbeat.<engine-id>       engine -> plane    EngineHeartbeat
 //	engine.registration                engine -> plane    EngineRegistration
-//	secret.redeem                      engine -> plane    handle -> value (raw)
+//	secret.redeem.<tenant>             engine -> plane    handle -> value (raw)
+//	secret.redeem                      engine -> plane    deprecated, unscoped (ADR 0028)
 
 // SubjectDispatch carries one JobDispatch to the tier and capability set it was
 // scheduled for. It is a work queue: exactly one engine receives each dispatch.
@@ -84,15 +85,41 @@ func SubjectEngineRegistration() string {
 	return "engine.registration"
 }
 
-// SubjectSecretRedeem is where an engine exchanges a SecretRef handle for the
-// value behind it: a raw request carrying the handle, a raw reply carrying the
-// value, or one beginning "ERR " to refuse. The control plane serves it.
+// SubjectSecretRedeem is the UNSCOPED redemption subject, and it is
+// deprecated (ADR 0028). An engine written before the subject named its
+// tenant requests here, and the plane goes on answering — taking the tenant
+// from the handle, as it always did — for as long as it accepts protocol
+// version 3, the version that change was made under. It is also the BASE a
+// deployment's DHOLE_SECRET_SUBJECT names, to which the tenant is appended.
 //
 // It is not under job.* because it is not addressed to a run: one step's
 // dispatch may carry handles issued for several bindings, and the responder
-// answers by handle alone. It is not under engine.* either — nothing about it
-// is per-engine, and putting it there would have engines subscribing to their
+// answers by handle. It is not under engine.* either — nothing about it is
+// per-engine, and putting it there would have engines subscribing to their
 // siblings' redemptions under the existing engine.> permission.
 func SubjectSecretRedeem() string {
 	return "secret.redeem"
+}
+
+// SubjectSecretRedeemFor is where an engine exchanges a SecretRef handle for
+// the value behind it: a raw request carrying the handle, a raw reply carrying
+// the value, or one beginning "ERR " to refuse. The control plane serves it.
+//
+// The tenant is in the subject because the plane serves redemption from one
+// connection and one broker, and wherever tenants share a NATS account the
+// subject is the only thing on the path that says whose request it is. With
+// it, the plane refuses a handle issued for another tenant, and a tier
+// credential may request on its own tenant's subject and no other.
+//
+// tenantID is one subject token, as internal/tenant.Validate guarantees for
+// every tenant id.
+func SubjectSecretRedeemFor(tenantID string) string {
+	return SubjectSecretRedeem() + "." + tenantID
+}
+
+// SubjectSecretRedeemAny is what the plane serves: every tenant's redemption
+// subject, one token past the base, so the tenant is read off the subject a
+// request arrived on. No engine credential may subscribe to it.
+func SubjectSecretRedeemAny() string {
+	return SubjectSecretRedeem() + ".*"
 }

@@ -46,10 +46,48 @@ func TestTheControlPlaneAnswersASecretRedemptionOnTheContractsSubject(t *testing
 	t.Cleanup(conn.Close)
 
 	redeemer := secrets.NewBusRedeemer(conn, bus.SubjectSecretRedeem())
-	value, err := redeemer.Redeem(ctx, ref)
+	value, err := redeemer.Redeem(ctx, "t1", ref)
 	require.NoError(t, err)
 	require.Equal(t, "correcthorsebatterystaple", value)
 
-	_, err = redeemer.Redeem(ctx, ref)
+	_, err = redeemer.Redeem(ctx, "t1", ref)
 	require.Error(t, err, "a handle is single-use, and the plane is what enforces it")
+}
+
+// TestTheLegacyRedemptionSubjectStillServesAnOlderEngine is the N-1 half of
+// ADR 0028. An engine written before the redemption subject named its tenant
+// requests on the bare secret.redeem, and the plane must go on answering it
+// for as long as it accepts that engine's protocol version — the tenant coming
+// from the handle, exactly as it did before.
+func TestTheLegacyRedemptionSubjectStillServesAnOlderEngine(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	srv, err := server.New(server.Config{
+		APIAddr:  "127.0.0.1:0",
+		Mode:     server.ModeEmbedded,
+		StoreDSN: filepath.Join(dir, "dhole.db"),
+		BlobRoot: filepath.Join(dir, "state"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, srv.Start(ctx))
+	t.Cleanup(func() {
+		stopCtx, stop := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stop()
+		require.NoError(t, srv.Stop(stopCtx))
+	})
+
+	ref, err := srv.Secrets().Issue("t1", "DHOLE_TEST_SECRET", "correcthorsebatterystaple", time.Minute)
+	require.NoError(t, err)
+
+	conn, err := bus.Connect(ctx, srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+
+	// Spelled the way an older engine spells it, not through the redeemer
+	// this build ships: the point is the bytes on the wire.
+	reply, err := conn.RequestRaw(ctx, "secret.redeem", []byte(ref.GetHandle()))
+	require.NoError(t, err, "nothing answered the legacy redemption subject")
+	require.Equal(t, "correcthorsebatterystaple", string(reply))
 }

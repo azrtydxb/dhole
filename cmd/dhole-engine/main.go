@@ -109,11 +109,11 @@ func run() error {
 
 	// Where this engine redeems the SecretRefs a dispatch carries, and the one
 	// thing that decides whether it advertises CAPABILITY_SECRETS at all. It
-	// defaults to the subject the wire contract names, on the connection the
-	// engine already opened: the control plane serves it, so a Dhole
-	// deployment can always answer. DHOLE_SECRET_SUBJECT overrides it for a
-	// deployment — or a conformance harness — that serves redemption
-	// elsewhere.
+	// defaults to the base the wire contract names, on the connection the
+	// engine already opened; each redemption is asked on `<base>.<tenant>`
+	// for the dispatch's tenant (ADR 0028). DHOLE_SECRET_SUBJECT overrides the
+	// base for a deployment — or a conformance harness — that serves
+	// redemption elsewhere.
 	//
 	// The redeemer is NOT built from the executor. Redeeming a reference is
 	// something this agent does over the bus before any sandbox exists, unlike

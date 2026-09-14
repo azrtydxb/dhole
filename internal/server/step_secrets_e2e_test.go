@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
 	"github.com/azrtydxb/dhole/internal/secrets"
@@ -116,6 +118,60 @@ func TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere(t *testing
 		}
 		return nil
 	}))
+}
+
+// TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd runs ADR 0028
+// through the single binary. The hosted engine redeems the step's handle on
+// its tenant's subject — and only there — and the plane refuses a handle
+// presented on any other tenant's, in both directions.
+func TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	src := secrets.NewMapSource()
+	src.Set(tenantID, "harbor-robot", stepSecretValue)
+	srv := startSecretPlane(ctx, t, dir, src)
+
+	// Observers on both subjects, answering nothing: the plane is the only
+	// responder, and these only count what the engine asked where.
+	watch, err := bus.Connect(ctx, srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(watch.Close)
+	var scoped, legacy atomic.Int32
+	stopScoped, err := watch.SubscribeEphemeral(ctx, bus.SubjectSecretRedeemFor(tenantID), func([]byte) { scoped.Add(1) })
+	require.NoError(t, err)
+	t.Cleanup(stopScoped)
+	stopLegacy, err := watch.SubscribeEphemeral(ctx, bus.SubjectSecretRedeem(), func([]byte) { legacy.Add(1) })
+	require.NoError(t, err)
+	t.Cleanup(stopLegacy)
+
+	runID, err := srv.Submit(ctx, tenantID, secretPipeline("push-on-the-tenant-subject"))
+	require.NoError(t, err)
+	events := awaitRunCompleted(ctx, t, srv, runID)
+	requireStepSucceeded(t, events, "push")
+	require.Equal(t, rot13(stepSecretValue), string(outputBytes(ctx, t, srv, events, "push", "proof")),
+		"the step did not see the declared secret's value in $REGISTRY_PASSWORD")
+	require.Positive(t, scoped.Load(), "the engine never redeemed on its tenant's subject")
+	require.Zero(t, legacy.Load(), "the engine redeemed on the unscoped legacy subject")
+
+	conn, err := bus.Connect(ctx, srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	redeemer := secrets.NewBusRedeemer(conn, bus.SubjectSecretRedeem())
+
+	mine, err := srv.Secrets().Issue(tenantID, "REGISTRY_PASSWORD", stepSecretValue, time.Minute)
+	require.NoError(t, err)
+	_, err = redeemer.Redeem(ctx, "globex", mine)
+	require.Error(t, err, "tenant globex redeemed a handle the plane issued for tenant %s", tenantID)
+	require.NotContains(t, err.Error(), stepSecretValue)
+	_, err = redeemer.Redeem(ctx, tenantID, mine)
+	require.Error(t, err, "a handle presented on another tenant's subject stayed redeemable")
+
+	theirs, err := srv.Secrets().Issue("globex", "REGISTRY_PASSWORD", "globex-value", time.Minute)
+	require.NoError(t, err)
+	_, err = redeemer.Redeem(ctx, tenantID, theirs)
+	require.Error(t, err, "tenant %s redeemed a handle the plane issued for tenant globex", tenantID)
 }
 
 // TestAStepDeclaringASecretThePlaneDoesNotHoldIsNeverDispatched: the run fails

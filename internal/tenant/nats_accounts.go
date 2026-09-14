@@ -31,6 +31,13 @@ var (
 		"engine.control.>",
 		"engine.heartbeat.>",
 		"engine.registration",
+		// Every tenant's redemption subject, inside this tenant's account:
+		// the account credential is the plane's identity here and serves
+		// secret.redeem.* (ADR 0028). The account is still the boundary; the
+		// token is what lets the plane refuse a handle of another tenant.
+		"secret.redeem.*",
+		// Deprecated, unscoped; served while the plane accepts protocol
+		// version 3.
 		"secret.redeem",
 		"_INBOX.>",
 		"$JS.API.>",
@@ -163,7 +170,7 @@ func ProvisionTierUser(ctx context.Context, srv *bus.Embedded, tenantID, tier st
 	if err := Validate(tenantID); err != nil {
 		return "", err
 	}
-	perms, err := bus.TierPermissions(tier)
+	perms, err := bus.TierPermissions(tenantID, tier)
 	if err != nil {
 		return "", fmt.Errorf("tenant: provision tier user: %w", err)
 	}

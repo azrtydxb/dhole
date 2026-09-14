@@ -383,7 +383,9 @@ func (e capableExecutor) Capabilities() []dholev1.Capability { return e.caps }
 // these cases carries a secret, so it is never asked.
 type nothingToRedeem struct{}
 
-func (nothingToRedeem) Redeem(context.Context, *dholev1.SecretRef) (string, error) { return "", nil }
+func (nothingToRedeem) Redeem(context.Context, string, *dholev1.SecretRef) (string, error) {
+	return "", nil
+}
 
 // concurrencyExecutor records the most sandboxes it ever had live at once.
 type concurrencyExecutor struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,7 +34,7 @@ type Embedded struct {
 // dir. It has no accounts: use it where the bus is entirely inside one trust
 // boundary, such as tests and single-user development.
 func StartEmbedded(dir string) (*Embedded, error) {
-	return StartEmbeddedWithTiers(dir, nil)
+	return StartEmbeddedWithTiers(dir, "", nil)
 }
 
 // StartEmbeddedWithTiers runs the embedded server with one user per trust tier
@@ -44,7 +45,11 @@ func StartEmbedded(dir string) (*Embedded, error) {
 // gets a permissions error from the server when it subscribes to another
 // tier's dispatch subjects. A Go-side check would be a convention; this is a
 // rule. See docs/wire-contract.md, "Subjects".
-func StartEmbeddedWithTiers(dir string, tiers []string) (*Embedded, error) {
+//
+// tenantID is the one tenant the tier users belong to: a tier credential is
+// always ONE tenant's, and the redemption subject it may request on is that
+// tenant's (ADR 0028). It is required whenever tiers are.
+func StartEmbeddedWithTiers(dir, tenantID string, tiers []string) (*Embedded, error) {
 	opts := &server.Options{
 		Host:      "127.0.0.1",
 		Port:      server.RANDOM_PORT,
@@ -56,6 +61,9 @@ func StartEmbeddedWithTiers(dir string, tiers []string) (*Embedded, error) {
 
 	users := make(map[string]string, len(tiers)+1)
 	if len(tiers) > 0 {
+		if err := validTenantToken(tenantID); err != nil {
+			return nil, err
+		}
 		planePassword, err := secret()
 		if err != nil {
 			return nil, err
@@ -78,7 +86,7 @@ func StartEmbeddedWithTiers(dir string, tiers []string) (*Embedded, error) {
 			opts.Users = append(opts.Users, &server.User{
 				Username:    tier,
 				Password:    password,
-				Permissions: tierPermissions(tier),
+				Permissions: tierPermissions(tenantID, tier),
 			})
 		}
 	}
@@ -196,14 +204,36 @@ func (e *Embedded) Close() {
 // A tier called `*` or `>` would not narrow anything — it would hand out every
 // tier's work and every tier's consumer API — so it is refused rather than
 // spelled into a permission.
-func TierPermissions(tier string) (*server.Permissions, error) {
+//
+// tenantID names the tenant whose redemption subject the credential may
+// request on, and it must be one subject token for the same reason: a tenant
+// of `*` would let the credential redeem on every tenant's subject, which is
+// the thing a tenant in the subject exists to refuse (ADR 0028).
+func TierPermissions(tenantID, tier string) (*server.Permissions, error) {
+	if err := validTenantToken(tenantID); err != nil {
+		return nil, err
+	}
 	if err := ValidTierToken(tier); err != nil {
 		return nil, err
 	}
-	return tierPermissions(tier), nil
+	return tierPermissions(tenantID, tier), nil
 }
 
-func tierPermissions(tier string) *server.Permissions {
+// validTenantToken refuses a tenant that is not exactly one subject token.
+// internal/tenant.Validate is narrower still, and this package cannot import
+// it; this is the part of that rule a permission depends on.
+func validTenantToken(tenantID string) error {
+	if tenantID == "" {
+		return fmt.Errorf("bus: tenant: empty; a tier credential belongs to exactly one tenant")
+	}
+	if strings.ContainsAny(tenantID, ".*> \t\r\n\f/\\") {
+		return fmt.Errorf("bus: tenant %q: must be a single subject token: "+
+			"no '.', '*', '>', '/', '\\' or whitespace", tenantID)
+	}
+	return nil
+}
+
+func tierPermissions(tenantID, tier string) *server.Permissions {
 	// Safe to ignore: every caller has already been through ValidTierToken,
 	// which is what makes the tier spellable as a stream name at all.
 	stream, _ := DispatchStreamName(tier)
@@ -215,7 +245,12 @@ func tierPermissions(tier string) *server.Permissions {
 		// Requesting only. An engine that could also SUBSCRIBE here
 		// would be able to answer a sibling's redemption with a value
 		// of its own choosing — credential substitution inside the
-		// tier this account exists to contain.
+		// tier this account exists to contain. And only on its OWN
+		// tenant's subject (ADR 0028).
+		SubjectSecretRedeemFor(tenantID),
+		// Deprecated: an engine written before ADR 0028 redeems on the
+		// unscoped subject. Withdrawn with the plane's support for
+		// protocol version 3.
 		SubjectSecretRedeem(),
 		"$JS.API.STREAM.INFO.>",
 		"$JS.API.STREAM.NAMES",

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -398,6 +399,8 @@ func subjectBuilders() map[string]string {
 		"SubjectEngineHeartbeat":    bus.SubjectEngineHeartbeat("engine-1"),
 		"SubjectEngineRegistration": bus.SubjectEngineRegistration(),
 		"SubjectSecretRedeem":       bus.SubjectSecretRedeem(),
+		"SubjectSecretRedeemFor":    bus.SubjectSecretRedeemFor("acme"),
+		"SubjectSecretRedeemAny":    bus.SubjectSecretRedeemAny(),
 	}
 }
 
@@ -645,4 +648,30 @@ func TestAnEngineInATenantAccountIsLimitedToItsOwnTier(t *testing.T) {
 		bus.SubjectDispatch("trusted", "abc"))
 	require.ErrorIs(t, err, bus.ErrPermissionDenied,
 		"an untrusted engine bound a work queue filtered to the trusted tier inside its tenant's account")
+
+	// Redemption, on the credential the deployment path issues: its own
+	// tenant's subject answers, and the plane serving every tenant's subject
+	// never hears a request this engine spelled for another (ADR 0028).
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	stop, err := plane.RespondRawSubject(ctx, bus.SubjectSecretRedeemAny(), func(subject string, _ []byte) []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, subject)
+		return []byte("value")
+	})
+	require.NoError(t, err)
+	t.Cleanup(stop)
+
+	_, err = engine.RequestRaw(ctx, bus.SubjectSecretRedeemFor("acme"), []byte("handle"))
+	require.NoError(t, err, "an engine was refused redemption on its own tenant's subject")
+	short, stopShort := context.WithTimeout(ctx, 2*time.Second)
+	defer stopShort()
+	_, err = engine.RequestRaw(short, bus.SubjectSecretRedeemFor("globex"), []byte("handle"))
+	require.Error(t, err, "an engine of tenant acme redeemed on another tenant's subject")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{bus.SubjectSecretRedeemFor("acme")}, seen)
 }

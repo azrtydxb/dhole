@@ -274,7 +274,11 @@ type harness struct {
 	beatCursor int
 	secrets    map[string]string
 	redeemed   map[string]int
-	seq        int
+	// unscoped counts redemptions asked on the bare DHOLE_SECRET_SUBJECT
+	// rather than on <subject>.<tenant>, which is what an engine written
+	// before ADR 0028 does.
+	unscoped int
+	seq      int
 }
 
 // secretSubjectName is where the suite serves secret redemption. The contract
@@ -371,14 +375,33 @@ func (h *harness) subscribe(ctx context.Context) error {
 	h.stop = append(h.stop, beats)
 
 	// Secret redemption, on the raw connection: the reply is a bare value, not
-	// a protobuf message, because the contract defines no message for it.
-	sub, err := h.raw.Subscribe(secretSubjectName, func(m *nats.Msg) {
+	// a protobuf message, because the contract defines no message for it. The
+	// tenant is the token after the base, and every handle this suite issues
+	// is its dispatch tenant's, so a request on any other tenant is refused.
+	sub, err := h.raw.Subscribe(secretSubjectName+".*", func(m *nats.Msg) {
+		if m.Subject != secretSubjectName+"."+dispatchTenant {
+			_ = m.Respond([]byte("ERR wrong tenant"))
+			return
+		}
+		_ = m.Respond(h.redeem(string(m.Data)))
+	})
+	if err != nil {
+		return fmt.Errorf("conformance: serving %s.*: %w", secretSubjectName, err)
+	}
+	h.stop = append(h.stop, func() { _ = sub.Unsubscribe() })
+	// The unscoped subject answers too, so an older engine's step still runs
+	// and the secret case can say precisely what it did instead of reporting a
+	// timeout.
+	legacy, err := h.raw.Subscribe(secretSubjectName, func(m *nats.Msg) {
+		h.mu.Lock()
+		h.unscoped++
+		h.mu.Unlock()
 		_ = m.Respond(h.redeem(string(m.Data)))
 	})
 	if err != nil {
 		return fmt.Errorf("conformance: serving %s: %w", secretSubjectName, err)
 	}
-	h.stop = append(h.stop, func() { _ = sub.Unsubscribe() })
+	h.stop = append(h.stop, func() { _ = legacy.Unsubscribe() })
 	return nil
 }
 
@@ -929,6 +952,12 @@ func (h *harness) redemptions(handle string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.redeemed[handle]
+}
+
+func (h *harness) unscopedRedemptions() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.unscoped
 }
 
 // readBlob reads an object by the key a JobStatus named. The store is a
