@@ -461,3 +461,16 @@ assistant), so building them means inventing data the plane cannot confirm.
 - Do the three, then the inspector's lease scope and cache sections.
 - Build the modals and assistant too, against invented data for now.
 - Leave the editor as it is; the shell was the ask.
+
+## Harbor at 192.168.10.131 now requires authentication (2026-09-14)
+
+Harbor moved from 192.168.10.123 (unreachable) to 192.168.10.131 and refuses
+anonymous push (`UNAUTHORIZED` on blob upload); anonymous pull still works.
+This blocks two things: pushing rebuilt Dhole images to redeploy kw, and the
+truenas-csi pipeline's `image` step. A credential must never pass through the
+conversation.
+
+- Log in locally and create the in-cluster secret myself (you give me nothing)
+- Point the pipeline and the kw deploys at a different registry
+- Skip pushing for now; fix everything that does not need the registry
+
