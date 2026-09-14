@@ -44,6 +44,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/containerd/v2/pkg/snapshotters"
 	"github.com/containerd/errdefs"
 	"github.com/distribution/reference"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -370,6 +371,15 @@ func (e *Executor) prepare(ctx context.Context, specImage string) (client.Image,
 			client.WithPullUnpack,
 			client.WithPullSnapshotter(snapshotter),
 			client.WithResolver(docker.NewResolver(e.resolver())),
+			// Without this a "lazy" pull is a full pull under another name. A
+			// remote snapshotter can only mount a layer it can find, and it
+			// finds it through labels naming the image reference and the
+			// layer digest; handed a snapshot with none, stargz declines the
+			// remote mount and containerd fetches and unpacks every layer
+			// itself. Measured on a real containerd with a working stargz
+			// snapshotter: a 539MB eStargz image fetched all 539MB until this
+			// line was added. The labels are inert for overlayfs.
+			client.WithImageHandlerWrapper(snapshotters.AppendInfoHandlerWrapper(pull)),
 		)
 		if err != nil {
 			return nil, "", fmt.Errorf("containerd executor: pull %s: %w", pull, err)

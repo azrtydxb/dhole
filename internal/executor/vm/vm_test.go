@@ -85,17 +85,14 @@ func TestVMExecutorContract(t *testing.T) {
 // what a host without it runs, and a fallback nobody holds to the contract is
 // a fallback that silently behaves differently on the day it is used.
 //
-// It has NOT yet been made to pass, and the reason is the guest image rather
-// than the backend. QEMU launches from these arguments and the guest resets
-// before printing a line — the Firecracker CI kernel does not boot on QEMU's
-// machine models, with or without KVM, with or without earlycon. A stock
-// distribution kernel boots the same initramfs and runs the agent, and then
-// the agent cannot open a vsock socket because that kernel ships vsock as a
-// loadable module the initramfs does not carry. What this backend needs is a
-// guest kernel with virtio-vsock built IN, and building one was out of scope
-// for the task that wrote this. Until there is one, setting
-// DHOLE_TEST_QEMU_BIN produces a real failure rather than a real pass, and CI
-// deliberately leaves it unset.
+// It needs a guest kernel that boots under QEMU's machine model AND has
+// virtio-vsock built in. The Firecracker CI kernel is neither: it resets under
+// QEMU's virt machine before printing a line. A stock distribution kernel boots
+// but ships vsock as a module the initramfs never loads, so the agent cannot
+// open its socket. hack/vm-guest/build-kernel.sh builds one that is both, and
+// the same image passes this contract and TestVMExecutorContract (see
+// docs/executors/vm.md). The host also needs /dev/vhost-vsock, which QEMU's
+// vhost-vsock-device opens and Firecracker does not.
 func TestQEMUExecutorContract(t *testing.T) {
 	executorContract(t, newExecutor(t, hypervisor(t, vm.QEMU, "DHOLE_TEST_QEMU_BIN")))
 }

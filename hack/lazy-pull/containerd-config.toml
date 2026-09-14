@@ -1,0 +1,12 @@
+# containerd with the stargz snapshotter as a proxy plugin, for
+# TestLazyPullFetchesFewerBytesThanFullImage. See docs/executors/containerd.md.
+version = 3
+disabled_plugins = ["io.containerd.grpc.v1.cri"]
+
+[proxy_plugins]
+  [proxy_plugins.stargz]
+    type = "snapshot"
+    address = "/run/containerd-stargz-grpc/containerd-stargz-grpc.sock"
+    [proxy_plugins.stargz.exports]
+      root = "/var/lib/containerd-stargz-grpc/"
+      enable_remote_snapshot_annotations = "true"

@@ -119,6 +119,38 @@ the rest of its life, warns, and retries. A snapshotter named explicitly in
 `Snapshotter` is never demoted: that is a configuration decision, and silently
 running somewhere else would hide it.
 
+Choosing the snapshotter is also not enough on its own. A remote snapshotter
+finds a layer through labels naming the image reference and the layer digest,
+which the pull has to attach (`snapshotters.AppendInfoHandlerWrapper`); a pull
+without them hands stargz a snapshot it cannot mount remotely, and containerd
+quietly fetches and unpacks every layer itself. Nothing fails and nothing
+warns — the pull is simply not lazy. That is exactly what this executor did
+until the byte count below was first run: the "lazy" start of a 539MB eStargz
+image fetched all 539MB.
+
+### Measuring lazy pull
+
+`TestLazyPullFetchesFewerBytesThanFullImage` starts a sandbox on a real eStargz
+image through a real containerd and stargz snapshotter, runs `true`, and counts
+the blob bytes on the wire with a reverse proxy in front of the registry. It
+then pulls the same image whole through the same proxy, and only believes the
+lazy count if the full count covers every layer — a counter that saw nothing
+would otherwise pass. It needs, beyond `DHOLE_TEST_CONTAINERD_SOCK`:
+
+- **a stargz snapshotter that works.** Run `containerd-stargz-grpc` beside
+  containerd with `hack/lazy-pull/containerd-config.toml`. The snapshotter
+  mounts FUSE, so it needs `/dev/fuse` and `CAP_SYS_ADMIN`. It was verified
+  with both daemons, and the test, in one container. The k3s node's built-in
+  stargz is not such a snapshotter.
+- **an eStargz fixture of at least 256MiB**, in `DHOLE_TEST_ESTARGZ_IMAGE`.
+  `hack/lazy-pull/build-fixture.sh REGISTRY` builds one: busybox plus 512MiB
+  of random bytes, converted with `nerdctl image convert --estargz`.
+
+On the kw cluster it ran in one privileged pod — containerd 2.3.3, runc 1.5.1
+and stargz-snapshotter 0.18.2 from the `nerdctl-full` 2.3.5 bundle, with a
+`registry:3` sidecar on `127.0.0.1:5000` — and measured 2,022,141 bytes for the
+lazy start against 539,022,137 for the full pull of a 539,021,633-byte image.
+
 ## Testing against a real containerd
 
 The tests create and destroy containers in their own containerd namespace and
