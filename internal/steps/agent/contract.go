@@ -294,6 +294,10 @@ type decideApprovalArgs struct {
 	RunID    string `json:"run_id"`
 	StepID   string `json:"step_id"`
 	Approved bool   `json:"approved"`
+	// Reason is required by the contract for an approval and a denial alike.
+	// It is passed through untouched: the server refuses an empty one, and
+	// that refusal is what the model should read.
+	Reason string `json:"reason"`
 }
 
 func (i *ContractInvoker) decideApproval(
@@ -304,7 +308,7 @@ func (i *ContractInvoker) decideApproval(
 		return nil, err
 	}
 	req := connect.NewRequest(&dholev1.DecideApprovalRequest{
-		RunId: a.RunID, StepId: a.StepID, Approved: a.Approved,
+		RunId: a.RunID, StepId: a.StepID, Approved: a.Approved, Reason: a.Reason,
 	})
 	i.authorize(req.Header())
 	res, err := i.client.DecideApproval(ctx, req)
@@ -319,6 +323,7 @@ func (i *ContractInvoker) decideApproval(
 		"step_id":  res.Msg.GetStepId(),
 		"approver": res.Msg.GetApprover(),
 		"approved": res.Msg.GetApproved(),
+		"reason":   res.Msg.GetReason(),
 	})
 }
 

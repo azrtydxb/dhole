@@ -2105,7 +2105,21 @@ type DecideApprovalRequest struct {
 	// Approve, releasing the run; or deny, which fails it. A denial is a
 	// decision rather than a pause: a run that stopped for no stated reason is
 	// the worst possible record of one.
-	Approved      bool `protobuf:"varint,3,opt,name=approved,proto3" json:"approved,omitempty"`
+	Approved bool `protobuf:"varint,3,opt,name=approved,proto3" json:"approved,omitempty"`
+	// Why, in the decider's own words. REQUIRED for an approval and a denial
+	// alike: "approved because the scan was a false positive" is worth as much
+	// six months later as a refusal, and a rule that only denials need a reason
+	// teaches people that approving is the unexamined default. It is recorded on
+	// the decision event beside the approver, trimmed.
+	//
+	// The field is additive, but the requirement is a behaviour change for a
+	// caller written before it existed: a request with no reason, or one that is
+	// only whitespace, is refused with INVALID_ARGUMENT naming the missing field
+	// rather than recorded without one. A stale client gets a refusal that says
+	// what to send; the alternative was a silently reason-less record of an
+	// at-most-once decision, which is the defect this field closes. The N-1
+	// compatibility promise is the engine protocol's, not this API's.
+	Reason        string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2161,15 +2175,24 @@ func (x *DecideApprovalRequest) GetApproved() bool {
 	return false
 }
 
+func (x *DecideApprovalRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 // DecideApprovalResponse is the decision as it was recorded, including the
 // approver the credential resolved to — which is what the caller could not
 // have chosen and therefore the one field worth reading back.
 type DecideApprovalResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	StepId        string                 `protobuf:"bytes,2,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
-	Approver      string                 `protobuf:"bytes,3,opt,name=approver,proto3" json:"approver,omitempty"`
-	Approved      bool                   `protobuf:"varint,4,opt,name=approved,proto3" json:"approved,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	RunId    string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	StepId   string                 `protobuf:"bytes,2,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	Approver string                 `protobuf:"bytes,3,opt,name=approver,proto3" json:"approver,omitempty"`
+	Approved bool                   `protobuf:"varint,4,opt,name=approved,proto3" json:"approved,omitempty"`
+	// The reason as it was recorded: trimmed, beside the approver.
+	Reason        string `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2230,6 +2253,13 @@ func (x *DecideApprovalResponse) GetApproved() bool {
 		return x.Approved
 	}
 	return false
+}
+
+func (x *DecideApprovalResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
 }
 
 // GetPluginRequest asks the catalog what one published plugin declares.
@@ -4081,16 +4111,18 @@ const file_dhole_v1_api_proto_rawDesc = "" +
 	"\x04type\x18\x05 \x01(\tR\x04type\x12\x18\n" +
 	"\apayload\x18\x06 \x01(\fR\apayload\x12 \n" +
 	"\fat_unix_nano\x18\a \x01(\x03R\n" +
-	"atUnixNano\"c\n" +
+	"atUnixNano\"{\n" +
 	"\x15DecideApprovalRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
-	"\bapproved\x18\x03 \x01(\bR\bapproved\"\x80\x01\n" +
+	"\bapproved\x18\x03 \x01(\bR\bapproved\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\x98\x01\n" +
 	"\x16DecideApprovalResponse\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
 	"\bapprover\x18\x03 \x01(\tR\bapprover\x12\x1a\n" +
-	"\bapproved\x18\x04 \x01(\bR\bapproved\"1\n" +
+	"\bapproved\x18\x04 \x01(\bR\bapproved\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\"1\n" +
 	"\x10GetPluginRequest\x12\x1d\n" +
 	"\n" +
 	"plugin_ref\x18\x01 \x01(\tR\tpluginRef\"\x83\x03\n" +

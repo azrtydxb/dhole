@@ -1040,7 +1040,7 @@ func TestAcceptanceAgentLoopAndApproval(t *testing.T) {
 	// --- the approval gate, decided by the principal the API authenticated --
 	awaitStep(ctx, t, srv, runID, "refine", runstore.StepSucceeded)
 	decidedAt := time.Now().UTC()
-	require.NoError(t, gate.Decide(ctx, runID, "approve", approver, true))
+	require.NoError(t, gate.Decide(ctx, runID, "approve", approver, true, "the acceptance pipeline is meant to ship"))
 
 	events := awaitRunCompleted(ctx, t, srv, runID)
 

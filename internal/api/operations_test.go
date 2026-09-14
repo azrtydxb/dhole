@@ -738,7 +738,7 @@ func callWithoutAuthorization(t *testing.T, h *harness, rpc string) error {
 		return err
 	case "DecideApproval":
 		_, err := h.client.DecideApproval(ctx, connect.NewRequest(&dholev1.DecideApprovalRequest{
-			RunId: "run-x", StepId: "approve", Approved: true,
+			RunId: "run-x", StepId: "approve", Approved: true, Reason: "credential check",
 		}))
 		return err
 	case "PutDefinitionFile":

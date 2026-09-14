@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 
@@ -96,7 +97,7 @@ func (s *Server) DecideApproval(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("api: decide approval: %w", err))
 	}
 
-	if err := gate.Decide(ctx, runID, stepID, p.Subject, req.Msg.GetApproved()); err != nil {
+	if err := gate.Decide(ctx, runID, stepID, p.Subject, req.Msg.GetApproved(), req.Msg.GetReason()); err != nil {
 		return nil, decisionError(err)
 	}
 	return connect.NewResponse(&dholev1.DecideApprovalResponse{
@@ -104,6 +105,9 @@ func (s *Server) DecideApproval(
 		StepId:   stepID,
 		Approver: p.Subject,
 		Approved: req.Msg.GetApproved(),
+		// Trimmed exactly as the gate trimmed it before recording, so the
+		// answer is the reason as the log holds it.
+		Reason: strings.TrimSpace(req.Msg.GetReason()),
 	}), nil
 }
 
@@ -125,6 +129,12 @@ func decisionError(err error) error {
 	case errors.Is(err, approval.ErrNotAwaiting):
 		return connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("api: decide approval: %w", err))
+	case errors.Is(err, approval.ErrReasonRequired):
+		// Including a caller written before the field existed: it is told
+		// what to send, rather than having its decision recorded with no
+		// reason beside it. See DecideApprovalRequest.reason.
+		return connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("api: decide approval: a reason is required, for an approval as much as a denial: %w", err))
 	case errors.Is(err, approval.ErrApproverRequired):
 		return connect.NewError(connect.CodeUnauthenticated,
 			fmt.Errorf("api: decide approval: %w", err))

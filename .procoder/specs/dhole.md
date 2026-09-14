@@ -96,7 +96,9 @@ and agent orchestration are profiles over a shared core.
   neither succeeds nor fails, its conversation is written to the run log, and a person's
   approval resumes the model's loop at the call it stopped on — with what is left of its
   step ceiling, never a fresh one. A denial ends the step and fails the run naming the
-  approver. Dhole adds model fingerprint capture, token and cost
+  approver. Every gate decision — approval and denial alike — carries a stated reason,
+  recorded on the decision event beside the approver; a decision without one is refused.
+  Dhole adds model fingerprint capture, token and cost
   accounting with per-run and per-pipeline ceilings, and full call recording.
 
 ## Out of scope
@@ -130,7 +132,9 @@ and agent orchestration are profiles over a shared core.
   Untrusted-tier work cannot reach privileged engines, unsigned plugins, or `at-most-once`
   steps without an approval gate. Subject-level authorization is enforced by the bus.
 - Compatibility: the wire schema is a public contract; the control plane supports N-1
-  engine protocol versions.
+  engine protocol versions. The N-1 promise is the engine protocol's: API clients (GUI,
+  CLI, agents) get additive schema changes only, but a newly required request field may
+  refuse an older client with `InvalidArgument` naming what is missing.
 - Operational: single-binary deployment must work with no external dependencies.
 - Toolchain: Go 1.26+, required by `go-ai-sdk` (S-21).
 

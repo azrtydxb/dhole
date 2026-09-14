@@ -332,7 +332,7 @@ type harness struct {
 func (h *harness) decide(ctx context.Context, t *testing.T, subject string, approved bool) {
 	t.Helper()
 	require.NoError(t, h.local.CreateUser(ctx, h.tenant, subject, "test-secret"))
-	require.NoError(t, h.gate.Decide(ctx, testRun, agentStep, subject, approved))
+	require.NoError(t, h.gate.Decide(ctx, testRun, agentStep, subject, approved, "decided by the agent test"))
 }
 
 // newHarness is the no-gate case: SQLite, a real approval gate behind it.

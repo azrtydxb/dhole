@@ -36,6 +36,11 @@ const (
 	// denier is a second real principal: a decision is refused for being a
 	// second decision, not for being made by a stranger.
 	denier = "bob"
+
+	// The reasons a decision is given. Every decision carries one: a
+	// reason-less record of an at-most-once effect is a boolean and a name.
+	shipReason = "the scan finding is a false positive, see SEC-114"
+	holdReason = "the change freeze runs until Monday"
 )
 
 // TestApprovalGateBlocksUntilDecided is the human half of ADR 0003: a run that
@@ -56,7 +61,7 @@ func TestApprovalGateBlocksUntilDecided(t *testing.T) {
 		require.Empty(t, h.drain(ctx, t),
 			"nothing runs while the approval is outstanding — not the gate, not what is behind it")
 
-		require.NoError(t, h.step.Decide(ctx, testRun, "gate", approver, true))
+		require.NoError(t, h.step.Decide(ctx, testRun, "gate", approver, true, shipReason))
 
 		require.Equal(t, []string{"after"}, h.drain(ctx, t),
 			"the step behind the gate ran once the decision was recorded")
@@ -81,7 +86,7 @@ func TestApprovalDenialFailsRunWithReason(t *testing.T) {
 		h := newHarness(ctx, t, open)
 
 		require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship release 4.2?"))
-		require.NoError(t, h.step.Decide(ctx, testRun, "gate", denier, false))
+		require.NoError(t, h.step.Decide(ctx, testRun, "gate", denier, false, holdReason))
 
 		failed := h.event(ctx, t, scheduler.RunFailed)
 		require.Contains(t, string(failed.Payload), denier,
@@ -118,13 +123,14 @@ func TestSecondDecisionIsRefused(t *testing.T) {
 		h := newHarness(ctx, t, open)
 
 		require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship it?"))
-		require.NoError(t, h.step.Decide(ctx, testRun, "gate", approver, true))
+		require.NoError(t, h.step.Decide(ctx, testRun, "gate", approver, true, shipReason))
 
-		err := h.step.Decide(ctx, testRun, "gate", approver, true)
+		err := h.step.Decide(ctx, testRun, "gate", approver, true, shipReason)
 		require.ErrorIs(t, err, approval.ErrAlreadyDecided)
 		require.Contains(t, err.Error(), approver, "the refusal names the standing decision")
+		require.Contains(t, err.Error(), shipReason, "and the reason it was given")
 
-		err = h.step.Decide(ctx, testRun, "gate", denier, false)
+		err = h.step.Decide(ctx, testRun, "gate", denier, false, holdReason)
 		require.ErrorIs(t, err, approval.ErrAlreadyDecided)
 
 		require.Equal(t, 1, h.countEvents(ctx, t, approval.StepApprovalDecided),
@@ -142,20 +148,89 @@ func TestDecideRefusesAnUnknownOrEmptyApprover(t *testing.T) {
 		h := newHarness(ctx, t, open)
 		require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship it?"))
 
-		err := h.step.Decide(ctx, testRun, "gate", "", true)
+		err := h.step.Decide(ctx, testRun, "gate", "", true, shipReason)
 		require.ErrorIs(t, err, approval.ErrApproverRequired)
 
-		err = h.step.Decide(ctx, testRun, "gate", "   ", true)
+		err = h.step.Decide(ctx, testRun, "gate", "   ", true, shipReason)
 		require.ErrorIs(t, err, approval.ErrApproverRequired)
 
 		// A subject that is not a principal of this tenant is not an
 		// approver, however plausible the string is.
-		err = h.step.Decide(ctx, testRun, "gate", "mallory", true)
+		err = h.step.Decide(ctx, testRun, "gate", "mallory", true, shipReason)
 		require.ErrorIs(t, err, approval.ErrUnknownApprover)
 
 		require.Zero(t, h.countEvents(ctx, t, approval.StepApprovalDecided))
 		require.NoError(t, h.sched.Advance(ctx, h.tenant, testRun))
 		require.Empty(t, h.drain(ctx, t), "the gate is still shut")
+	})
+}
+
+// TestDecideRefusesADecisionWithNoReason: an approval AND a denial each need a
+// stated reason. "Approved because the scan was a false positive" is worth as
+// much six months later as a refusal, and a rule that only denials need one
+// teaches people that approving is the unexamined default. The refusal comes
+// before anything is written, so the gate stays exactly as it was.
+func TestDecideRefusesADecisionWithNoReason(t *testing.T) {
+	eachStore(t, func(t *testing.T, open storeOpener) {
+		ctx := testContext(t)
+		h := newHarness(ctx, t, open)
+		require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship it?"))
+
+		for _, approved := range []bool{true, false} {
+			for _, reason := range []string{"", "   \t\n"} {
+				err := h.step.Decide(ctx, testRun, "gate", approver, approved, reason)
+				require.ErrorIs(t, err, approval.ErrReasonRequired,
+					"approved=%v with reason %q was not refused for its missing reason", approved, reason)
+			}
+		}
+
+		require.Zero(t, h.countEvents(ctx, t, approval.StepApprovalDecided),
+			"a decision with no reason was recorded")
+		require.Zero(t, h.countEvents(ctx, t, scheduler.RunFailed))
+		require.NoError(t, h.sched.Advance(ctx, h.tenant, testRun))
+		require.Empty(t, h.drain(ctx, t), "the gate is still shut")
+	})
+}
+
+// TestDecisionRecordsItsReason: the reason sits on the decision event beside
+// the approver — for an approval as well as a denial — and a denial's terminal
+// RUN_FAILED quotes it, because that is the event a person reading a failed
+// run reads first.
+func TestDecisionRecordsItsReason(t *testing.T) {
+	t.Run("approval", func(t *testing.T) {
+		eachStore(t, func(t *testing.T, open storeOpener) {
+			ctx := testContext(t)
+			h := newHarness(ctx, t, open)
+			require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship it?"))
+			require.NoError(t, h.step.Decide(ctx, testRun, "gate", approver, true, "  "+shipReason+"\n"))
+
+			decision, err := approval.UnmarshalDecision(h.event(ctx, t, approval.StepApprovalDecided).Payload)
+			require.NoError(t, err)
+			require.Equal(t, approver, decision.Approver)
+			require.Equal(t, shipReason, decision.Reason,
+				"the approval's stated reason is not on its decision event, trimmed")
+		})
+	})
+	t.Run("denial", func(t *testing.T) {
+		eachStore(t, func(t *testing.T, open storeOpener) {
+			ctx := testContext(t)
+			h := newHarness(ctx, t, open)
+			require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship it?"))
+			require.NoError(t, h.step.Decide(ctx, testRun, "gate", denier, false, holdReason))
+
+			decision, err := approval.UnmarshalDecision(h.event(ctx, t, approval.StepApprovalDecided).Payload)
+			require.NoError(t, err)
+			require.Equal(t, denier, decision.Approver)
+			require.False(t, decision.Approved)
+			require.Equal(t, holdReason, decision.Reason,
+				"the denial's stated reason is not on its decision event")
+
+			denial, err := approval.UnmarshalDenial(h.event(ctx, t, scheduler.RunFailed).Payload)
+			require.NoError(t, err)
+			require.Contains(t, denial.Reason, holdReason,
+				"the run failed without quoting why it was denied")
+			require.Contains(t, denial.Reason, denier)
+		})
 	})
 }
 
@@ -184,7 +259,7 @@ func TestApprovalIsTenantScoped(t *testing.T) {
 		require.NoError(t, h.step.Request(ctx, testRun, "gate", "ship it?"))
 		// The other tenant's approver decides on a run that is not theirs:
 		// under their own scope there is no such gate.
-		require.Error(t, elsewhere.Decide(ctx, testRun, "gate", approver, true))
+		require.Error(t, elsewhere.Decide(ctx, testRun, "gate", approver, true, shipReason))
 
 		require.Zero(t, h.countEvents(ctx, t, approval.StepApprovalDecided))
 		require.NoError(t, h.sched.Advance(ctx, h.tenant, testRun))
@@ -200,7 +275,7 @@ func TestDecideBeforeRequestIsRefused(t *testing.T) {
 		ctx := testContext(t)
 		h := newHarness(ctx, t, open)
 
-		err := h.step.Decide(ctx, testRun, "gate", approver, true)
+		err := h.step.Decide(ctx, testRun, "gate", approver, true, shipReason)
 		require.ErrorIs(t, err, approval.ErrNotAwaiting)
 		require.Zero(t, h.countEvents(ctx, t, approval.StepApprovalDecided))
 	})
