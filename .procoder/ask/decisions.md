@@ -501,3 +501,17 @@ permits, and it is not an implementer's to invent.
 - Wire it and ship a restrictive default for secrets (e.g. a secret is readable
   only by a step whose plugin is signed, or only in a named tier), accepting
   that some pipelines stop running on upgrade until an operator allows them.
+
+**Answer (2026-09-14):** wire it and ship a permissive default rule set (every existing step
+allowed, every secret allowed) that operators tighten, so the audit trail exists from day one.
+
+## Do edit operations refuse a secret on a step without CAPABILITY_SECRETS? (2026-09-14)
+
+`SetStepSecret` accepts a binding on a step that does not declare `CAPABILITY_SECRETS`;
+`Validate` reports it as an error in the scheduler's words and dispatch refuses the step.
+Refusing it in the operation would make undoing the edit that added the capability refusable.
+
+- Keep as is: operations stay invertible; the broken state is flagged and never runs.
+- Refuse in the operation, accepting that some undos can be refused.
+
+**Answer (2026-09-14):** keep as is.
