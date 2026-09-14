@@ -165,7 +165,7 @@ and agent orchestration are profiles over a shared core.
 - Bus subject layout as an engine-author-facing contract: `job.dispatch.<tier>.<caps>`,
   `job.status.<run>.<step>`, `job.logs.<run>.<step>`, `engine.control.<engine-id>`,
   `engine.heartbeat.<engine-id>`, and `job.accept.<run>.<step>` — the request/reply on which
-  an engine confirms a dispatch's fence is still current before starting it (ADR 0028).
+  an engine confirms a dispatch's fence is still current before starting it (ADR 0029).
 - Executor interface: `acquire`, `exec`, `put`/`get`, `signal`, `release`.
 
 ## Data

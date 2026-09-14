@@ -19,7 +19,7 @@ import (
 )
 
 // TestThePlaneAnswersAnAcceptanceRequestByTheLease is the plane's half of
-// ADR 0028, through the real server. An engine asks, before it starts a
+// ADR 0029, through the real server. An engine asks, before it starts a
 // dispatch, whether the dispatch's fence is still the step's lease: a
 // superseded fence is answered FENCED, the current one CURRENT — and CURRENT
 // is the engine accepting the lease, exactly as its ACCEPTED status is, so the

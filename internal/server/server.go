@@ -510,7 +510,7 @@ func (s *Server) Start(ctx context.Context) error {
 		Tier:        DefaultTier,
 		LeaseTTL:    s.cfg.LeaseTTL,
 		// serve answers job.accept.* before anything is dispatched, so every
-		// dispatch may tell its engine to ask (ADR 0028).
+		// dispatch may tell its engine to ask (ADR 0029).
 		ConfirmAcceptance: true,
 		OS:                runtime.GOOS,
 		Arch:              runtime.GOARCH,
@@ -869,7 +869,7 @@ func (s *Server) renewHeld(ctx context.Context, beat *dholev1.EngineHeartbeat) {
 // fenceOut stops an attempt an engine is still running under a fence that has
 // been superseded, by sending it the Cancel an operator's cancel sends — under
 // the fence the engine HOLDS, which is the one fence it will obey
-// (docs/wire-contract.md, "Heartbeats and orphans"; ADR 0028).
+// (docs/wire-contract.md, "Heartbeats and orphans"; ADR 0029).
 //
 // The engine has been overtaken: its lease expired while it was partitioned,
 // or its dispatch was re-issued, and a newer attempt owns the step. Its result
@@ -901,7 +901,7 @@ func (s *Server) fenceOut(ctx context.Context, engineID string, held *dholev1.In
 }
 
 // serveAcceptance answers engines asking, before they start a dispatch,
-// whether its fence is still the step's lease (Scheduler.Accept, ADR 0028).
+// whether its fence is still the step's lease (Scheduler.Accept, ADR 0029).
 //
 // Every reply is sent, UNSPECIFIED with the reason included: an engine waiting
 // on an at-most-once step retries on it, and one with nothing to retry on

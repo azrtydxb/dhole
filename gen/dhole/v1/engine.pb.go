@@ -421,7 +421,7 @@ type JobDispatch struct {
 	// ACCEPTANCE_FENCED. A dispatch that sat in the queue while its attempt was
 	// declared lost and re-dispatched is otherwise run a second time for nobody,
 	// which for an at-most-once step is the side effect happening twice
-	// (ADR 0028). Unset on a dispatch from a plane that predates it: such a
+	// (ADR 0029). Unset on a dispatch from a plane that predates it: such a
 	// plane answers nothing, and an engine starts the step without asking.
 	ConfirmAcceptance bool `protobuf:"varint,14,opt,name=confirm_acceptance,json=confirmAcceptance,proto3" json:"confirm_acceptance,omitempty"`
 	unknownFields     protoimpl.UnknownFields

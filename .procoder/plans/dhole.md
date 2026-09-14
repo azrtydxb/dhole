@@ -1476,7 +1476,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       and the plane's refusal of a stale status only discards the RESULT. It
       holds for any genuine loss, not only that race: a dispatch redelivered
       after its engine died is still queued under a dead fence. For an
-      AT_MOST_ONCE step the external effect happens twice. The fix (ADR 0028):
+      AT_MOST_ONCE step the external effect happens twice. The fix (ADR 0029):
       a plane that serves `job.accept.<run>.<step>` sets
       `JobDispatch.confirm_acceptance`; an engine handed one asks there with
       its `JobStatus{PHASE_ACCEPTED}` once it holds a slot and before it holds
@@ -1535,7 +1535,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       ignoring FENCED, the Python engine nacking, and the Go engine never
       confirming. A superseded running attempt on the plane's own engine was
       cancelled 4.8s after its lease was. No protocol version bump: the flag
-      is what tells an engine somebody answers (ADR 0028). `buf breaking`
+      is what tells an engine somebody answers (ADR 0029). `buf breaking`
       against this branch's base is clean; against today's main it reports
       only main's own `api.proto` field removals, which this change does not
       touch.

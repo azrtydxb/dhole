@@ -15,7 +15,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/executor/process"
 )
 
-// acceptancePlane plays the control plane's half of ADR 0028: it answers every
+// acceptancePlane plays the control plane's half of ADR 0029: it answers every
 // acceptance request with whatever verdict the test gave the fence, and
 // remembers every request it was asked, so a case can tell an engine that asked
 // once from one that asked again on a redelivery — or never asked at all.

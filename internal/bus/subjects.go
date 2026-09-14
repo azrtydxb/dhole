@@ -65,7 +65,7 @@ func SubjectStatus(runID, stepID string) string {
 // carries confirm_acceptance, whether that dispatch's fence is still the step's
 // current lease. It is a core request/reply, NOT a stream subject: the answer
 // must come from a plane reading the lease now, and a durable subject would be
-// answered by JetStream's own publish acknowledgement instead (ADR 0028).
+// answered by JetStream's own publish acknowledgement instead (ADR 0029).
 //
 // It is under job.* rather than job.status.* because job.status.> is captured
 // by the status stream, and a request published into a stream is answered by

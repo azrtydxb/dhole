@@ -671,7 +671,7 @@ func (a *Agent) run(ctx context.Context, d *dholev1.JobDispatch) (*dholev1.JobSt
 	// run: a superseded dispatch must leave no trace but its acknowledgement.
 	// After the slot, not before it — an answer of CURRENT accepts the lease,
 	// and a lease accepted while the dispatch still waited for a slot, listed
-	// in no heartbeat, would be declared lost one TTL later (ADR 0028).
+	// in no heartbeat, would be declared lost one TTL later (ADR 0029).
 	if v := a.confirm(ctx, d); v != start {
 		return nil, v
 	}

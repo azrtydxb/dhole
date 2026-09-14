@@ -33,7 +33,7 @@ const (
 )
 
 // confirm asks the control plane whether this dispatch may still start
-// (docs/wire-contract.md, "Fence tokens"; ADR 0028).
+// (docs/wire-contract.md, "Fence tokens"; ADR 0029).
 //
 // It exists because the fence used to be enforced only on the way back. A
 // dispatch that waited in the queue while its attempt was declared lost and

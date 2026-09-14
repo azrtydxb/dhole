@@ -305,7 +305,7 @@ type Config struct {
 	// job.accept.* (see Accept), and so stamps confirm_acceptance on what it
 	// dispatches: an engine handed such a dispatch asks before it starts it,
 	// and never starts one whose fence was superseded while it waited
-	// (ADR 0028). False — a scheduler nobody serves Accept for — dispatches
+	// (ADR 0029). False — a scheduler nobody serves Accept for — dispatches
 	// without the flag, and an engine then starts the step without asking,
 	// which is exactly what it did before the flag existed. Set it only where
 	// something really answers: an at-most-once step waits for an answer.
@@ -1264,7 +1264,7 @@ func (s *Scheduler) recordOrphan(ctx context.Context, orphan lease.Orphan) (bool
 }
 
 // Accept answers an engine that asks, before it starts a dispatch, whether
-// the dispatch may still run (ADR 0028). st is the ACCEPTED status the engine
+// the dispatch may still run (ADR 0029). st is the ACCEPTED status the engine
 // is about to publish.
 //
 // CURRENT is the engine accepting the lease — the same Renew its ACCEPTED

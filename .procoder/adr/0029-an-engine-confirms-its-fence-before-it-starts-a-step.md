@@ -1,4 +1,4 @@
-# 0028 — An engine confirms its fence before it starts a step
+# 0029 — An engine confirms its fence before it starts a step
 
 Status: accepted
 Date: 2026-09-14

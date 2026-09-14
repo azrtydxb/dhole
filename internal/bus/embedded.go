@@ -219,7 +219,7 @@ func tierPermissions(tier string) *server.Permissions {
 		SubjectSecretRedeem(),
 		// Requesting only, for the same reason: an engine that could
 		// subscribe could answer a sibling's acceptance CURRENT for a
-		// dispatch the plane would refuse (ADR 0028).
+		// dispatch the plane would refuse (ADR 0029).
 		SubjectAcceptWildcard(),
 		"$JS.API.STREAM.INFO.>",
 		"$JS.API.STREAM.NAMES",

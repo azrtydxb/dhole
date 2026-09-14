@@ -335,7 +335,7 @@ func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 // job.accept.<run>.<step> before it starts a dispatch; the control plane
 // answers. An engine allowed to SUBSCRIBE there could answer a sibling's
 // request CURRENT for a dispatch the plane would have refused, and the
-// superseded attempt would run again (ADR 0028).
+// superseded attempt would run again (ADR 0029).
 func TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -346,7 +346,7 @@ it dies — in both cases the message still on the queue carries a fence that is
 no longer current. Found on a real cluster: a superseded dispatch started a
 sandbox that ran `build` for nobody for five minutes, beside the attempt that
 replaced it. For an `at-most-once` step that is its side effect happening twice
-([ADR 0028](../.procoder/adr/0028-an-engine-confirms-its-fence-before-it-starts-a-step.md)).
+([ADR 0029](../.procoder/adr/0029-an-engine-confirms-its-fence-before-it-starts-a-step.md)).
 
 So a control plane that can answer sets `JobDispatch.confirm_acceptance`, and an
 engine handed such a dispatch must ask before it starts it:
