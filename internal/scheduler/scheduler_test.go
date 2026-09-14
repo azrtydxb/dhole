@@ -729,6 +729,12 @@ func TestAdvanceSkipsAStepAnotherPlaneDispatchedWhileItWasClaiming(t *testing.T)
 // open-run tick and an arriving status are two Advances of the same run, and
 // the log showed STEP_DISPATCHED b once with its engine's reports fenced at 4
 // against a lease at 5.
+//
+// An offer no longer supersedes one of the same attempt, so a racing offer is
+// simply refused (TestTwoAdvancesOfOneRunDispatchAStepOnceAndLoseNoAttempt).
+// What still lets it land is the committed offer having been withdrawn first —
+// a sweeper that read the log an instant before the commit — and that is the
+// case reproduced here, by withdrawing it by hand while the slow plane waits.
 func TestADispatchFencedOutByARacingOfferIsNotLeftWaitingForever(t *testing.T) {
 	ctx := testContext(t)
 	h := newHarness(ctx, t, readyEngine("e1"))
@@ -746,18 +752,18 @@ func TestADispatchFencedOutByARacingOfferIsNotLeftWaitingForever(t *testing.T) {
 
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"a"}, h.drain(ctx, t))
+	committed := h.latestDispatch(t, "a")
+	require.NoError(t, h.leases.Withdraw(ctx, mustFence(t, committed)))
 	close(gate.release)
 	require.NoError(t, <-done)
 
 	// The engine runs the dispatch it was given and reports, as it would.
-	committed := h.latestDispatch(t, "a")
 	h.report(ctx, t, h.sched, committed, dholev1.Phase_PHASE_ACCEPTED)
 	h.succeed(ctx, t, "a")
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 
-	if h.countEvents(ctx, t, runstore.StepSucceeded, "a") == 1 {
-		return // the committed dispatch survived the race: nothing to recover
-	}
+	require.Zero(t, h.countEvents(ctx, t, runstore.StepSucceeded, "a"),
+		"the fenced-out dispatch's report was applied")
 	require.Equal(t, 1, h.countEvents(ctx, t, scheduler.StepAttemptLost, "a"),
 		"a dispatch whose fence was superseded can never report, and nothing said so")
 	require.Equal(t, []string{"a", "a"}, h.drain(ctx, t),
@@ -776,7 +782,10 @@ func TestTheSweeperRecoversADispatchFencedOutByAPlaneThatDiedBeforeNoticing(t *t
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"a"}, h.drain(ctx, t))
 
-	// Another plane offers the same attempt and dies on the spot.
+	// The committed offer is withdrawn by a sweeper that read the log an
+	// instant before the commit, and another plane whose read was just as
+	// stale offers the same attempt and dies on the spot.
+	require.NoError(t, h.leases.Withdraw(ctx, mustFence(t, h.latestDispatch(t, "a"))))
 	_, err := h.leases.Offer(ctx, testTenant, testRun, "a", 1, scheduler.DefaultLeaseTTL)
 	require.NoError(t, err)
 

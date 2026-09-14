@@ -26,6 +26,14 @@ import (
 // The caller's duty is to discard whatever the token was carrying.
 var ErrFenced = errors.New("lease: fence superseded")
 
+// ErrAlreadyOffered refuses an Offer for an attempt the step's lease already
+// carries — or a later one. Two Advances of one run that both find a step
+// ready both offer it, and the one that comes second must not take the fence
+// the first may already have dispatched under. Like ErrFenced it is a normal
+// outcome: somebody else is placing this attempt, and the refused caller
+// dispatches nothing.
+var ErrAlreadyOffered = errors.New("lease: attempt already offered")
+
 // ErrTenantRequired refuses an unscoped lease. Every stored record in Dhole
 // carries a tenant scope, and a lease is a stored record.
 var ErrTenantRequired = errors.New("tenant scope required")
@@ -59,14 +67,31 @@ type Waiting struct {
 	StepID   string
 	Attempt  uint32
 	Fence    uint64
+	// OfferedAt is when the offer was written, by the offering plane's clock.
+	// An offer whose plane died before committing its dispatch is never
+	// accepted and, since an offer does not supersede one of the same attempt,
+	// never replaced either; its age is how a sweeper decides that no commit
+	// can still be on its way (see Withdraw).
+	OfferedAt time.Time
+}
+
+// Token is the lease token of the waiting offer, for Withdraw.
+func (w Waiting) Token() Token {
+	// A Waiting is only ever built from a key that encoded, so this cannot
+	// fail; if it somehow did, an empty Value is refused as ErrFenced.
+	key, _ := claimKey(w.TenantID, w.RunID, w.StepID)
+	return Token{Value: key, Fence: w.Fence}
 }
 
 // Manager hands out leases and detects the ones that died.
 //
-// Claim and Offer always supersede: a step re-dispatched to a new engine takes
-// a strictly higher fence, and the previous holder is fenced out from that
-// moment. Renew deliberately leaves the fence alone — a holder must not
-// invalidate its own dispatch token by proving it is alive.
+// Claim always supersedes: a step re-dispatched to a new engine takes a
+// strictly higher fence, and the previous holder is fenced out from that
+// moment. Offer supersedes only an EARLIER attempt: an offer of an attempt the
+// lease already carries is refused with ErrAlreadyOffered, because the offer
+// it would replace may already have gone out in a dispatch. Renew deliberately
+// leaves the fence alone — a holder must not invalidate its own dispatch token
+// by proving it is alive.
 //
 // A lease's heartbeat deadline belongs to a HOLDER. Claim is for a caller that
 // is the holder from the first instant (the plane running its own step), so
@@ -83,8 +108,10 @@ type Manager interface {
 	// claimer is the holder, so the ttl runs from now.
 	Claim(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error)
 	// Offer takes the lease on a step for an attempt handed to a work queue,
-	// superseding any current holder. It does not expire until it has been
-	// accepted by a Renew; from then on ttl is its heartbeat window.
+	// superseding a holder of an earlier attempt and refusing, with
+	// ErrAlreadyOffered, when the lease is already at this attempt or a later
+	// one. It does not expire until it has been accepted by a Renew; from then
+	// on ttl is its heartbeat window.
 	Offer(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error)
 	// Renew extends the lease behind t without moving its fence, and accepts
 	// it if it was an offer. A token that is no longer current is refused with
@@ -101,6 +128,11 @@ type Manager interface {
 	// Unaccepted lists the current offers no holder has accepted yet. It
 	// changes nothing.
 	Unaccepted(ctx context.Context) ([]Waiting, error)
+	// Withdraw removes the unaccepted offer behind t, at exactly its fence, so
+	// the attempt can be offered again. Anything else — a record that has
+	// moved on, a key already gone, an offer somebody has accepted — is
+	// refused with ErrFenced and nothing is removed.
+	Withdraw(ctx context.Context, t Token) error
 }
 
 var _ Manager = (*KV)(nil)

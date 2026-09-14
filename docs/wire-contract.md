@@ -304,7 +304,12 @@ best-effort**; see Logs below.
 
 1. The scheduler finds a step ready, offers it a lease, and gets a fence token.
    The lease has no heartbeat deadline yet: the dispatch may wait in the queue
-   for an engine slot for as long as the fleet is busy.
+   for an engine slot for as long as the fleet is busy. An offer never replaces
+   an offer of the same attempt: when two passes over one run both find the
+   step ready, the second is refused and sends nothing, so the fence the first
+   dispatched under stays the one its engine reports with. An offer whose
+   dispatch never committed — its plane died first — is withdrawn by the
+   sweeper once it is older than the lease TTL, and the step is offered again.
 2. It enqueues a `JobDispatch` through the outbox. The event and the outbox row
    commit in one transaction, so a dispatch is never published for a step whose
    readiness was rolled back.

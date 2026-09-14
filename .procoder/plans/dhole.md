@@ -1454,7 +1454,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       before starting), and a capable engine whose consumer never fetches
       leaves a dispatch waiting without a reason, which is the next item's
       territory.
-- [ ] **Two Advances racing on one step cost that step an attempt.** Found
+- [x] **Two Advances racing on one step cost that step an attempt.** Found
       2026-09-14 closing the item above. `dispatch` claims its lease BEFORE it
       re-reads the log, and a claim always supersedes, so the plane that loses
       the race to dispatch a step fences out the dispatch the winner already
@@ -1468,6 +1468,68 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       record's attempt is at least the one being offered — with the sweeper
       withdrawing, at its revision, an unaccepted offer the log shows was never
       dispatched once it is old enough that no commit can still be on its way.
+      Observed on kw on every step of a real run, not only under test load:
+      STEP_DISPATCHED, STEP_ATTEMPT_LOST, STEP_DISPATCHED, STEP_SUCCEEDED.
+      CLOSED by a compare-and-set offer. `lease.KV.Offer` reads the claim key
+      and writes with `Create` (no record, or a delete marker) or `Update` at
+      the revision it read, and refuses with `lease.ErrAlreadyOffered` when
+      the record's attempt is at least the one offered; a lost CAS re-reads (at
+      most eight times). `dispatch` treats the refusal like ErrFenced and sends
+      nothing. The gap it opens — an offer whose plane died or gave up before
+      committing, which nobody may now replace — is closed by
+      `lease.Manager.Withdraw`, a delete at the token's revision refused for a
+      moved, missing or accepted record (a claim reads as accepted), and by
+      `surfaceOne`: an unaccepted offer of an attempt the log has no dispatch
+      for, older than `offerGrace`, is withdrawn and its run advanced.
+      `lease.Waiting` carries `OfferedAt` (the record's ExpiresAt minus its TTL,
+      one clock reading). `offerGrace` is the lease TTL with a 10s floor; its
+      age is taken BEFORE the log is read, and `dispatch` refuses to begin its
+      commit once its own offer is older than half the window
+      (`errOfferAbandoned`, rolled back and left for the sweeper), so a
+      withdrawal can only meet a commit whose transaction alone took the other
+      half. `recordFencedOut` and the sweeper's fenced-out branch stay as the
+      backstop for what can still move a dispatched fence: a withdrawal
+      racing a commit past that bound, a cache hit's `Claim` (still
+      unconditional) on a dispatched attempt, and a pre-CAS plane mid rolling
+      upgrade. NATS KV is the only lease backend; there is no SQLite or
+      Postgres variant, and the test doubles embed the real manager.
+      Tests, red first: `TestTwoAdvancesOfOneRunDispatchAStepOnceAndLoseNoAttempt`
+      (one scheduler, the first offer held while the second Advance dispatches;
+      "two Advances of one run cost the step an attempt"),
+      `TestAnOfferForAnAttemptAlreadyOfferedIsRefusedAndLeavesTheFenceAlone`
+      (same and second plane; "the same plane offered attempt 2 again and was
+      not refused"), `TestConcurrentOffersOfOneAttemptLeaveExactlyOneFence`
+      (eight planes; "should have 1 item(s), but has 8"),
+      `TestAnOfferWhosePlaneDiedBeforeDispatchingIsWithdrawnAndTheStepDispatched`
+      (red against the offer CAS alone: "the step behind a dead plane's offer
+      was never dispatched, so the run waits forever"),
+      `TestADispatchSlowerThanHalfTheGraceWindowDoesNotCommit` ("a dispatch
+      whose offer was already older than half the grace window committed
+      anyway"), `TestWithdrawingAnUnacceptedOfferLetsTheAttemptBeOfferedAgain`
+      and `TestWithdrawRemovesNothingButTheOfferItNames` (red on a no-op
+      Withdraw), and `TestAnOfferNobodyHasAcceptedDoesNotExpire` now also
+      holds OfferedAt. `TestTheSweeperWithdrawsNoOfferThatWasDispatchedOrIsStillYoung`
+      guards and is shown only by mutation. The sweeper tests move a scheduler
+      clock across the grace window rather than sleeping. The two fenced-out
+      tests could no longer produce their state with a second Offer, so each
+      now withdraws the committed offer first — the residual race — and the
+      racing-offer one lost its "survived the race" early return.
+      Mutations, each killed: Offer back to a plain Put (both lease tests, the
+      two-Advances test, the dead-plane test); a read-check followed by Put
+      without CAS (the eight-plane test, 5 of 5 runs); dispatch not treating
+      the refusal as normal; no withdrawal; withdrawal without Advance; no age
+      check ("young"); no never-dispatched check ("dispatched", and the sweeper
+      fenced-out test); no commit deadline; OfferedAt not set; Withdraw without
+      the accepted check ("accepted", "claimed") or without the fence check;
+      and each half of the recordFencedOut backstop. Not killed by any test:
+      the revision condition on Withdraw's delete, which only a write landing
+      between its read and its delete exercises.
+      Left open: `builtins.attempt` claims and appends STEP_DISPATCHED without
+      re-reading the log, and its in-flight guard is per plane, so two planes
+      can run one builtin step twice (one plane only in the instant between a
+      job finishing and a stale Advance calling Take); and a cache hit's
+      `Claim` can still supersede a racing dispatch's offer, which then costs
+      an attempt one TTL later, as this race did before.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot

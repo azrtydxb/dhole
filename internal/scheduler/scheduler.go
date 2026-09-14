@@ -1151,9 +1151,25 @@ func (s *Scheduler) surfaceStranded(ctx context.Context) error {
 }
 
 func (s *Scheduler) surfaceOne(ctx context.Context, w lease.Waiting, instances []registry.Instance) error {
+	// Aged BEFORE the log is read, never after: a commit that lands after the
+	// read must have started from an offer older than the grace window, and
+	// dispatch refuses to begin one past half of it.
+	abandonedAge := s.now().Sub(w.OfferedAt) > s.offerGrace()
 	state, err := s.load(ctx, w.TenantID, w.RunID)
 	if err != nil {
 		return err
+	}
+	// An offer of an attempt the log has no dispatch for is a plane that
+	// offered and died, or gave up, before committing. It will never be
+	// accepted, and no other plane may replace it, because an offer does not
+	// supersede one of the same attempt — so unless it is withdrawn the step
+	// is never dispatched. Only once it is old enough that no commit can still
+	// be on its way.
+	if state.attempts[w.StepID] < w.Attempt {
+		if !abandonedAge {
+			return nil
+		}
+		return s.withdrawAbandoned(ctx, w)
 	}
 	// The same guards recordOrphan applies, for the same reasons: an offer
 	// can outlive what it was for. A finished run or step, or an attempt
@@ -1191,6 +1207,23 @@ func (s *Scheduler) surfaceOne(ctx context.Context, w lease.Waiting, instances [
 		return nil // waiting for a slot, which is what a queue is for
 	}
 	return s.recordUnschedulable(ctx, w.TenantID, w.RunID, w.StepID, Explain(req, instances), state)
+}
+
+// withdrawAbandoned removes an offer whose dispatch never committed and
+// advances its run, which offers the attempt afresh.
+func (s *Scheduler) withdrawAbandoned(ctx context.Context, w lease.Waiting) error {
+	switch err := s.leas.Withdraw(ctx, w.Token()); {
+	case errors.Is(err, lease.ErrFenced):
+		// It moved on since it was listed — accepted, superseded or already
+		// withdrawn by another sweeper. Whatever it is now, it is not this.
+		return nil
+	case err != nil:
+		return fmt.Errorf("scheduler: withdrawing the abandoned offer of %s/%s: %w", w.RunID, w.StepID, err)
+	}
+	s.log.Warn("withdrew an offer whose dispatch never committed",
+		"tenant", w.TenantID, "run", w.RunID, "step", w.StepID, "attempt", w.Attempt,
+		"fence", w.Fence, "offered_at", w.OfferedAt)
+	return s.Advance(ctx, w.TenantID, w.RunID)
 }
 
 // recordOrphan writes the STEP_ATTEMPT_LOST event for one dead lease, and
@@ -1859,7 +1892,18 @@ func (s *Scheduler) dispatch(
 	// fetches it and dies before accepting. What CAN strand a waiting
 	// dispatch is the fleet losing every engine able to take it, and that is
 	// a question about the fleet, answered by surfaceStranded.
+	//
+	// An offer never supersedes an offer of the same attempt. Two Advances of
+	// one run — the open-run tick and the status consumer, or two planes —
+	// both find the step ready and both offer it, and when the second offer
+	// replaced the fence the first had already dispatched under, every step on
+	// kw lost an attempt. The second is refused instead, which says the attempt
+	// is somebody else's to place: nothing is dispatched and nothing is wrong.
+	offeredAt := s.now()
 	token, err := s.leas.Offer(ctx, tenantID, runID, step.GetId(), attempt, s.ttl)
+	if errors.Is(err, lease.ErrAlreadyOffered) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("scheduler: claiming %s/%s: %w", runID, step.GetId(), err)
 	}
@@ -1950,6 +1994,16 @@ func (s *Scheduler) dispatch(
 	}
 
 	err = s.store.WithTx(ctx, func(tx runstore.Tx) error {
+		// A dispatch this slow is abandoned rather than committed. The sweeper
+		// withdraws an offer the log shows was never dispatched once it is
+		// older than offerGrace, and a commit that landed just after the
+		// sweeper read the log would go out under a fence already withdrawn:
+		// its engine's every report refused, and nothing left to expire. Not
+		// starting the commit past half the window leaves the other half for
+		// the transaction itself, which is a few writes.
+		if s.now().Sub(offeredAt) > s.offerGrace()/2 {
+			return errOfferAbandoned
+		}
 		if err := tx.Append(ctx, tenantID, runstore.Event{
 			RunID:   runID,
 			StepID:  step.GetId(),
@@ -1977,6 +2031,13 @@ func (s *Scheduler) dispatch(
 		// Another control plane owns this attempt. Nothing was written and
 		// nothing was published; that is a normal outcome, not a failure.
 		return nil
+	case errors.Is(err, errOfferAbandoned):
+		// Nothing was written. The offer stays until the sweeper withdraws it,
+		// and the step is dispatched again after that.
+		s.log.Warn("abandoned a dispatch that took too long to commit",
+			"tenant", tenantID, "run", runID, "step", step.GetId(), "attempt", attempt,
+			"since_offer", s.now().Sub(offeredAt))
+		return nil
 	case err != nil:
 		return fmt.Errorf("scheduler: dispatching %s/%s: %w", runID, step.GetId(), err)
 	}
@@ -1985,6 +2046,27 @@ func (s *Scheduler) dispatch(
 	s.hold(tenantID, runID, step.GetId(), release)
 	committed = true
 	return nil
+}
+
+// errOfferAbandoned rolls back a dispatch whose offer outlived half of
+// offerGrace before it could commit.
+var errOfferAbandoned = errors.New("scheduler: the offer is too old to commit a dispatch under")
+
+// minOfferGrace is the floor under offerGrace, so that a deployment or a test
+// with a very short lease TTL does not abandon dispatches that were merely
+// slow to commit.
+const minOfferGrace = 10 * time.Second
+
+// offerGrace is how old an unaccepted offer must be, with no dispatch in the
+// log for its attempt, before the sweeper withdraws it as abandoned.
+//
+// The lease TTL, because it is already this system's answer to "how long may a
+// participant be silent before it is presumed gone", and an offer is a
+// dispatch in progress: a few round trips, milliseconds apart. dispatch
+// refuses to begin committing past half of it, so a withdrawal can only ever
+// meet a commit whose own transaction took the other half.
+func (s *Scheduler) offerGrace() time.Duration {
+	return max(s.ttl, minOfferGrace)
 }
 
 // recordFencedOut records as lost a dispatched attempt whose fence a later
@@ -2002,9 +2084,14 @@ func (s *Scheduler) dispatch(
 //
 // The attempt is lost exactly as one whose engine died is, through
 // recordOrphan and its guards: a step that already finished is left alone,
-// and its effect class decides whether it runs again. That costs an attempt,
-// which is what the race cost before; not superseding a committed dispatch in
-// the first place is the open plan item that would save it.
+// and its effect class decides whether it runs again.
+//
+// An offer no longer supersedes an offer of the same attempt, so the common
+// race is refused before it gets here. This remains the backstop for what can
+// still move a committed dispatch's fence: a sweeper withdrawing an offer in
+// the instant its commit lands (bounded, not excluded, by offerGrace), a cache
+// hit's Claim — which always supersedes — landing on a dispatched attempt, and
+// a plane from before the compare-and-set during a rolling upgrade.
 func (s *Scheduler) recordFencedOut(
 	ctx context.Context, tenantID, runID, stepID string, current uint64, state *runState,
 ) error {

@@ -340,8 +340,10 @@ func TestAnOfferNobodyHasAcceptedDoesNotExpire(t *testing.T) {
 	ctx := testContext(t)
 	mgr := newManager(ctx, t)
 
+	before := time.Now()
 	token, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, 100*time.Millisecond)
 	require.NoError(t, err)
+	after := time.Now()
 
 	time.Sleep(400 * time.Millisecond)
 
@@ -352,6 +354,12 @@ func TestAnOfferNobodyHasAcceptedDoesNotExpire(t *testing.T) {
 
 	waiting, err := mgr.Unaccepted(ctx)
 	require.NoError(t, err)
+	require.Len(t, waiting, 1)
+	offeredAt := waiting[0].OfferedAt
+	require.False(t, offeredAt.Before(before) || offeredAt.After(after),
+		"an offer must say when it was made, or nobody can tell a dead plane's offer from a fresh one: got %v, want within [%v, %v]",
+		offeredAt, before, after)
+	waiting[0].OfferedAt = time.Time{}
 	require.Equal(t, []lease.Waiting{{
 		TenantID: "tenant-a", RunID: "run-1", StepID: "step-1", Attempt: 1, Fence: token.Fence,
 	}}, waiting, "the scheduler must be able to see what is still waiting")
@@ -416,4 +424,149 @@ func TestASupersededHoldersRenewalDoesNotAcceptTheOfferThatReplacedIt(t *testing
 	require.NoError(t, err)
 	require.Len(t, waiting, 1)
 	require.Equal(t, fresh.Fence, waiting[0].Fence)
+}
+
+// TestAnOfferForAnAttemptAlreadyOfferedIsRefusedAndLeavesTheFenceAlone is the
+// race that cost every step on kw an attempt. The open-run tick and the status
+// consumer both Advance a run, both find a step ready, and both offer the same
+// attempt. The winner dispatches under its fence; if the loser's offer then
+// replaced that fence, every report from the engine running the committed
+// dispatch would be discarded as stale and the attempt would have to be
+// declared lost and run again. An offer must never supersede an offer of the
+// same attempt — from this plane or another.
+func TestAnOfferForAnAttemptAlreadyOfferedIsRefusedAndLeavesTheFenceAlone(t *testing.T) {
+	ctx := testContext(t)
+	srv, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+	mgr := managerOn(ctx, t, srv.URL())
+	other := managerOn(ctx, t, srv.URL())
+
+	first, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 2, testTTL)
+	require.NoError(t, err)
+
+	for name, m := range map[string]*lease.KV{"the same plane": mgr, "another plane": other} {
+		_, err = m.Offer(ctx, "tenant-a", "run-1", "step-1", 2, testTTL)
+		require.ErrorIs(t, err, lease.ErrAlreadyOffered,
+			"%s offered attempt 2 again and was not refused", name)
+		_, err = m.Offer(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+		require.ErrorIs(t, err, lease.ErrAlreadyOffered,
+			"%s offered an EARLIER attempt over attempt 2 and was not refused", name)
+	}
+	require.NoError(t, mgr.Validate(ctx, first),
+		"a refused offer moved the fence the first offer's dispatch carries")
+
+	// A later attempt is a genuine re-dispatch, and still supersedes.
+	next, err := other.Offer(ctx, "tenant-a", "run-1", "step-1", 3, testTTL)
+	require.NoError(t, err)
+	require.Greater(t, next.Fence, first.Fence)
+	require.ErrorIs(t, mgr.Validate(ctx, first), lease.ErrFenced)
+}
+
+// TestConcurrentOffersOfOneAttemptLeaveExactlyOneFence: the refusal is a
+// compare-and-set on the server, not a read followed by a write, so planes
+// offering at the same instant cannot both come away with a token.
+func TestConcurrentOffersOfOneAttemptLeaveExactlyOneFence(t *testing.T) {
+	ctx := testContext(t)
+	srv, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	const planes = 8
+	managers := make([]*lease.KV, planes)
+	for i := range managers {
+		managers[i] = managerOn(ctx, t, srv.URL())
+	}
+
+	start := make(chan struct{})
+	tokens := make(chan lease.Token, planes)
+	refusals := make(chan error, planes)
+	var wg sync.WaitGroup
+	for _, m := range managers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			token, err := m.Offer(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+			if err != nil {
+				refusals <- err
+				return
+			}
+			tokens <- token
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(tokens)
+	close(refusals)
+
+	for err := range refusals {
+		require.ErrorIs(t, err, lease.ErrAlreadyOffered, "losing the race is a refusal, not a failure")
+	}
+	var won []lease.Token
+	for token := range tokens {
+		won = append(won, token)
+	}
+	require.Len(t, won, 1, "planes offering one attempt at once must leave exactly one of them holding it")
+	require.NoError(t, managers[0].Validate(ctx, won[0]))
+}
+
+// TestWithdrawingAnUnacceptedOfferLetsTheAttemptBeOfferedAgain is the other
+// half of refusing a second offer. A plane that offered and died before
+// committing its dispatch leaves an offer nobody will ever accept and nobody
+// may replace; unless it can be withdrawn, the step is never dispatched.
+func TestWithdrawingAnUnacceptedOfferLetsTheAttemptBeOfferedAgain(t *testing.T) {
+	ctx := testContext(t)
+	mgr := newManager(ctx, t)
+
+	dead, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Withdraw(ctx, dead))
+	require.ErrorIs(t, mgr.Validate(ctx, dead), lease.ErrFenced,
+		"a withdrawn offer is still the step's lease")
+
+	again, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+	require.NoError(t, err, "the attempt whose offer was withdrawn could not be offered again")
+	require.Greater(t, again.Fence, dead.Fence)
+	require.ErrorIs(t, mgr.Withdraw(ctx, dead), lease.ErrFenced,
+		"withdrawing an old fence removed the offer that replaced it")
+	require.NoError(t, mgr.Validate(ctx, again))
+}
+
+// TestWithdrawRemovesNothingButTheOfferItNames. A sweeper decides from what it
+// read, and the record can change before it acts: a later attempt offered, or
+// an engine accepting the offer. Removing either would fence out a dispatch
+// that is out and being worked on.
+func TestWithdrawRemovesNothingButTheOfferItNames(t *testing.T) {
+	t.Run("superseded", func(t *testing.T) {
+		ctx := testContext(t)
+		mgr := newManager(ctx, t)
+		old, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+		require.NoError(t, err)
+		fresh, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 2, testTTL)
+		require.NoError(t, err)
+
+		require.ErrorIs(t, mgr.Withdraw(ctx, old), lease.ErrFenced)
+		require.NoError(t, mgr.Validate(ctx, fresh), "withdrawing a superseded fence removed the current offer")
+	})
+	t.Run("accepted", func(t *testing.T) {
+		ctx := testContext(t)
+		mgr := newManager(ctx, t)
+		token, err := mgr.Offer(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+		require.NoError(t, err)
+		require.NoError(t, mgr.Renew(ctx, token))
+
+		require.ErrorIs(t, mgr.Withdraw(ctx, token), lease.ErrFenced)
+		require.NoError(t, mgr.Validate(ctx, token), "an offer an engine had accepted was withdrawn from under it")
+	})
+	t.Run("claimed", func(t *testing.T) {
+		ctx := testContext(t)
+		mgr := newManager(ctx, t)
+		token, err := mgr.Claim(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+		require.NoError(t, err)
+
+		require.ErrorIs(t, mgr.Withdraw(ctx, token), lease.ErrFenced)
+		require.NoError(t, mgr.Validate(ctx, token), "a claim has a holder from the start and is not an offer to withdraw")
+	})
 }
