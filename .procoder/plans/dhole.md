@@ -1362,7 +1362,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       that is sitting in a queue it can see. Until then the operational
       workaround is slots >= the pipeline's widest parallel rank, which is not
       something a pipeline author should have to know about the fleet.
-- [ ] **A consumer of an empty queue spends the engine's concurrency budget.**
+- [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
       back if none came. An engine subscribes to every satisfiable subset of
@@ -1383,6 +1383,36 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       as long as renewal starts at FETCH rather than at handle. Alternatively
       one consumer with several filter subjects, which is one pump and no
       competition at all.
+      CLOSED by fetching first. Every pump waits on its queue at once, holding
+      no slot, and takes a slot only once a dispatch has arrived; `slotYield`
+      is gone. Fetching is gated on ROOM — dispatches held, running or waiting,
+      against the slot count — and filling up abandons every open fetch, while
+      `bus` now returns from `Next` when its context ends and NAKs anything
+      that lands on the abandoned pull request, so a full engine does not sit
+      on work an idle one could run; `Close` waits for those give-backs (at
+      most the two-second fetch wait), which `TestStopEndsEverythingItStarted`
+      and `TestStopClosesTheAPIListener` hold — without the wait they report
+      the give-back goroutines outliving Stop. A dispatch that arrives anyway is renewed
+      from FETCH and waits for a slot; one an engine stops holding is NAKed.
+      One consumer with several filter subjects was rejected: a queue's durable
+      is shared by every eligible engine, a work-queue stream refuses a second
+      consumer with overlapping filters, and the multi-filter create carries
+      its filters only in the body, which the tier permissions deliberately do
+      not grant. The mitigation was also weaker than it looked: `Next` finished
+      its two-second fetch whatever its context said, so the 250ms yield was
+      really a two-second turn — 13.3s on the new test before the fix.
+      Tests, each shown failing: `TestADispatchOnTheLastOfEightQueuesIsPickedUpPromptlyByAOneSlotEngine`
+      (under 500ms, about 1ms in practice; the old pump fails it at a 3s yield
+      with 20.3s and at 250ms with 1.06s),
+      `TestAnEngineWithTwoSlotsNeverRunsMoreThanTwoStepsAtOnce` (no slot bound:
+      3 at once), `TestADispatchFetchedWhileEverySlotIsBusyIsNotRedeliveredWhileItWaits`
+      (renewal at handle: redelivered to a rival),
+      `TestASecondEngineOnTheSameQueueGetsWorkWhileTheFirstIsFull` (no room
+      gate, gate without abandoning open fetches, abandoning without a NAK,
+      or a `Next` that ignores its context: all hoard),
+      `TestAnEngineThatStopsWhileADispatchWaitsForASlotGivesItStraightBack`
+      and `TestAFetchItsCallerAbandonedGivesALateMessageBackRatherThanSittingOnIt`.
+      `docs/wire-contract.md` tells engine authors the same rule.
 - [ ] **A sandbox pod has no resources, and a heavy step starves its own
       engine.** Found 2026-09-11 running a real CI/CD pipeline on kw. Sandbox
       pods are created with no requests and no limits — `executor.Spec` has no

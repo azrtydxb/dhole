@@ -83,37 +83,6 @@ const bindTimeout = 60 * time.Second
 // complainEvery is how often an engine repeats that it still cannot bind.
 const complainEvery = 30 * time.Second
 
-// slotYield bounds how long one dispatch consumer may hold a slot while it is
-// only WAITING for work.
-//
-// An engine binds one consumer per capability subset it can serve, and each
-// takes a slot before fetching so it never holds an unacknowledged message it
-// has no room to run. Held for the whole wait, that starves every consumer
-// beyond the slot count permanently: an engine with one slot and two
-// capability sets fetched from the first set forever and never once looked at
-// the second, so steps on that subject sat in the work queue with a warm idle
-// engine subscribed to them and nothing anywhere reporting a fault. It became
-// reachable the moment an engine advertised a capability at all — before that
-// there was one subset, one consumer, and nothing to starve.
-//
-// Yielding turns starvation into a turn each. The cost is latency when slots
-// are scarce, and only then: a consumer that holds a slot and gets a message
-// keeps it for the job.
-//
-// The wait has to be SMALL, because the worst case is one turn for every other
-// consumer before the one holding work gets a slot, and the plane is not
-// waiting patiently: a dispatch nobody has accepted within the lease TTL is
-// declared lost and re-dispatched. At three seconds and eight consumers — the
-// four subsets of {NETWORK, SECRETS}, each with a plain and a kind-targeted
-// queue — that worst case is 24 seconds against a 30 second lease, and on kw
-// it lost steps: dispatched at 08:18:37, declared lost at 08:19:10, accepted
-// by the engine at 08:19:13, three seconds after the plane gave up.
-//
-// This is a mitigation and not the cure. The structural fault is that a slot
-// is taken BEFORE anyone knows whether a message exists, so consumers of empty
-// queues spend the concurrency budget — see the open plan item.
-const slotYield = 250 * time.Millisecond
-
 // releaseTimeout bounds sandbox teardown. It runs on a context detached from
 // the job's, because a cancelled job still has to leave nothing behind.
 const releaseTimeout = 30 * time.Second
@@ -168,9 +137,14 @@ type Config struct {
 type Agent struct {
 	cfg      Config
 	registry *registryClient
-	// slots is the concurrency bound, taken before a dispatch is fetched so
-	// the engine never holds an unacknowledged message it has no room to run.
+	// slots is the concurrency bound: a token per step RUNNING. It is taken
+	// after a dispatch is fetched, never before — see pump.
 	slots chan struct{}
+	// room decides whether the pumps may fetch at all. It counts dispatches
+	// fetched and not yet finished, running or waiting for a slot, and closes
+	// the fetches the moment that reaches the slot count, so a full engine
+	// leaves new work on the queue for an engine with room.
+	room *room
 	// jobs is what is running right now, so a Cancel on this engine's control
 	// subject can reach the sandbox rather than only the bookkeeping.
 	jobs *running
@@ -210,6 +184,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg:      cfg,
 		registry: registry,
 		slots:    make(chan struct{}, cfg.Slots),
+		room:     newRoom(cfg.Slots),
 		jobs:     newRunning(),
 	}, nil
 }
@@ -364,44 +339,169 @@ func (a *Agent) subscribe(ctx context.Context, stream, consumer, subject string)
 	}
 }
 
-// pump takes one dispatch at a time, having first taken a slot. Fetching only
-// what it can run keeps the unacknowledged set as small as the work actually in
-// progress — whatever this engine holds when it dies is what has to be
-// redelivered.
+// pump works one queue: it FETCHES first, and takes a slot only once there is
+// something to run.
+//
+// It used to be the other way round — take a slot, wait a bounded time for a
+// message, give the slot back if none came — and that coupled fetching to the
+// concurrency budget. An engine binds every satisfiable capability subset with
+// a plain and a kind-targeted queue each: {NETWORK, SECRETS} is eight pumps,
+// and on kw they shared two slots. Seven queues were usually empty and the one
+// holding work waited its turn behind them. At a three-second yield that was
+// up to 24 seconds against a 30 second lease, and it lost steps: dispatched at
+// 08:18:37, declared lost at 08:19:10, accepted by the engine at 08:19:13.
+// Shortening the yield only moved the bound, which still grew with the number
+// of queues, so a richer capability set walked straight back into it.
+//
+// Now every pump waits on its queue at once, and holding no slot while it
+// waits costs nothing. Two things keep that honest:
+//
+//   - Fetching is gated on ROOM (see room), not on a slot. Once as many
+//     dispatches are held as there are slots, every open fetch is abandoned
+//     and no new one starts, so a full engine leaves work on the queue for an
+//     engine that can start it. The bus gives back anything that lands on an
+//     abandoned fetch (bus: giveBack).
+//   - A dispatch that arrives anyway — a fetch already on its way at the
+//     moment the last slot went — is held until a slot frees, and its delivery
+//     is renewed from the moment it is FETCHED. The ack wait runs from
+//     delivery; renewal that began only once the step ran would let the
+//     server hand the waiting dispatch to another engine and run it twice.
+//     At most one such dispatch per queue, only in that moment, and far below
+//     the consumer's MaxAckPending, which every engine on the queue shares.
+//
+// REJECTED: one consumer per engine with a filter subject per queue, which is
+// one pump and nothing to compete. It cannot be built on these streams. The
+// durable a queue's engines pull is SHARED — named for the tier, capability
+// set and kind, never for an engine — because that is what makes the subject a
+// work queue; a consumer whose filter set is this engine's whole capability
+// lattice would have to be this engine's own, and a work-queue stream refuses
+// a second consumer whose filters overlap an existing one, which every other
+// engine's would. And the create that carries several filters is
+// `$JS.API.CONSUMER.CREATE.<stream>.<consumer>` with the filters in the body
+// only, which tierPermissionsConsumerAPI deliberately does not grant: a
+// permission cannot see a body, and granting that form reopens the hole that
+// let an untrusted engine bind trusted work.
 func (a *Agent) pump(ctx context.Context, sub bus.Subscription) error {
 	var running sync.WaitGroup
 	defer running.Wait()
 
 	for {
-		select {
-		case <-ctx.Done():
+		open, err := a.room.wait(ctx)
+		if err != nil {
 			return nil
-		case a.slots <- struct{}{}:
 		}
 
-		// Bounded, so the slot is given back to the other consumers if
-		// nothing arrives. A fetch that times out has taken no message off the
-		// stream, so there is nothing to lose by abandoning it.
-		waitCtx, waited := context.WithTimeout(ctx, slotYield)
-		msg, err := sub.Next(waitCtx)
-		waited()
+		// The fetch ends when the engine fills up, not only when it stops:
+		// a fetch left open on a full engine is a message taken from an engine
+		// that could have run it.
+		fetchCtx, cancelFetch := context.WithCancel(ctx)
+		stopWatching := context.AfterFunc(open, cancelFetch)
+		msg, err := sub.Next(fetchCtx)
+		stopWatching()
+		cancelFetch()
 		if err != nil {
-			<-a.slots
 			if ctx.Err() != nil || errors.Is(err, bus.ErrSubscriptionClosed) {
 				return nil
 			}
-			if waitCtx.Err() != nil {
+			if open.Err() != nil {
 				continue
 			}
 			return fmt.Errorf("engine: next dispatch: %w", err)
 		}
 
+		a.room.hold()
+		stopRenew := a.renewDelivery(ctx, msg)
+
+		select {
+		case a.slots <- struct{}{}:
+		case <-ctx.Done():
+			// Stopping with a dispatch that never started: give it straight
+			// back rather than leave it outstanding until the ack wait.
+			stopRenew()
+			_ = msg.Nak()
+			a.room.release()
+			return nil
+		}
+
 		running.Add(1)
 		go func() {
 			defer running.Done()
+			// Deferred in this order so the slot is free BEFORE the room
+			// reopens: a dispatch already held takes the slot, rather than
+			// racing fresh fetches for it.
+			defer a.room.release()
 			defer func() { <-a.slots }()
-			a.handle(ctx, msg)
+			a.handle(ctx, msg, stopRenew)
 		}()
+	}
+}
+
+// room is how many dispatches an engine may hold at once, fetched and not yet
+// finished, and the signal that stops its fetches when it has none.
+//
+// It is separate from the slots because the two answer different questions.
+// The slots bound what RUNS, and a pump takes one only once it has a message.
+// Room bounds what is FETCHED — without it a full engine keeps pulling, holds
+// every message it gets for as long as its running steps take, and renews each
+// one so the server never offers it to the idle engine on the same queue.
+type room struct {
+	mu    sync.Mutex
+	limit int
+	held  int
+	// open is live while held < limit and cancelled the moment the engine
+	// fills, which is what abandons every fetch in flight.
+	open  context.Context //nolint:containedctx // a broadcast to every pump, not a call's context.
+	close context.CancelFunc
+	// reopened is closed when a full engine gets room again.
+	reopened chan struct{}
+}
+
+func newRoom(limit int) *room {
+	open, closeRoom := context.WithCancel(context.Background())
+	return &room{limit: limit, open: open, close: closeRoom, reopened: make(chan struct{})}
+}
+
+// wait blocks until the engine has room to fetch, and returns the context that
+// ends when it no longer does.
+func (r *room) wait(ctx context.Context) (context.Context, error) {
+	for {
+		r.mu.Lock()
+		if r.held < r.limit {
+			open := r.open
+			r.mu.Unlock()
+			return open, nil
+		}
+		reopened := r.reopened
+		r.mu.Unlock()
+
+		select {
+		case <-reopened:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// hold counts a fetched dispatch. It never refuses: the message is already
+// delivered, and refusing it here would only strand it.
+func (r *room) hold() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.held++
+	if r.held == r.limit {
+		r.close()
+	}
+}
+
+// release counts a dispatch finished, reopening fetching when that makes room.
+func (r *room) release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.held--
+	if r.held == r.limit-1 {
+		r.open, r.close = context.WithCancel(context.Background())
+		close(r.reopened)
+		r.reopened = make(chan struct{})
 	}
 }
 
@@ -444,8 +544,17 @@ func (a *Agent) renewDelivery(ctx context.Context, msg bus.Message) func() {
 // given no ack wait to divide.
 const defaultRenewInterval = 10 * time.Second
 
-// handle takes one dispatch from delivery to acknowledgement.
-func (a *Agent) handle(ctx context.Context, msg bus.Message) {
+// handle takes one dispatch from delivery to acknowledgement. stopRenew ends
+// the renewal pump started at fetch; handle owns it from here and stops it on
+// every path out.
+func (a *Agent) handle(ctx context.Context, msg bus.Message, stopRenew func()) {
+	// Renewed for as long as this step runs, and since it was fetched. Without
+	// it the server hands the same dispatch to somebody else after the ack wait
+	// and the step runs TWICE: observed on kw, where `go test` took 2m37s
+	// against a 30s ack wait and the engine logged "step accepted" for the same
+	// attempt twice. Every step of a real build outlasts that window.
+	defer stopRenew()
+
 	var d dholev1.JobDispatch
 	if err := proto.Unmarshal(msg.Data(), &d); err != nil {
 		// There is no run or step to report against, and redelivering bytes
@@ -454,14 +563,6 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message) {
 		_ = msg.Ack()
 		return
 	}
-
-	// Renew the delivery for as long as this step runs. Without it the server
-	// hands the same dispatch to somebody else after the ack wait and the step
-	// runs TWICE: observed on kw, where `go test` took 2m37s against a 30s ack
-	// wait and the engine logged "step accepted" for the same attempt twice.
-	// Every step of a real build outlasts that window.
-	stopRenew := a.renewDelivery(ctx, msg)
-	defer stopRenew()
 
 	// The span continues the RUN's trace, taken from the dispatch itself: the
 	// scheduler that sent this message is in another process, and a span

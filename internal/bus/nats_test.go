@@ -2,6 +2,7 @@ package bus_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -336,4 +337,75 @@ func dispatchStream(t *testing.T, tier string) string {
 	name, err := bus.DispatchStreamName(tier)
 	require.NoError(t, err)
 	return name
+}
+
+// TestAFetchItsCallerAbandonedGivesALateMessageBackRatherThanSittingOnIt. A
+// pull request outlives the Next that made it: the server holds it open for the
+// fetch wait, and a message published in that window is delivered to it
+// whether or not anybody is still listening. An engine abandons fetches on
+// purpose — it stops fetching the moment its last slot is taken, so it does
+// not hold work another engine could run — and a message that lands on an
+// abandoned fetch must go back to the queue at once.
+//
+// Two failures, both real. Ignoring the context returns the message to a caller
+// that has already decided it cannot run it. Honouring the context and simply
+// walking away leaves the message delivered to nobody until the ack wait
+// expires — thirty seconds by default, which is the lease the plane declares
+// the dispatch lost at.
+func TestAFetchItsCallerAbandonedGivesALateMessageBackRatherThanSittingOnIt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	// The DEFAULT ack wait: a message stranded on an abandoned fetch would
+	// not come back within this test's patience.
+	conn, err := bus.Connect(ctx, srv.URL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+
+	subject := bus.SubjectDispatch("untrusted", "abc")
+	require.NoError(t, conn.EnsureDispatchStreams(ctx, []string{"untrusted"}))
+
+	first, err := conn.SubscribePull(ctx, dispatchStream(t, "untrusted"), "engines", subject)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = first.Close() })
+
+	abandoned := make(chan error, 1)
+	returned := make(chan time.Duration, 1)
+	go func() {
+		waitCtx, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer stop()
+		began := time.Now()
+		msg, err := first.Next(waitCtx)
+		returned <- time.Since(began)
+		if err == nil {
+			_ = msg.Nak()
+			err = errors.New("Next handed a message to a caller whose context had already ended")
+		}
+		abandoned <- err
+	}()
+
+	// Published after the caller gave up, while its pull request is still open
+	// on the server.
+	time.Sleep(600 * time.Millisecond)
+	require.NoError(t, conn.Publish(ctx, subject, &dholev1.JobDispatch{RunId: "run-late", StepId: "build"}))
+
+	require.ErrorIs(t, <-abandoned, context.DeadlineExceeded)
+	require.Less(t, <-returned, time.Second, "Next must return when its caller's context ends, not at the fetch wait")
+
+	second, err := conn.SubscribePull(ctx, dispatchStream(t, "untrusted"), "engines", subject)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = second.Close() })
+
+	waitCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	msg, err := second.Next(waitCtx)
+	require.NoError(t, err, "the message that landed on the abandoned fetch was not given back")
+	var got dholev1.JobDispatch
+	require.NoError(t, proto.Unmarshal(msg.Data(), &got))
+	require.Equal(t, "run-late", got.GetRunId())
+	require.NoError(t, msg.Ack())
 }

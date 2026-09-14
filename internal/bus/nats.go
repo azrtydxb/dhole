@@ -435,8 +435,22 @@ type pullSubscription struct {
 	consumer  jetstream.Consumer
 	closed    chan struct{}
 	closeOnce sync.Once
+
+	// giving tracks the fetches being given back (see abandon), so Close can
+	// wait for them. closing, under mu, is set before that wait begins.
+	mu      sync.Mutex
+	closing bool
+	giving  sync.WaitGroup
 }
 
+// Next returns as soon as ctx ends or the subscription closes, even with a
+// fetch still open on the server.
+//
+// It used to finish the fetch first, up to fetchWait, and return whatever that
+// fetch produced — to a caller whose context had already ended. An engine
+// abandons fetches on purpose: it stops fetching the moment its last slot is
+// taken, so that it does not sit on work an idle engine could run. A message
+// handed back after that is one it has decided it cannot start.
 func (s *pullSubscription) Next(ctx context.Context) (Message, error) {
 	for {
 		select {
@@ -451,17 +465,69 @@ func (s *pullSubscription) Next(ctx context.Context) (Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("bus: fetch: %w", err)
 		}
-		for msg := range batch.Messages() {
-			return &jsMessage{msg: msg}, nil
-		}
-		if err := batch.Error(); err != nil {
-			return nil, fmt.Errorf("bus: fetch: %w", err)
+		select {
+		case msg, ok := <-batch.Messages():
+			if ok {
+				return &jsMessage{msg: msg}, nil
+			}
+			if err := batch.Error(); err != nil {
+				return nil, fmt.Errorf("bus: fetch: %w", err)
+			}
+		case <-ctx.Done():
+			s.abandon(batch)
+			return nil, ctx.Err()
+		case <-s.closed:
+			s.abandon(batch)
+			return nil, ErrSubscriptionClosed
 		}
 	}
 }
 
+// giveBack returns whatever an abandoned fetch still delivers to the queue at
+// once.
+//
+// The pull request stays open on the server until its fetch wait expires, and
+// a message published meanwhile is delivered to it whether or not anyone is
+// listening. Left alone, that message is held by nobody until the ack wait
+// runs out — thirty seconds by default, the same window the plane declares a
+// dispatch nobody accepted lost at. A Nak makes it available to the next pull
+// immediately. The goroutine lives at most fetchWait: the batch's channel
+// closes when the request expires.
+func giveBack(batch jetstream.MessageBatch) {
+	for msg := range batch.Messages() {
+		_ = msg.Nak()
+	}
+}
+
+// abandon gives an abandoned fetch back without making the caller wait for its
+// pull request to expire — unless the subscription is closing, when the give
+// back happens here, so that nothing Close has stopped waiting for can start.
+func (s *pullSubscription) abandon(batch jetstream.MessageBatch) {
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		giveBack(batch)
+		return
+	}
+	s.giving.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.giving.Done()
+		giveBack(batch)
+	}()
+}
+
+// Close is idempotent, and returns only once every abandoned fetch has been
+// given back — at most fetchWait. A give-back that outlived Close would be a
+// goroutine outliving the process's own shutdown, and the plane's Stop
+// promises it leaves nothing running; it is also the last chance to NAK a
+// message that landed on a fetch nobody will read.
 func (s *pullSubscription) Close() error {
 	s.closeOnce.Do(func() { close(s.closed) })
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	s.giving.Wait()
 	return nil
 }
 
