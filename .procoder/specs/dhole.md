@@ -164,7 +164,8 @@ and agent orchestration are profiles over a shared core.
   DAG, cache-hit prediction, engine assignment per step).
 - Bus subject layout as an engine-author-facing contract: `job.dispatch.<tier>.<caps>`,
   `job.status.<run>.<step>`, `job.logs.<run>.<step>`, `engine.control.<engine-id>`,
-  `engine.heartbeat.<engine-id>`.
+  `engine.heartbeat.<engine-id>`, and `job.accept.<run>.<step>` — the request/reply on which
+  an engine confirms a dispatch's fence is still current before starting it (ADR 0028).
 - Executor interface: `acquire`, `exec`, `put`/`get`, `signal`, `release`.
 
 ## Data
@@ -207,6 +208,10 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   `CAPABILITY_SECRETS`; a dispatch that waits in a queue past its secret handles' expiry.
 - Two engines claiming the same step after a partition; a zombie engine reporting a result
   for an attempt that has already been superseded.
+- A dispatch superseded while it waited — re-dispatched after a loss, or redelivered after
+  the engine that accepted it died — reaching an engine: it is refused before any sandbox
+  exists, and an attempt superseded while running is cancelled within a heartbeat. With no
+  plane to confirm against, an `at-most-once` step waits and every other class starts.
 - An engine registering with a protocol version the control plane no longer supports, or
   newer than it knows.
 - A definition revision whose plugin lockfile references a digest no reachable registry
