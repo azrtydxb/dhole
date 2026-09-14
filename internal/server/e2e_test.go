@@ -937,3 +937,66 @@ func TestAHeartbeatKeepsALiveStepsLeaseAlive(t *testing.T) {
 		"the plane took a step away from an engine that was telling it, every 100ms, "+
 			"that it still held it")
 }
+
+// TestAHeartbeatIsAnEngineAcceptingAQueuedStep closes the loop the lease fix
+// depends on, through the plane's real heartbeat consumer.
+//
+// A dispatch is OFFERED to the work queue and its heartbeat deadline starts
+// only when an engine accepts it, because a step waiting for a slot is not
+// late (found on kw: steps that waited behind a busy engine were declared lost
+// after 30 seconds, in a loop). The ACCEPTED status is one piece of evidence;
+// the heartbeat naming the job is the other, and it is the one that keeps
+// arriving. If the consumer's renewal did not count as acceptance, an engine
+// whose ACCEPTED status was lost that then died would leave its step waiting
+// forever with nobody holding it.
+func TestAHeartbeatIsAnEngineAcceptingAQueuedStep(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	srv := startEmbedded(ctx, t)
+
+	conn, err := nats.Connect(srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	leases, err := lease.New(ctx, conn)
+	require.NoError(t, err)
+
+	// Short enough to be dead by the first sweep, were it expiring.
+	token, err := leases.Offer(ctx, tenantID, "run-queued", "step", 1, 500*time.Millisecond)
+	require.NoError(t, err)
+
+	// Well past a sweep: an offer nobody accepted is still current.
+	time.Sleep(7 * time.Second)
+	require.NoError(t, leases.Validate(ctx, token),
+		"the plane swept a dispatch that was still waiting in the queue")
+
+	engineBus, err := bus.Connect(ctx, srv.BusURL())
+	require.NoError(t, err)
+	t.Cleanup(engineBus.Close)
+
+	// One heartbeat naming the job, and then the engine dies.
+	require.NoError(t, engineBus.Publish(ctx, bus.SubjectEngineHeartbeat("engine-took-it"),
+		wire.FrameHeartbeat(&dholev1.EngineHeartbeat{
+			EngineId: "engine-took-it",
+			InFlight: []*dholev1.InFlight{{
+				RunId:      "run-queued",
+				StepId:     "step",
+				Attempt:    1,
+				FenceToken: scheduler.EncodeFence(tenantID, token),
+			}},
+		})))
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := leases.Validate(ctx, token)
+		if errors.Is(err, lease.ErrFenced) {
+			return // Accepted by the heartbeat, then swept when the beats stopped.
+		}
+		require.NoError(t, err)
+		if time.Now().After(deadline) {
+			t.Fatal("an engine heartbeated a queued step and died, and the plane never " +
+				"declared it lost: the heartbeat did not count as the engine accepting it")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}

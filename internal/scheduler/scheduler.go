@@ -123,10 +123,15 @@ const RunFailed runstore.EventType = "RUN_FAILED"
 // recognised, and the step is what talks to it.
 const IdempotencyKeyEnv = "DHOLE_IDEMPOTENCY_KEY"
 
-// DefaultLeaseTTL is how long a step's lease lives before the control plane
-// treats its holder as dead. An engine heartbeats every five seconds
-// (docs/wire-contract.md), so this allows several missed beats before a step
-// is taken away from an engine that is merely slow.
+// DefaultLeaseTTL is how long a step's lease lives without a renewal before the
+// control plane treats its holder as dead. An engine heartbeats every five
+// seconds (docs/wire-contract.md), so this allows several missed beats before a
+// step is taken away from an engine that is merely slow.
+//
+// It is a HEARTBEAT window and it only runs once an engine has accepted the
+// step. A dispatch still waiting in the work queue has no holder to be dead,
+// and timing it from dispatch is what lost every step that had to wait for a
+// slot on kw; see dispatch and lease.Manager.
 const DefaultLeaseTTL = 30 * time.Second
 
 // Fleet is the live engine registry, narrowed to what scheduling reads. The
@@ -1092,7 +1097,93 @@ func (s *Scheduler) SweepOrphans(ctx context.Context) (int, error) {
 			return recorded, err
 		}
 	}
-	return recorded, nil
+	return recorded, s.surfaceStranded(ctx)
+}
+
+// surfaceStranded reports, as STEP_UNSCHEDULABLE, every dispatch still waiting
+// in a queue that no engine in the fleet can take any more.
+//
+// It is the price of letting a dispatch wait. An offered lease has no deadline
+// until an engine accepts it, so the one way a waiting step can be stuck — it
+// matched an engine when it went out, and every engine able to run it has
+// since left, drained or changed — would otherwise be silent: plan() counts
+// the step in flight, nothing expires, and the run says nothing for as long as
+// the fleet stays that way. That is the failure this project fears most.
+//
+// It records and does nothing else. The dispatch stays in the queue and the
+// attempt stays open, so an engine able to run it that arrives later takes the
+// dispatch that waited — no second attempt, no stale copy left in the queue,
+// and no retry charged to a step that never started. Match and Explain are the
+// same calls dispatch makes, so a step is reported stranded by exactly the rule
+// that would have refused to dispatch it. Match ignores how busy an engine is,
+// on purpose: an engine with no free slot is the case where waiting is right.
+func (s *Scheduler) surfaceStranded(ctx context.Context) error {
+	waiting, err := s.leas.Unaccepted(ctx)
+	if err != nil {
+		return fmt.Errorf("scheduler: listing dispatches waiting for an engine: %w", err)
+	}
+
+	fleets := map[string][]registry.Instance{}
+	var errs []error
+	for _, w := range waiting {
+		instances, ok := fleets[w.TenantID]
+		if !ok {
+			instances, err = s.fleet.Instances(ctx, w.TenantID)
+			if err != nil {
+				return fmt.Errorf("scheduler: listing engines for %s: %w", w.TenantID, err)
+			}
+			fleets[w.TenantID] = instances
+		}
+		// One run's trouble must not hide every other run's stranded step,
+		// so a failure here is collected rather than returned at once.
+		if err := s.surfaceOne(ctx, w, instances); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Scheduler) surfaceOne(ctx context.Context, w lease.Waiting, instances []registry.Instance) error {
+	state, err := s.load(ctx, w.TenantID, w.RunID)
+	if err != nil {
+		return err
+	}
+	// The same guards recordOrphan applies, for the same reasons: an offer
+	// can outlive what it was for. A finished run or step, or an attempt
+	// already superseded, is not stuck.
+	if state.completed || state.attempts[w.StepID] != w.Attempt {
+		return nil
+	}
+	if _, done := state.terminal[w.StepID]; done {
+		return nil
+	}
+	if state.gated[w.StepID] || state.resumed[w.StepID] {
+		return nil
+	}
+	// A waiting offer newer than the fence the step was dispatched under is
+	// one that fenced a committed dispatch out. The plane that offered it
+	// records that itself (recordFencedOut); this is for the plane that died
+	// between offering and noticing, which would otherwise leave the run
+	// waiting forever.
+	if dispatched := state.fences[w.StepID]; dispatched != 0 && dispatched < w.Fence {
+		if err := s.recordFencedOut(ctx, w.TenantID, w.RunID, w.StepID, w.Fence, state); err != nil {
+			return err
+		}
+		return s.Advance(ctx, w.TenantID, w.RunID)
+	}
+	pipeline, err := s.graphOf(ctx, w.TenantID, w.RunID, state)
+	if err != nil {
+		return err
+	}
+	step := stepByID(pipeline, w.StepID)
+	if step == nil {
+		return nil
+	}
+	req := s.requirements(step)
+	if len(Match(req, instances)) > 0 {
+		return nil // waiting for a slot, which is what a queue is for
+	}
+	return s.recordUnschedulable(ctx, w.TenantID, w.RunID, w.StepID, Explain(req, instances), state)
 }
 
 // recordOrphan writes the STEP_ATTEMPT_LOST event for one dead lease, and
@@ -1188,6 +1279,24 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 	if !terminal {
 		// ACCEPTED and RUNNING carry no durable transition. Recording them
 		// would grow the log without changing what any replay decides.
+		//
+		// They do change the LEASE: this is an engine saying it holds the
+		// step, and a dispatch was only offered to the queue, with no
+		// heartbeat deadline until somebody took it. Renewing here starts
+		// that deadline, so an engine that accepts and then dies is lost one
+		// TTL later. The heartbeat consumer renews on the same evidence; this
+		// is the half that does not wait up to five seconds for the next
+		// beat. The fence was validated above, so a superseded attempt's late
+		// ACCEPTED never starts the clock of the attempt that replaced it.
+		if !acceptsLease(st.GetPhase()) {
+			return nil
+		}
+		if err := s.leas.Renew(ctx, token); err != nil && !errors.Is(err, lease.ErrFenced) {
+			// Returned, so the status is redelivered rather than the step
+			// left waiting forever with an engine already running it.
+			return fmt.Errorf("scheduler: accepting the lease on %s/%s: %w",
+				st.GetRunId(), st.GetStepId(), err)
+		}
 		return nil
 	}
 
@@ -1237,6 +1346,13 @@ func (s *Scheduler) OnStatus(ctx context.Context, st *dholev1.JobStatus) error {
 	return s.Advance(ctx, tenantID, st.GetRunId())
 }
 
+// acceptsLease reports whether a non-terminal phase is an engine holding the
+// step. UNSPECIFIED is not: a status that does not say what it is proves
+// nothing about who holds what.
+func acceptsLease(p dholev1.Phase) bool {
+	return p == dholev1.Phase_PHASE_ACCEPTED || p == dholev1.Phase_PHASE_RUNNING
+}
+
 // terminalEvent maps a reported phase to the event it records, if any.
 func terminalEvent(p dholev1.Phase) (runstore.EventType, bool) {
 	switch p {
@@ -1258,11 +1374,14 @@ func terminalEvent(p dholev1.Phase) (runstore.EventType, bool) {
 // and thrown away at the end of it: holding one between calls would be the
 // in-memory run position this design refuses.
 type runState struct {
-	created       bool
-	pipelineID    string
-	revisionID    string
-	completed     bool
-	attempts      map[string]uint32
+	created    bool
+	pipelineID string
+	revisionID string
+	completed  bool
+	attempts   map[string]uint32
+	// fences is the fence each step's latest dispatch went out under: the one
+	// token its engine's reports can carry. See fencedOut.
+	fences        map[string]uint64
 	terminal      map[string]runstore.EventType
 	outputs       map[string][]*dholev1.OutputRef
 	unschedulable map[string]string
@@ -1302,6 +1421,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 
 	state := &runState{
 		attempts:      map[string]uint32{},
+		fences:        map[string]uint64{},
 		terminal:      map[string]runstore.EventType{},
 		outputs:       map[string][]*dholev1.OutputRef{},
 		unschedulable: map[string]string{},
@@ -1329,6 +1449,9 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			if err != nil {
 				return nil, fmt.Errorf("scheduler: run %q step %q: %w", runID, e.StepID, err)
 			}
+			if e.Attempt == state.attempts[e.StepID] {
+				state.fences[e.StepID] = dispatched.Fence
+			}
 			// A later attempt replaces the verdict of an earlier one: a step
 			// re-dispatched for real after having been served from cache is
 			// not a cache hit any more.
@@ -1339,6 +1462,13 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			delete(state.terminal, e.StepID)
 			// And it supersedes a release: the resumed step is running.
 			delete(state.resumed, e.StepID)
+			// And the reason it could not be placed before: that no longer
+			// describes it. Kept, it would silence recordUnschedulable when the
+			// same reason comes back — every engine able to take the queued
+			// dispatch leaving before one accepted it — and the one step that
+			// is now genuinely stuck would be the one the log says nothing
+			// about.
+			delete(state.unschedulable, e.StepID)
 		case runstore.StepSucceeded:
 			state.terminal[e.StepID] = e.Type
 			status := &dholev1.JobStatus{}
@@ -1699,7 +1829,25 @@ func (s *Scheduler) dispatch(
 		}
 	}()
 
-	token, err := s.leas.Claim(ctx, tenantID, runID, step.GetId(), attempt, s.ttl)
+	// OFFERED, not claimed: this dispatch goes onto a work queue, and a queue
+	// exists so that work can wait for capacity. The fence is taken now
+	// because it travels inside the dispatch; the heartbeat deadline starts
+	// only when an engine accepts the step (OnStatus, and the plane's
+	// heartbeat consumer). Starting it here declared every step that waited
+	// longer than one TTL for a slot lost — on kw a step dispatched at
+	// 08:18:37 was lost at 08:19:10 and accepted at 08:19:13, and the run
+	// thrashed through attempt after attempt while its engine worked normally.
+	//
+	// The other choice was to keep a dispatch-time deadline and give an
+	// unaccepted attempt a longer "queue patience". Any finite patience fails
+	// the same way on a queue deeper than it, and every expiry strands a stale
+	// copy of the dispatch in the queue for an engine to run for nobody, which
+	// deepens the queue further. And there is nothing for a timer to catch:
+	// the queue holds the dispatch durably and redelivers it if an engine
+	// fetches it and dies before accepting. What CAN strand a waiting
+	// dispatch is the fleet losing every engine able to take it, and that is
+	// a question about the fleet, answered by surfaceStranded.
+	token, err := s.leas.Offer(ctx, tenantID, runID, step.GetId(), attempt, s.ttl)
 	if err != nil {
 		return fmt.Errorf("scheduler: claiming %s/%s: %w", runID, step.GetId(), err)
 	}
@@ -1713,7 +1861,11 @@ func (s *Scheduler) dispatch(
 		return err
 	}
 	if fresh.attempts[step.GetId()] >= attempt {
-		return nil
+		// Our offer may have come back AFTER that dispatch committed, in
+		// which case it superseded the only fence that dispatch's engine can
+		// report with. Say so now rather than leave the attempt in flight
+		// with nobody able to finish it.
+		return s.recordFencedOut(ctx, tenantID, runID, step.GetId(), token.Fence, fresh)
 	}
 
 	retry := effects.RetryPolicy(step)
@@ -1821,6 +1973,43 @@ func (s *Scheduler) dispatch(
 	s.hold(tenantID, runID, step.GetId(), release)
 	committed = true
 	return nil
+}
+
+// recordFencedOut records as lost a dispatched attempt whose fence a later
+// offer of the SAME attempt has superseded.
+//
+// Two Advances of one run — the open-run tick and an arriving status, or two
+// planes — can both find a step ready and both offer its lease. When the loser
+// offers after the winner committed, the winner's dispatch carries a fence
+// that is no longer current: its engine's ACCEPTED, heartbeats and result are
+// all discarded as stale. While a lease expired a TTL after dispatch, the
+// loser's orphaned offer expired too and the step came back half a minute
+// later. An offer nobody accepts never expires, so without this the run waits
+// forever — found by `dhole local run`, whose log showed STEP_DISPATCHED b once
+// and the engine's reports fenced at 4 against a lease at 5.
+//
+// The attempt is lost exactly as one whose engine died is, through
+// recordOrphan and its guards: a step that already finished is left alone,
+// and its effect class decides whether it runs again. That costs an attempt,
+// which is what the race cost before; not superseding a committed dispatch in
+// the first place is the open plan item that would save it.
+func (s *Scheduler) recordFencedOut(
+	ctx context.Context, tenantID, runID, stepID string, current uint64, state *runState,
+) error {
+	dispatched := state.fences[stepID]
+	if dispatched == 0 || dispatched >= current {
+		// The dispatch in the log went out under this fence or a newer one,
+		// so its reports are still accepted.
+		return nil
+	}
+	_, err := s.recordOrphan(ctx, lease.Orphan{
+		TenantID: tenantID,
+		RunID:    runID,
+		StepID:   stepID,
+		Attempt:  state.attempts[stepID],
+		Fence:    dispatched,
+	})
+	return err
 }
 
 // requirements are what the step needs of the place it runs. The platform is

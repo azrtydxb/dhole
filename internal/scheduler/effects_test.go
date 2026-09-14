@@ -258,14 +258,15 @@ type stealingLeases struct {
 	lease.Manager
 }
 
-func (s stealingLeases) Claim(
+// Offer, because that is how a dispatch takes its lease (see scheduler.dispatch).
+func (s stealingLeases) Offer(
 	ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration,
 ) (lease.Token, error) {
-	token, err := s.Manager.Claim(ctx, tenantID, runID, stepID, attempt, ttl)
+	token, err := s.Manager.Offer(ctx, tenantID, runID, stepID, attempt, ttl)
 	if err != nil {
 		return token, err
 	}
-	if _, err := s.Manager.Claim(ctx, tenantID, runID, stepID, attempt+1, ttl); err != nil {
+	if _, err := s.Manager.Offer(ctx, tenantID, runID, stepID, attempt+1, ttl); err != nil {
 		return lease.Token{}, err
 	}
 	return token, nil

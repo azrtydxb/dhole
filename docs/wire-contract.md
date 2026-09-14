@@ -285,12 +285,16 @@ best-effort**; see Logs below.
 
 ## The message flow of one attempt
 
-1. The scheduler finds a step ready, claims a lease, and gets a fence token.
+1. The scheduler finds a step ready, offers it a lease, and gets a fence token.
+   The lease has no heartbeat deadline yet: the dispatch may wait in the queue
+   for an engine slot for as long as the fleet is busy.
 2. It enqueues a `JobDispatch` through the outbox. The event and the outbox row
    commit in one transaction, so a dispatch is never published for a step whose
    readiness was rolled back.
 3. An engine pulls the dispatch, checks `protocol_version`, and publishes
-   `JobStatus{PHASE_ACCEPTED}`.
+   `JobStatus{PHASE_ACCEPTED}`. That status — or the first heartbeat listing
+   the job in `in_flight`, whichever the plane applies first — accepts the lease,
+   and from then on it expires one TTL after its last renewal.
 4. The engine runs the step, streaming `LogChunk` messages as output appears and
    writing the authoritative log to the object store.
 5. The engine publishes a terminal `JobStatus` — `SUCCEEDED`, `FAILED`, or
@@ -709,6 +713,17 @@ watching, and must finish writing it before publishing the terminal status.
 An engine publishes `EngineHeartbeat` every five seconds listing everything it
 is holding. A lease that stops being renewed expires, and the control plane
 treats the step as orphaned and re-dispatches it under a new fence.
+
+That deadline belongs to an attempt an engine has **accepted**. A dispatch still
+waiting in the work queue has no holder to be dead and never expires: the queue
+holds it durably, and redelivers it if an engine fetches it and dies before
+accepting. Timing it from dispatch declared every step that waited more than
+one TTL for a slot lost, re-dispatched it, and lost it again — found on a real
+cluster, where a pipeline wider than its engine's slots thrashed indefinitely.
+What can strand a waiting dispatch is the fleet losing every engine able to
+take it; the control plane checks for that on every sweep and records
+`STEP_UNSCHEDULABLE` with the reason, leaving the dispatch queued so an engine
+that returns runs it as the same attempt.
 
 An engine that finds itself holding a job whose fence is no longer valid must
 stop that job. It has been superseded, and its output would be discarded anyway.

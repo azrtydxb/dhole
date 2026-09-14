@@ -604,9 +604,13 @@ type noLeases struct{}
 func (noLeases) Claim(context.Context, string, string, string, uint32, time.Duration) (lease.Token, error) {
 	panic("noLeases: not reached")
 }
-func (noLeases) Renew(context.Context, lease.Token) error       { panic("noLeases: not reached") }
-func (noLeases) Validate(context.Context, lease.Token) error    { panic("noLeases: not reached") }
-func (noLeases) Expire(context.Context) ([]lease.Orphan, error) { panic("noLeases: not reached") }
+func (noLeases) Offer(context.Context, string, string, string, uint32, time.Duration) (lease.Token, error) {
+	panic("noLeases: not reached")
+}
+func (noLeases) Renew(context.Context, lease.Token) error            { panic("noLeases: not reached") }
+func (noLeases) Validate(context.Context, lease.Token) error         { panic("noLeases: not reached") }
+func (noLeases) Expire(context.Context) ([]lease.Orphan, error)      { panic("noLeases: not reached") }
+func (noLeases) Unaccepted(context.Context) ([]lease.Waiting, error) { panic("noLeases: not reached") }
 
 // eventKinds reduces a log to what a reader replaying it sees happen.
 func eventKinds(events []runstore.Event) []string {

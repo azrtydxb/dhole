@@ -317,6 +317,9 @@ func TestABudgetSlotIsReleasedWhenAnAttemptIsLostWithItsEngine(t *testing.T) {
 
 	require.NoError(t, w.sched.Advance(ctx, testTenant, testRun))
 	require.Equal(t, []string{"x"}, w.drain(ctx, t))
+	// It is accepted first: a dispatch still waiting in the queue has no
+	// engine to lose, and is never swept.
+	w.harness.report(ctx, t, w.sched, w.latestDispatch(t, "x"), dholev1.Phase_PHASE_ACCEPTED)
 
 	// The engine is gone: nobody renews the lease and nobody reports.
 	deadline := time.Now().Add(20 * time.Second)
