@@ -71,6 +71,12 @@ and agent orchestration are profiles over a shared core.
 - [S-11] Plugin resolution through one scheme-addressed resolver (`oci://`, `cas://`) with
   detached signature records and federated mirrored upstreams.
 - [S-12] Policy subsystem in CEL, one evaluation point, keyed on trust tier, with audit.
+  `dhole serve` always evaluates a dispatch policy for every step and every declared secret
+  and records every decision, allows included: a built-in permissive default
+  (`dhole policy default`) that an operator replaces with `--policy FILE` or
+  `controlPlane.policy`, beneath a floor of rules no configuration removes — ADR 0015's taint
+  rules and the untrusted-tier constraint — with `input.tainted`, `input.taint_sources` and
+  `input.engine_capabilities` supplied at dispatch from the run's log and the fleet (ADR 0031).
 - [S-13] One protobuf/ConnectRPC API contract serving GUI, CLI and agents, with
   operation-level editing, `validate`, and `plan`.
 - [S-14] React + React Flow visual editor driving that API: full drag-and-drop authoring,
@@ -413,6 +419,16 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
       `TestAnEndedAttemptsUnspentHandlesAreRevoked`,
       `TestABuiltinStepDeclaringASecretIsRefused`,
       `TestPolicyDecidesEachSecretAStepDeclares`.
+- [ ] [S-12] [S-16] [S-23] The embedded plane with no policy configured evaluates the built-in
+      default and records an allow for a step and for its declared secret; an operator policy
+      refusing a named secret fails the run with `STEP_POLICY_DENIED` naming it; a step bound to
+      a value an untrusted trigger admitted reaches a rule with `input.tainted` set, and an
+      effectful one is refused by the floor whatever the operator's policy says; an invalid
+      policy file refuses `dhole serve` start-up —
+      `TestTheDefaultPolicyIsEvaluatedAndRecordedForAStepAndItsSecret`,
+      `TestAnOperatorPolicyRefusingASecretFailsTheRun`,
+      `TestATaintedInputReachesTheRuleAsInputTainted`,
+      `TestServeRefusesToStartOnAnInvalidPolicy`.
 - [ ] [S-1] [S-9] [S-6] `TestAcceptanceCICacheHit` (`make acceptance-ci`): the CI acceptance
       pipeline builds a container image and hits the cache on a second run with unchanged
       inputs; fails if the second run rebuilds the image or reports no cache hit.

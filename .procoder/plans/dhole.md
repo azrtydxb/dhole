@@ -1235,6 +1235,43 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       .procoder/ask/decisions.md: `dhole serve` wires no dispatch policy, so none of this is
       evaluated on the single binary or the chart until one is chosen. Dispatch-time taint
       (`input.tainted`) is still never set; it is ADR 0015's propagation work, not a secrets item.
+- [ ] **`dhole serve` evaluates no dispatch policy, and dispatch never sets the taint keys.**
+      Left open by the item above; decided by the owner (.procoder/ask/decisions.md, "Which
+      dispatch policy `dhole serve` runs") and by ADR 0031. The plane passes no
+      `scheduler.Config.Policy`, so no step and no secret is put to a rule and `policy_audit`
+      stays empty; `permit` never sets `input.tainted`, `input.taint_sources` or
+      `input.engine_capabilities`, so ADR 0015's rules could not hold at dispatch even if one
+      were wired.
+      Files: `internal/policy/default.yaml`, `internal/policy/document.go` (the policy file
+      format, moved out of the CLI), `internal/policy/floor.go`, `internal/policy/cel.go`
+      (the allow reason naming the revision), `internal/taint/policy.go`
+      (`DispatchFloor`), `internal/scheduler/taint.go` and `internal/scheduler/scheduler.go`
+      (`permit`, and `RUN_CREATED` inputs and `TAINT_SANITISED` folded into `runState`),
+      `internal/server/server.go` and `internal/server/policy.go` (`Config.Policy`,
+      `(*Server).SetPolicy`), `cmd/dhole/cli/serve.go` (`--policy`, `DHOLE_POLICY`, re-reading the
+      file), `cmd/dhole/cli/policy.go` (`dhole policy default`), `charts/dhole`
+      (`controlPlane.policy`), `docs/policy.md`, `docs/secrets.md`.
+      Interfaces: produces `policy.Document`, `policy.ParseDocument(raw []byte) (Document, error)`,
+      `(Document).TierPolicy() (TierPolicy, error)`, `policy.DefaultDocument() []byte`,
+      `policy.Default() TierPolicy`, `policy.WithFloor(inner Source, floor TierPolicy) Source`,
+      `policy.UntrustedTierRules() []Rule`, `taint.DispatchFloor() policy.TierPolicy`,
+      `server.Config.Policy *policy.TierPolicy` (nil is the built-in default),
+      `(*server.Server).SetPolicy(policy.TierPolicy) error`; consumes `scheduler.Config.Policy`
+      and `.Provenance`, `plugins.NewProvenance`, `taint.Sources`, `scheduler.Match`.
+      Tests, red first: `TestTheDefaultPolicyIsEvaluatedAndRecordedForAStepAndItsSecret`,
+      `TestAnOperatorPolicyRefusingASecretFailsTheRun`,
+      `TestATaintedInputReachesTheRuleAsInputTainted` (server e2e through the embedded plane);
+      `TestTheDispatchDecisionCarriesTheTaintOfTheStepsInputs`,
+      `TestTheDispatchDecisionCarriesTheCapabilitiesOfTheEnginesAStepCanReach` (scheduler);
+      `TestTheFloorHoldsUnderAPermissivePolicy`, `TestTheFloorDoesNotTurnAMissingPolicyIntoAPermit`
+      (taint); `TestTheDefaultDocumentPermitsEverythingAndIsValid`,
+      `TestADocumentThatCannotWorkIsRefusedWhereItIsRead`,
+      `TestTheFloorIsEvaluatedFirstAndOnlyNarrows` (policy);
+      `TestServeRefusesToStartOnAnInvalidPolicy`, `TestPolicyDefaultPrintsTheBuiltInDocument`,
+      `TestAChangedPolicyFileIsInstalledAndAnInvalidOneIsNot` (cli);
+      `TestAnInlinePolicyIsRenderedIntoAConfigMapAndNamedOnTheCommandLine`,
+      `TestAnExistingPolicyConfigMapIsMountedAndNamedOnTheCommandLine`,
+      `TestNoPolicyValuesRenderNoPolicyFlag` (charts).
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

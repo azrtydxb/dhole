@@ -515,3 +515,21 @@ Refusing it in the operation would make undoing the edit that added the capabili
 - Refuse in the operation, accepting that some undos can be refused.
 
 **Answer (2026-09-14):** keep as is.
+
+## A git-triggered pipeline's effectful steps are refused at dispatch, and nothing can clear the taint (2026-09-15)
+
+ADR 0031 wires the permissive default policy the owner chose, beneath a floor that holds ADR
+0015 and the spec's security constraint: tainted data may not reach a non-`PURE` step or a
+privileged engine. It also makes dispatch set `input.tainted` from the run's log, which it
+never did. Together they mean a pipeline whose non-`PURE` step reads a value a `git` trigger
+(always untrusted) or an untrusted `http` trigger bound is refused with `STEP_POLICY_DENIED`
+naming `taint.effectful-step`, where it ran before — and `dhole serve` wires no sanitisation
+gate step type, so there is no way to clear the mark. The literal "every existing step
+allowed" and ADR 0015 cannot both hold for such a pipeline; the implementer kept ADR 0015.
+
+- Keep it: the floor holds, and such a pipeline makes its consuming step `PURE` or binds no
+  untrusted value to it until a gate step type exists.
+- Wire a sanitisation gate step type (`taint.Gate` behind a `builtin:` reference) as the next
+  item, so an effectful step can consume cleared data.
+- Treat `git` trigger data as trusted when the webhook signature verifies, so only
+  unauthenticated `http` data is tainted (an ADR 0015 amendment).
