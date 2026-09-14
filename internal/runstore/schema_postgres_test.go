@@ -99,7 +99,7 @@ func TestPostgresRefusesASecondStepVerdict(t *testing.T) {
 	require.NoError(t, store.Append(ctx, tenant, runstore.Event{
 		RunID: "run-a", Type: runstore.RunCreated, At: time.Now().UTC(),
 	}))
-	for _, verdict := range []runstore.EventType{awaitingReplay, policyDenied} {
+	for _, verdict := range []runstore.EventType{awaitingReplay, policyDenied, secretUnavailable} {
 		for range 2 {
 			require.NoError(t, store.Append(ctx, tenant, runstore.Event{
 				RunID: "run-a", StepID: "a", Attempt: 1,
@@ -112,6 +112,7 @@ func TestPostgresRefusesASecondStepVerdict(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, eventsOfType(events, awaitingReplay), 1)
 	require.Len(t, eventsOfType(events, policyDenied), 1)
+	require.Len(t, eventsOfType(events, secretUnavailable), 1)
 
 	// And the index is per step, not per run, on this dialect too.
 	require.NoError(t, store.Append(ctx, tenant, runstore.Event{
