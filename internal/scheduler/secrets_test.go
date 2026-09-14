@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -59,8 +60,10 @@ func newSecretHarness(
 // secretHarnessOptions bend the secret harness for the cases that need a lease
 // to expire, or a dispatch to fail to commit.
 type secretHarnessOptions struct {
-	ttl    time.Duration
-	leases func(lease.Manager) lease.Manager
+	ttl      time.Duration
+	leases   func(lease.Manager) lease.Manager
+	builtins scheduler.BuiltinSteps
+	gate     scheduler.Gate
 }
 
 func newSecretHarnessWith(
@@ -93,6 +96,7 @@ func newSecretHarnessWith(
 		Store: store, Outbox: ob, Leases: manager, Fleet: fleet, Definitions: defs,
 		Tier: testTier, OS: "linux", Arch: "amd64",
 		Secrets: issuer, LeaseTTL: opts.ttl,
+		Builtins: opts.builtins, Gate: opts.gate,
 	})
 	require.NoError(t, err)
 
@@ -331,4 +335,67 @@ func TestHandlesIssuedForADispatchThatDidNotCommitAreRevoked(t *testing.T) {
 	require.Len(t, issuer.issued, 1, "the dispatch never got as far as issuing, so this proves nothing")
 	_, err := broker.Redeem(issuer.issued[0].GetHandle())
 	require.Error(t, err, "a handle minted for a dispatch that never committed is still redeemable")
+}
+
+// takingBuiltins takes every `builtin:` step it is offered, the way the plane's
+// own dispatcher does, and remembers that it did.
+type takingBuiltins struct {
+	mu    sync.Mutex
+	taken []string
+}
+
+func (b *takingBuiltins) Take(_ context.Context, _, _ string, step *dholev1.Step) (bool, error) {
+	if !strings.HasPrefix(step.GetPluginRef(), "builtin:") {
+		return false, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.taken = append(b.taken, step.GetId())
+	return true, nil
+}
+
+// armingGate arms every `builtin:wait` step, and remembers that it did.
+type armingGate struct {
+	mu    sync.Mutex
+	armed []string
+}
+
+func (g *armingGate) Arm(_ context.Context, _ runstore.Tx, _, _ string, step *dholev1.Step) (bool, error) {
+	if step.GetPluginRef() != "builtin:wait" {
+		return false, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.armed = append(g.armed, step.GetId())
+	return true, nil
+}
+
+// TestABuiltinStepDeclaringASecretIsRefused: a `builtin:` step runs on the
+// plane and never has a JobDispatch, so the secrets it declared were dropped
+// on the floor — the author believed a credential was delivered and nothing
+// was. It is refused like any other step whose secrets cannot be given, before
+// a plane worker takes it or a gate is armed (ADR 0028).
+func TestABuiltinStepDeclaringASecretIsRefused(t *testing.T) {
+	for _, ref := range []string{"builtin:llm", "builtin:wait"} {
+		t.Run(ref, func(t *testing.T) {
+			ctx := testContext(t)
+			src := secrets.NewMapSource()
+			src.Set(testTenant, "harbor-robot", registryPassword)
+			p := pushPipeline()
+			p.GetSteps()[0].PluginRef = ref
+			builtins, gate := &takingBuiltins{}, &armingGate{}
+			h := newSecretHarnessWith(ctx, t, p, secrets.NewStepIssuer(secrets.NewBroker(), src),
+				secretHarnessOptions{builtins: builtins, gate: gate})
+
+			require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+			requireRefusedNaming(ctx, t, h, "builtin:")
+
+			builtins.mu.Lock()
+			defer builtins.mu.Unlock()
+			gate.mu.Lock()
+			defer gate.mu.Unlock()
+			require.Empty(t, builtins.taken, "the plane took a builtin step whose declared secrets it cannot give")
+			require.Empty(t, gate.armed, "a gate declaring secrets was armed as if they had been given")
+		})
+	}
 }

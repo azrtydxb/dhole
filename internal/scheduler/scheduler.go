@@ -544,6 +544,12 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 			// further in this pass: the run is over.
 			return nil
 		}
+		// A step the plane hosts cannot be given the secrets it declares, and
+		// is refused before the cache, a plane worker or a gate can make it
+		// look as though it was (ADR 0028).
+		if refused, err := s.refuseBuiltinSecrets(ctx, tenantID, runID, step); refused || err != nil {
+			return err
+		}
 		// The cache first, and only then the engine. This is the whole of
 		// ADR 0009's "skipped and its recorded outputs reused": a step that
 		// has already been done under this exact key is finished by writing

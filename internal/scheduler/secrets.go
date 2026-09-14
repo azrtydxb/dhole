@@ -89,9 +89,42 @@ func (s *Scheduler) refuseSecrets(
 	if reason == nil {
 		return false, nil
 	}
+	return true, s.recordSecretRefusal(ctx, tenantID, runID, step, reason)
+}
+
+// builtinScheme is the plugin reference of a step the control plane runs
+// itself. It is the public contract a pipeline author types, and internal/server
+// owns the step types behind it; this package only needs to recognise it.
+const builtinScheme = "builtin:"
+
+// refuseBuiltinSecrets refuses a `builtin:` step that declares secrets, before
+// it is served from cache, taken by a plane worker or armed as a gate. A step
+// the plane hosts never has a JobDispatch, so its declared secrets would go
+// nowhere and the author would believe a credential had been delivered. A
+// builtin that needs one names it in its own configuration (ADR 0024, 0028).
+//
+// It reports whether the step was refused.
+func (s *Scheduler) refuseBuiltinSecrets(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+) (bool, error) {
+	if len(step.GetSecrets()) == 0 || !strings.HasPrefix(step.GetPluginRef(), builtinScheme) {
+		return false, nil
+	}
+	return true, s.recordSecretRefusal(ctx, tenantID, runID, step, fmt.Errorf(
+		"step %q is %s, which the control plane runs itself and never dispatches, so it cannot be "+
+			"given step secrets; a builtin: step names a credential in its own configuration instead",
+		step.GetId(), step.GetPluginRef()))
+}
+
+// recordSecretRefusal writes STEP_SECRET_UNAVAILABLE and fails the run. The
+// store keeps one per step (migration 0026), so a pass that races another to
+// the same refusal appends nothing.
+func (s *Scheduler) recordSecretRefusal(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, reason error,
+) error {
 	payload, err := MarshalSecretUnavailable(SecretUnavailable{Reason: reason.Error()})
 	if err != nil {
-		return true, err
+		return err
 	}
 	if err := s.append(ctx, tenantID, runstore.Event{
 		RunID:   runID,
@@ -100,9 +133,9 @@ func (s *Scheduler) refuseSecrets(
 		Type:    StepSecretUnavailable,
 		Payload: payload,
 	}); err != nil {
-		return true, err
+		return err
 	}
-	return true, s.fail(ctx, tenantID, runID, []string{step.GetId()})
+	return s.fail(ctx, tenantID, runID, []string{step.GetId()})
 }
 
 // secretRefs issues the handles one attempt's dispatch carries.
