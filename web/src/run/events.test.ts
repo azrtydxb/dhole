@@ -160,6 +160,42 @@ describe("the realised graph", () => {
     expect(generator.realised?.fragment).toEqual("CghmcmFnbWVudA==");
   });
 
+  it("records who decided a gate and why, not only that it was decided", () => {
+    const model = applyEvents(emptyRun("run_1"), [
+      event({
+        type: "STEP_APPROVAL_DECIDED",
+        sequence: 1,
+        stepId: "promote",
+        payload: {
+          approver: "alice",
+          approved: false,
+          reason: "the canary error rate doubled",
+          at: "2026-09-14T10:00:00Z",
+        },
+      }),
+    ]);
+
+    expect(model.nodes[0]!.decision).toEqual({
+      approver: "alice",
+      approved: false,
+      reason: "the canary error rate doubled",
+    });
+  });
+
+  it("keeps the node when a decision payload cannot be read", () => {
+    const model = applyEvents(emptyRun("run_1"), [
+      event({
+        type: "STEP_APPROVAL_DECIDED",
+        sequence: 1,
+        stepId: "promote",
+        payload: { approved: "yes" },
+      }),
+    ]);
+
+    expect(model.nodes[0]!.id).toEqual("promote");
+    expect(model.nodes[0]!.decision).toBeUndefined();
+  });
+
   it("keeps the node when a generator payload cannot be read", () => {
     // A frame this client cannot read must not take the run view down: the
     // rest of the run is still on screen and still moving.

@@ -101,6 +101,40 @@ export interface RunNode {
    * plane records the fragment, because until then nobody — not this view,
    * not the definition, not the generator's author — knows what it will be. */
   realised?: RealisedFragment;
+  /** Who decided this step's gate, which way, and in their own words. */
+  decision?: GateDecisionRecord;
+}
+
+/** GateDecisionRecord is one STEP_APPROVAL_DECIDED payload, as
+ * internal/steps/approval.Decision writes it. */
+export interface GateDecisionRecord {
+  readonly approver: string;
+  readonly approved: boolean;
+  readonly reason: string;
+}
+
+/** parseDecision reads a decision off an event, or null for a payload this
+ * client cannot read. */
+export function parseDecision(payload: unknown): GateDecisionRecord | null {
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+  const record = payload as {
+    approver?: unknown;
+    approved?: unknown;
+    reason?: unknown;
+  };
+  if (
+    typeof record.approver !== "string" ||
+    typeof record.approved !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    approver: record.approver,
+    approved: record.approved,
+    reason: typeof record.reason === "string" ? record.reason : "",
+  };
 }
 
 /** RunModel is the whole view state. */
@@ -223,6 +257,14 @@ export function applyEvent(model: RunModel, event: RunEvent): RunModel {
       // The dispatch is the only place either of these is visible.
       node.cached = payload.cache_hit === true;
       node.cacheIneligibleReason = payload.cache_ineligible_reason ?? "";
+      break;
+    }
+    case "STEP_APPROVAL_DECIDED": {
+      node.state = event.type;
+      const decision = parseDecision(event.payload);
+      if (decision !== null) {
+        node.decision = decision;
+      }
       break;
     }
     case "STEP_SUCCEEDED":

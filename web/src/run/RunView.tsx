@@ -146,6 +146,13 @@ function NodeView({ node, expanded, onToggle, onSelect }: NodeViewProps) {
           {node.cacheIneligibleReason}
         </span>
       )}
+      {node.decision !== undefined && (
+        <span data-testid="node-decision">
+          {node.decision.approved ? "approved" : "denied"} by{" "}
+          {node.decision.approver}
+          {node.decision.reason !== "" && ` — ${node.decision.reason}`}
+        </span>
+      )}
       {/* A generator's realised steps. They are in the run log and nowhere
           else — the definition never contained them — so this is drawn from
           the record the plane wrote and from nothing this view computed. */}
