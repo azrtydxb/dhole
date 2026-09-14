@@ -464,6 +464,11 @@ assistant), so building them means inventing data the plane cannot confirm.
 
 ## Harbor at 192.168.10.131 now requires authentication (2026-09-14)
 
+CORRECTION (2026-09-14): 192.168.10.131 is not Harbor. It is the approved
+Nexus repository (`nexus` namespace on kw, cert CN `nexus`, SANs
+`nexus.kw.local` and the IP); Harbor at .123 is gone. Everything below that
+says "Harbor at .131" means that Nexus. The auth finding stands.
+
 Harbor moved from 192.168.10.123 (unreachable) to 192.168.10.131 and refuses
 anonymous push (`UNAUTHORIZED` on blob upload); anonymous pull still works.
 This blocks two things: pushing rebuilt Dhole images to redeploy kw, and the
