@@ -1029,6 +1029,32 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       still fails on the port layout. (Both are closed below as of 2026-09-10, and the case now
       passes outright: `make conformance` is 11/11 for the shipped Go engine and for the reference
       Python one.)
+- [ ] **A step cannot be given a secret: nothing produces a `SecretRef`.** Found 2026-09-14
+      running a real CI/CD pipeline whose registry now refuses anonymous push. The engine half
+      is complete and conformance-tested, but `Step` has no field to declare a secret,
+      `scheduler.buildDispatch` never sets `JobDispatch.secrets`, and the plane's only
+      `secrets.Source` is the model-credential one ADR 0024 introduced for `builtin:llm`.
+      ADR 0027 decides the shape. Files: `proto/dhole/v1/pipeline.proto` (`Step.secrets`,
+      `StepSecret`), `internal/secrets/step.go`, `internal/scheduler/secrets.go` plus the
+      `Secrets` config field and `buildDispatch`, `internal/server/server.go`
+      (`Config.StepSecrets`), `cmd/dhole/cli/serve.go` (`--secret TENANT/NAME=ENVVAR`),
+      `charts/dhole` (`controlPlane.secrets`), `docs/secrets.md`.
+      Interfaces: produces `scheduler.StepSecrets`, implemented by `secrets.StepIssuer`, with
+      `Check(ctx, tenantID, step) error` and `Issue(ctx, scope, step, ttl) ([]*SecretRef, error)`
+      over `secrets.Scope`; consumes `secrets.Broker.Issue` and `secrets.Source`.
+      Tests, red first: `TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere`
+      (server e2e) fails with the step's proof output not matching the value;
+      `TestAStepDeclaringASecretThePlaneDoesNotHoldIsNeverDispatched` fails with a dispatch
+      carrying no secret; `TestTheStoredDispatchCarriesHandlesAndNeverTheValue` (scheduler,
+      reads the outbox row) fails with no `SecretRef` on the stored dispatch.
+      POLICY AND TAINT, as found rather than invented: ADR 0012 names the secret resolver as a
+      policy caller, and nothing does call it — `PlaneResolver` consults no policy, the
+      scheduler's dispatch-time `permit` sees only `input.capabilities`, and `dhole serve`
+      wires no dispatch policy at all. Taint (ADR 0015) is evaluated only inside
+      `builtin:agent`; the dispatch path never sets `input.tainted`. So the only existing
+      control over a step's secret access is the `SECRETS` capability, which is why a step
+      declaring a secret must declare it. No rule keyed on the secret NAME exists, and none is
+      added here: which tier may read which secret is a policy decision still to be made.
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

@@ -100,6 +100,13 @@ and agent orchestration are profiles over a shared core.
   recorded on the decision event beside the approver; a decision without one is refused.
   Dhole adds model fingerprint capture, token and cost
   accounting with per-run and per-pipeline ceilings, and full call recording.
+- [S-23] Step secrets: a step declares the secrets it needs by NAME, each bound to the
+  environment variable it sees the value as, and must also declare `CAPABILITY_SECRETS`.
+  The plane issues one short-lived, single-use `SecretRef` per declaration per attempt,
+  scoped to the step's tenant, from a source the operator configures explicitly per tenant
+  (`dhole serve --secret`, `controlPlane.secrets`) and kept separate from the plane's own
+  model credentials (ADR 0027). A declared secret the plane does not hold refuses the step
+  before anything is dispatched, naming the secret.
 
 ## Out of scope
 
@@ -196,6 +203,8 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   asking for a second gated action after the first was approved — there is one gate per
   step per run.
 - Cache hit on a step whose recorded output blob has been garbage collected.
+- A step declaring a secret the plane does not hold for its tenant, or declaring one without
+  `CAPABILITY_SECRETS`; a dispatch that waits in a queue past its secret handles' expiry.
 - Two engines claiming the same step after a partition; a zombie engine reporting a result
   for an attempt that has already been superseded.
 - An engine registering with a protocol version the control plane no longer supports, or
@@ -246,6 +255,9 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   artifact writes block the step rather than proceeding.
 - **A plugin's signature fails verification** — the step is not dispatched, regardless of
   cached resolution, and the catalog entry is marked untrusted.
+- **A declared step secret is not configured** — the step is not dispatched: no lease, no
+  slot, no outbox row. `STEP_SECRET_UNAVAILABLE` names the secret (never a value) and the run
+  fails; it is a deployment fault, so it is not retried.
 - **Git mirror push fails** — the definition revision is still authoritative in the DB; the
   mirror retries and reports drift rather than blocking the save.
 
@@ -359,6 +371,12 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
 - [ ] [S-21] An LLM step returns an object validated against its declared schema, records
       model fingerprint, prompt, response, tokens and latency, and halts the run at its token
       ceiling — `TestLLMStepSchemaFingerprintAndBudgetCeiling`.
+- [ ] [S-23] A step declaring a secret the plane holds runs through the embedded plane and an
+      engine with the value in its environment, and the value appears in no run event, no
+      stored outbox dispatch and no cache key; a step declaring one the plane does not hold
+      fails naming it and is never dispatched —
+      `TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere`,
+      `TestAStepDeclaringASecretThePlaneDoesNotHoldIsNeverDispatched`.
 - [ ] [S-1] [S-9] [S-6] `TestAcceptanceCICacheHit` (`make acceptance-ci`): the CI acceptance
       pipeline builds a container image and hits the cache on a second run with unchanged
       inputs; fails if the second run rebuilds the image or reports no cache hit.
