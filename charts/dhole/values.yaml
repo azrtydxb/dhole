@@ -55,6 +55,20 @@ controlPlane:
   #   existingSecret: anthropic    # the Secret holding the value
   #   key: apiKey                  # the key within it (default "apiKey")
   modelSecrets: []
+  # The secrets a pipeline STEP may declare (ADR 0027, docs/secrets.md). A step
+  # names one in its `secrets:` and sees the value in the environment variable
+  # it binds it to; the engine redeems a short-lived handle for it at exec time.
+  #
+  # These are separate from modelSecrets on purpose: a model credential is not
+  # readable by pipeline steps unless it is listed here as well. The tenant is
+  # required even with one tenant — a step secret belongs to exactly one — and
+  # as with modelSecrets the VALUE is never in this file.
+  #
+  # - name: harbor-robot            # what a step's `secrets[].name` declares
+  #   tenant: default               # the tenant whose steps may declare it
+  #   existingSecret: harbor-robot  # the Secret holding the value
+  #   key: password                 # the key within it (required)
+  secrets: []
   nodeSelector: {}
   tolerations: []
   affinity: {}

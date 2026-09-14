@@ -292,6 +292,10 @@ type Config struct {
 	// has no idea what it is — which is what happened before the seam existed
 	// and is the bug it closes. See gate.go.
 	Gate Gate
+	// Secrets issues the secrets a step declares (ADR 0027). Nil means this
+	// plane issues none, and a step declaring one is refused, naming it,
+	// before it is dispatched — never sent without it. See secrets.go.
+	Secrets StepSecrets
 	// LeaseTTL overrides DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// Log is where a tier whose engines disagree about their environment is
@@ -316,6 +320,8 @@ type Scheduler struct {
 	prov  Provenances
 	built BuiltinSteps
 	gate  Gate
+
+	secrets StepSecrets
 
 	queue   *Queue
 	budgets Budget
@@ -434,6 +440,7 @@ func New(cfg Config) (*Scheduler, error) {
 		prov:     cfg.Provenance,
 		built:    cfg.Builtins,
 		gate:     cfg.Gate,
+		secrets:  cfg.Secrets,
 		tier:     cfg.Tier,
 		os:       cfg.OS,
 		arch:     cfg.Arch,
@@ -1663,6 +1670,11 @@ func (s *Scheduler) dispatch(
 	if armed {
 		return nil
 	}
+	// A declared secret the plane cannot give is refused BEFORE a lease, a
+	// slot or an outbox row exists for the step (ADR 0027).
+	if refused, err := s.refuseSecrets(ctx, tenantID, runID, step); refused || err != nil {
+		return err
+	}
 
 	req := s.requirements(step)
 	instances, err := s.fleet.Instances(ctx, tenantID)
@@ -1733,7 +1745,7 @@ func (s *Scheduler) dispatch(
 		}
 	}
 
-	dispatchMsg, err := s.buildDispatch(tenantID, runID, pipeline, step, attempt, token, fresh,
+	dispatchMsg, err := s.buildDispatch(ctx, tenantID, runID, pipeline, step, attempt, token, fresh,
 		dispatchVersion(matched))
 	if err != nil {
 		return err
@@ -1841,6 +1853,7 @@ func (s *Scheduler) requirements(step *dholev1.Step) executor.Requirements {
 // Everything needed to run the step is in it: an engine never calls back into
 // the control plane to find out what to do (docs/wire-contract.md).
 func (s *Scheduler) buildDispatch(
+	ctx context.Context,
 	tenantID, runID string,
 	pipeline *dholev1.Pipeline,
 	step *dholev1.Step,
@@ -1859,6 +1872,12 @@ func (s *Scheduler) buildDispatch(
 	if err != nil {
 		return nil, err
 	}
+	// Handles, never values: this message is written to the outbox and is
+	// durable, replayable and archived. Fresh for this attempt (ADR 0027).
+	secretRefs, err := s.secretRefs(ctx, tenantID, runID, step, attempt)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: issuing the secrets of %s/%s: %w", runID, step.GetId(), err)
+	}
 	return &dholev1.JobDispatch{
 		RunId:           runID,
 		StepId:          step.GetId(),
@@ -1871,6 +1890,7 @@ func (s *Scheduler) buildDispatch(
 		Tenant:          &dholev1.Tenant{Id: tenantID},
 		Command:         command,
 		Env:             env,
+		Secrets:         secretRefs,
 	}, nil
 }
 

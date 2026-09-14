@@ -20,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
 export const file_dhole_v1_pipeline: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUiXgoERmlsZRIMCgRwYXRoGAEgASgJEiAKBmRpZ2VzdBgCIAEoCzIQLmRob2xlLnYxLkRpZ2VzdBISCgpzaXplX2J5dGVzGAMgASgEEhIKCm1lZGlhX3R5cGUYBCABKAkiJwoJRmlsZUlucHV0EgwKBHBvcnQYASABKAkSDAoEcGF0aBgCIAEoCSK7AwoEU3RlcBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhIKCnBsdWdpbl9yZWYYAyABKAkSKwoMZWZmZWN0X2NsYXNzGAQgASgOMhUuZGhvbGUudjEuRWZmZWN0Q2xhc3MSHgoGaW5wdXRzGAUgAygLMg4uZGhvbGUudjEuUG9ydBIfCgdvdXRwdXRzGAYgAygLMg4uZGhvbGUudjEuUG9ydBIqCgxjYXBhYmlsaXRpZXMYByADKA4yFC5kaG9sZS52MS5DYXBhYmlsaXR5EikKC2xlYXNlX3Njb3BlGAggASgOMhQuZGhvbGUudjEuTGVhc2VTY29wZRIqCgZjb25maWcYCSADKAsyGi5kaG9sZS52MS5TdGVwLkNvbmZpZ0VudHJ5Eg0KBWltYWdlGAogASgJEhMKC2VuZ2luZV90eXBlGAsgASgJEhcKD3RpbWVvdXRfc2Vjb25kcxgMIAEoDRIoCgtmaWxlX2lucHV0cxgNIAMoCzITLmRob2xlLnYxLkZpbGVJbnB1dBotCgtDb25maWdFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIk4KBEVkZ2USEQoJZnJvbV9zdGVwGAEgASgJEhEKCWZyb21fcG9ydBgCIAEoCRIPCgd0b19zdGVwGAMgASgJEg8KB3RvX3BvcnQYBCABKAkilQEKCFBpcGVsaW5lEgoKAmlkGAEgASgJEiAKBnRlbmFudBgCIAEoCzIQLmRob2xlLnYxLlRlbmFudBIdCgVzdGVwcxgDIAMoCzIOLmRob2xlLnYxLlN0ZXASHQoFZWRnZXMYBCADKAsyDi5kaG9sZS52MS5FZGdlEh0KBWZpbGVzGAUgAygLMg4uZGhvbGUudjEuRmlsZUKOAQoMY29tLmRob2xlLnYxQg1QaXBlbGluZVByb3RvUAFaLmdpdGh1Yi5jb20vYXpydHlkeGIvZGhvbGUvZ2VuL2Rob2xlL3YxO2Rob2xldjGiAgNEWFiqAghEaG9sZS5WMcoCCERob2xlXFYx4gIURGhvbGVcVjFcR1BCTWV0YWRhdGHqAglEaG9sZTo6VjFiBnByb3RvMw",
+    "ChdkaG9sZS92MS9waXBlbGluZS5wcm90bxIIZGhvbGUudjEiHgoIQmxvYlR5cGUSEgoKbWVkaWFfdHlwZRgBIAEoCSIvCgpTdHJ1Y3RUeXBlEhEKCXNjaGVtYV9pZBgBIAEoCRIOCgZzY2hlbWEYAiABKAkiYgoIUG9ydFR5cGUSIgoEYmxvYhgBIAEoCzISLmRob2xlLnYxLkJsb2JUeXBlSAASKgoKc3RydWN0dXJlZBgCIAEoCzIULmRob2xlLnYxLlN0cnVjdFR5cGVIAEIGCgRraW5kIjYKBFBvcnQSDAoEbmFtZRgBIAEoCRIgCgR0eXBlGAIgASgLMhIuZGhvbGUudjEuUG9ydFR5cGUiXgoERmlsZRIMCgRwYXRoGAEgASgJEiAKBmRpZ2VzdBgCIAEoCzIQLmRob2xlLnYxLkRpZ2VzdBISCgpzaXplX2J5dGVzGAMgASgEEhIKCm1lZGlhX3R5cGUYBCABKAkiJwoJRmlsZUlucHV0EgwKBHBvcnQYASABKAkSDAoEcGF0aBgCIAEoCSInCgpTdGVwU2VjcmV0EgwKBG5hbWUYASABKAkSCwoDZW52GAIgASgJIuIDCgRTdGVwEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEgoKcGx1Z2luX3JlZhgDIAEoCRIrCgxlZmZlY3RfY2xhc3MYBCABKA4yFS5kaG9sZS52MS5FZmZlY3RDbGFzcxIeCgZpbnB1dHMYBSADKAsyDi5kaG9sZS52MS5Qb3J0Eh8KB291dHB1dHMYBiADKAsyDi5kaG9sZS52MS5Qb3J0EioKDGNhcGFiaWxpdGllcxgHIAMoDjIULmRob2xlLnYxLkNhcGFiaWxpdHkSKQoLbGVhc2Vfc2NvcGUYCCABKA4yFC5kaG9sZS52MS5MZWFzZVNjb3BlEioKBmNvbmZpZxgJIAMoCzIaLmRob2xlLnYxLlN0ZXAuQ29uZmlnRW50cnkSDQoFaW1hZ2UYCiABKAkSEwoLZW5naW5lX3R5cGUYCyABKAkSFwoPdGltZW91dF9zZWNvbmRzGAwgASgNEigKC2ZpbGVfaW5wdXRzGA0gAygLMhMuZGhvbGUudjEuRmlsZUlucHV0EiUKB3NlY3JldHMYDiADKAsyFC5kaG9sZS52MS5TdGVwU2VjcmV0Gi0KC0NvbmZpZ0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiTgoERWRnZRIRCglmcm9tX3N0ZXAYASABKAkSEQoJZnJvbV9wb3J0GAIgASgJEg8KB3RvX3N0ZXAYAyABKAkSDwoHdG9fcG9ydBgEIAEoCSKVAQoIUGlwZWxpbmUSCgoCaWQYASABKAkSIAoGdGVuYW50GAIgASgLMhAuZGhvbGUudjEuVGVuYW50Eh0KBXN0ZXBzGAMgAygLMg4uZGhvbGUudjEuU3RlcBIdCgVlZGdlcxgEIAMoCzIOLmRob2xlLnYxLkVkZ2USHQoFZmlsZXMYBSADKAsyDi5kaG9sZS52MS5GaWxlQo4BCgxjb20uZGhvbGUudjFCDVBpcGVsaW5lUHJvdG9QAVouZ2l0aHViLmNvbS9henJ0eWR4Yi9kaG9sZS9nZW4vZGhvbGUvdjE7ZGhvbGV2MaICA0RYWKoCCERob2xlLlYxygIIRGhvbGVcVjHiAhREaG9sZVxWMVxHUEJNZXRhZGF0YeoCCURob2xlOjpWMWIGcHJvdG8z",
     [file_dhole_v1_common],
   );
 
@@ -230,6 +230,44 @@ export const FileInputSchema: GenMessage<FileInput> =
   messageDesc(file_dhole_v1_pipeline, 5);
 
 /**
+ * StepSecret is one secret a step asks for, by NAME, and the environment
+ * variable the step sees its value as (ADR 0027).
+ *
+ * It carries no value and no reference to one. A definition is content-hashed,
+ * mirrored to git and archived with every run; a credential in it would be a
+ * credential in all three. The plane resolves the name against what its
+ * operator configured for the step's tenant and issues a short-lived handle per
+ * attempt in JobDispatch.secrets, which the engine redeems at exec time.
+ *
+ * @generated from message dhole.v1.StepSecret
+ */
+export type StepSecret = Message<"dhole.v1.StepSecret"> & {
+  /**
+   * The secret's name as the operator configured it for this tenant, e.g.
+   * "harbor-robot".
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * The environment variable the step's process receives the value in, e.g.
+   * "REGISTRY_PASSWORD".
+   *
+   * @generated from field: string env = 2;
+   */
+  env: string;
+};
+
+/**
+ * Describes the message dhole.v1.StepSecret.
+ * Use `create(StepSecretSchema)` to create a new message.
+ */
+export const StepSecretSchema: GenMessage<StepSecret> =
+  /*@__PURE__*/
+  messageDesc(file_dhole_v1_pipeline, 6);
+
+/**
  * Step is one unit of work: a plugin reference, its typed ports, the effect
  * class that governs caching and retry, and the capabilities it requires.
  *
@@ -369,6 +407,22 @@ export type Step = Message<"dhole.v1.Step"> & {
    * @generated from field: repeated dhole.v1.FileInput file_inputs = 13;
    */
   fileInputs: FileInput[];
+
+  /**
+   * Secrets this step needs, each bound to the environment variable it sees
+   * the value as (ADR 0027). A step declaring any must also declare
+   * CAPABILITY_SECRETS: that is what routes it to an engine able to redeem, and
+   * what policy sees.
+   *
+   * Nothing about the wire changes for an engine: the plane turns each
+   * declaration into a SecretRef in JobDispatch.secrets, which every engine
+   * already reads. A declared secret the plane does not hold refuses the step
+   * before it is dispatched — never a dispatch with the variable missing or
+   * empty. See docs/secrets.md.
+   *
+   * @generated from field: repeated dhole.v1.StepSecret secrets = 14;
+   */
+  secrets: StepSecret[];
 };
 
 /**
@@ -377,7 +431,7 @@ export type Step = Message<"dhole.v1.Step"> & {
  */
 export const StepSchema: GenMessage<Step> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_pipeline, 6);
+  messageDesc(file_dhole_v1_pipeline, 7);
 
 /**
  * Edge connects one step's output port to another step's input port. The DAG
@@ -414,7 +468,7 @@ export type Edge = Message<"dhole.v1.Edge"> & {
  */
 export const EdgeSchema: GenMessage<Edge> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_pipeline, 7);
+  messageDesc(file_dhole_v1_pipeline, 8);
 
 /**
  * Pipeline is a tenant-scoped set of steps and the edges between them.
@@ -457,4 +511,4 @@ export type Pipeline = Message<"dhole.v1.Pipeline"> & {
  */
 export const PipelineSchema: GenMessage<Pipeline> =
   /*@__PURE__*/
-  messageDesc(file_dhole_v1_pipeline, 8);
+  messageDesc(file_dhole_v1_pipeline, 9);

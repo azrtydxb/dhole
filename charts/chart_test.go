@@ -323,6 +323,53 @@ func TestAModelSecretWithNoSecretToReadIsRefusedAtInstall(t *testing.T) {
 	}
 }
 
+// A step secret is a plane-held secret a pipeline step may declare. It reaches
+// the pod from a Secret exactly as a model credential does, and it is named on
+// the command line FOR A TENANT: the flag carries the tenant, the name a step
+// declares, and an environment variable the value is read from. The variable
+// is positional so a secret name that is not a valid variable name (they are
+// usually lower-case with dashes) still works.
+func TestAStepSecretComesFromASecretAndIsNamedForATenant(t *testing.T) {
+	out := render(t,
+		"--set", "controlPlane.secrets[0].name=harbor-robot",
+		"--set", "controlPlane.secrets[0].tenant=default",
+		"--set", "controlPlane.secrets[0].existingSecret=harbor",
+		"--set", "controlPlane.secrets[0].key=password")
+
+	if !strings.Contains(out, "--secret=default/harbor-robot=DHOLE_STEP_SECRET_0") {
+		t.Errorf("the plane was not told which step secret it holds, or for which tenant:\n%s", out)
+	}
+	if !regexp.MustCompile(`name: DHOLE_STEP_SECRET_0\n\s+valueFrom:\n\s+secretKeyRef:\n\s+name: harbor\n\s+key: password`).
+		MatchString(out) {
+		t.Errorf("the step secret is not read from the named Secret and key:\n%s", out)
+	}
+	if regexp.MustCompile(`DHOLE_STEP_SECRET_0\n\s+value:`).MatchString(out) {
+		t.Errorf("a step secret was rendered as a literal value in the pod spec:\n%s", out)
+	}
+	// The model path is untouched by it.
+	if strings.Contains(out, "--model-secret") {
+		t.Errorf("a step secret was also handed to the plane as a model credential:\n%s", out)
+	}
+}
+
+// A step secret that names no Secret, or no tenant, is refused at install:
+// the first is a plane that starts with a value it cannot read, the second a
+// secret scoped to nobody.
+func TestAStepSecretWithNoSecretOrNoTenantIsRefusedAtInstall(t *testing.T) {
+	if _, err := renderErr(t,
+		"--set", "controlPlane.secrets[0].name=harbor-robot",
+		"--set", "controlPlane.secrets[0].tenant=default",
+		"--set", "controlPlane.secrets[0].key=password"); err == nil {
+		t.Error("the chart rendered a step secret with no Secret behind it")
+	}
+	if _, err := renderErr(t,
+		"--set", "controlPlane.secrets[0].name=harbor-robot",
+		"--set", "controlPlane.secrets[0].existingSecret=harbor",
+		"--set", "controlPlane.secrets[0].key=password"); err == nil {
+		t.Error("the chart rendered a step secret scoped to no tenant")
+	}
+}
+
 // A backend brings its own configuration — the vm backend needs a kernel, a
 // rootfs and a hypervisor path — and a chart that named each backend's
 // variables would need editing for every backend added later. A tier's own

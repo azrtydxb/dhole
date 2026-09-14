@@ -154,6 +154,7 @@ The values worth knowing:
 | `controlPlane.replicas`            | `1`      | planes sharing one database and one deployment id                                                |
 | `controlPlane.persistence.enabled` | `false`  | whether the CAS survives a reschedule                                                            |
 | `engines`                          | one tier | a list; one Deployment per trust tier                                                            |
+| `controlPlane.secrets`             | `[]`     | secrets a pipeline step may declare, per tenant, from Secrets ([step secrets](secrets.md))       |
 | `engines[].busCredentialsSecret`   | unset    | the Secret holding that tier's own bus URL. Unset means the shared URL, which reaches every tier |
 | `image.tag`                        | `""`     | empty means the chart's `appVersion`, never `latest`                                             |
 
