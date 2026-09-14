@@ -1577,6 +1577,126 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       job finishing and a stale Advance calling Take); and a cache hit's
       `Claim` can still supersede a racing dispatch's offer, which then costs
       an attempt one TTL later, as this race did before.
+- [x] **A cache hit racing a dispatch of the same attempt costs that attempt.**
+      Found 2026-09-14 closing the item above. `recordCacheHit` takes its
+      lease with `Claim`, which still supersedes unconditionally. When one
+      Advance finds no entry and dispatches attempt N while another — on this
+      plane or another, having looked up an entry recorded in between — serves
+      attempt N from the cache, the hit's claim can land after the dispatch
+      committed. It then re-reads the log, sees the attempt placed and writes
+      nothing, but the committed dispatch's fence is gone: its engine's every
+      report is refused, and the hit's claim expires a TTL later into
+      STEP_ATTEMPT_LOST (recordFencedOut's backstop), a wasted attempt and a
+      stale copy run for nobody. The refusal also has to stop the pass: a hit
+      that finds the attempt somebody else's must neither dispatch it nor
+      re-advance the run, or a pass standing behind a dead plane's offer
+      recurses until that offer is withdrawn. The fix is the offer's rule for
+      every lease: `Claim` becomes a compare-and-set that refuses with
+      `ErrAlreadyOffered` when the record already carries this attempt or a
+      later one, and a hit whose claim is refused writes nothing and does not
+      count as served. Test: a hit's claim held while another plane (no cache)
+      dispatches the attempt; the dispatch's engine reports and exactly one
+      STEP_SUCCEEDED, no STEP_ATTEMPT_LOST, results.
+      CLOSED by one lease rule. `lease.KV.Claim` and `Offer` share one
+      compare-and-set (`take`): Create over no record or a delete marker,
+      Update at the revision read over an EARLIER attempt, `ErrAlreadyOffered`
+      for this attempt or a later one. Every production `Claim` caller — the
+      cache hit and `builtins.attempt`, and there are no others — wanted that
+      rule, and an unconditional supersede left in the interface was the next
+      caller's race. `serveFromCache` now returns a `cacheOutcome`: a refused
+      claim, an ErrFenced commit and a re-read that finds the attempt placed
+      are `cachePlacedElsewhere`, which Advance skips without dispatching and
+      without re-advancing; the re-read branch also calls `recordFencedOut`, as
+      dispatch's does, for a claim that landed on a committed dispatch whose
+      offer had been withdrawn. The hit's success stays in the transaction
+      that validates its fence. No ADR changed (0002 and 0004 already require
+      the exclusive lease and the fence) and nothing wire-visible moved.
+      Tests, red first: `TestAClaimOfAnAttemptAlreadyLeasedIsRefusedAndLeavesTheFenceAlone`
+      ("the same plane claimed attempt 2 of a step already offered at attempt
+      2 and was not refused"), `TestAClaimWhoseHolderDiedExpiresAndTheAttemptCanBeClaimedAgain`
+      (red on its refusal half), `TestACacheHitRacingADispatchOfTheSameAttemptLosesNoAttempt`
+      "the dispatch commits first" ("a cache hit racing a dispatch of the same
+      attempt fenced the committed dispatch out": lease at fence 4, token 3),
+      and `TestACacheHitBehindAnotherPassesOfferNeitherServesNorLoops` ("a
+      cache hit served an attempt another pass had already offered"). Written
+      after and shown by mutation: the "offer was withdrawn as it committed"
+      and "the hit claims first" subtests. Mutations, each killed: Claim back
+      to a plain Put (all four red tests); a refused claim counted as served
+      (the behind-offer test recurses until its timeout); a refused claim
+      returned as an error; the re-read without recordFencedOut, and the
+      re-read removed ("nothing said so"). Not killed: dropping the `continue`
+      on `cachePlacedElsewhere`, which falls through to a dispatch whose offer
+      the same compare-and-set refuses — equivalent today, kept so a pass does
+      not queue or offer a step it has just been told is somebody else's.
+      `-count=20` clean.
+- [x] **A step the plane hosts runs once per plane.** Found 2026-09-14 closing
+      the item above. `builtins.attempt` computes its attempt from the log,
+      `Claim`s (superseding whatever held the step), and appends
+      STEP_DISPATCHED without re-reading the log or validating its fence in
+      the same transaction; the only guard against a second run is `running`,
+      which lives in one process. Two planes whose Advances both found an llm,
+      loop or agent step ready both run it — two model calls, two agent loops
+      calling tools — and inside one plane a stale Advance that calls `Take`
+      the instant a job finishes runs a finished step again as attempt N+1.
+      The fix is dispatch's discipline: `Take` carries the attempt the Advance
+      planned; the job claims exactly that attempt with the compare-and-set
+      claim, re-reads the log and gives up if the attempt is already
+      dispatched, and commits STEP_DISPATCHED in a transaction that validates
+      the fence last; only then does the step run. A refused or overtaken job
+      writes nothing — no dispatch and no failure. Recovery must survive it: a
+      plane that dies after claiming leaves a claim no other plane may
+      replace, and it must still expire (renewals stop, `Expire` deletes it)
+      so the next plane runs the step; a plane that dies after committing is
+      recovered as today, through STEP_ATTEMPT_LOST. Tests: two planes over one
+      store and one bus run a built-in step once; a stale Take after the step
+      finished runs nothing; a plane that dies holding the claim is recovered
+      and the step completes.
+      CLOSED with dispatch's discipline. `scheduler.BuiltinSteps.Take` takes
+      the attempt the pass planned (`state.attempts+1`) and `builtinJob`
+      carries it; `builtins.attempt` claims exactly that attempt with the
+      compare-and-set `Claim` (refused: return with no token and no error, so
+      `run` records no failure), starts renewing, re-reads the log and gives
+      up if the attempt is already dispatched, then commits STEP_DISPATCHED in
+      `WithTx` with `Validate` last (ErrFenced: the same silent return). The
+      step body runs only after that commit. Recovery: a claim has a holder
+      from its first instant, so a plane that dies after claiming stops
+      renewing, `Expire` deletes the claim (recordOrphan writes nothing for an
+      attempt never dispatched) and the next Advance claims over the delete
+      marker; a plane that dies after committing is recovered as before
+      (`TestABuiltinStepInFlightWhenThePlaneDiesIsRecoveredByANewPlane`), and
+      renewal of a live builtin is unchanged
+      (`TestABuiltinStepThatOutlivesItsLeaseIsNotSweptOutFromUnderItself`).
+      The tests drive two `builtins` over one SQLite store and one embedded
+      NATS, each with its own lease manager on its own connection, take jobs
+      off each plane's queue and hold each side with channels; the expiry
+      halves poll `Expire` on a 200ms TTL, since the KV's clock is the server's.
+      Red first: `TestTwoPlanesRunAStepTheyHostExactlyOnce` ("two planes ran
+      one step the plane hosts": one extra run while the first was running,
+      two runs when both claimed before either recorded — against the original
+      Put claim; against the compare-and-set claim alone the second plane
+      errors instead), `TestAStaleTakeOfAStepThePlaneHasFinishedRunsNothing`
+      ("a stale take ran a step that had already finished"), and
+      `TestAPlaneThatDiesHoldingAHostedStepsClaimIsRecovered` (red on its
+      refusal half; its recovery half guards the compare-and-set). Written
+      after and shown by mutation:
+      `TestAPlaneOvertakenBetweenItsClaimAndItsCommitRunsNothing` (a
+      partitioned plane stalled in its commit while its claim is swept and
+      another plane runs the step). Mutations, each killed: the attempt counted
+      off the log instead of the planned one (two-plane, stale take); a refused
+      claim returned as an error (four tests); no re-read ("a stale take whose
+      claim nobody held any more ran a step the log already shows
+      dispatched"); no `Validate` in the commit ("a plane whose claim was
+      swept before it committed ran the step anyway"); a fenced commit
+      returned as an error; `Take` dropping the attempt ("the job does not
+      carry the attempt its pass planned"); the scheduler passing
+      `state.attempts` rather than `+1` (the llm and parked-agent e2e tests);
+      no renewal (the outlives-its-lease e2e test). `-count=20` clean. No other
+      caller of `Claim` exists. Left open: a plane whose renewal is refused —
+      its lease swept while it was partitioned — runs the step body to
+      completion and has only its RESULT refused, so an idempotent llm or
+      agent step can still have its external effect twice across a partition
+      longer than the TTL, exactly as an engine step can; cancelling the body
+      when renewal is fenced is the natural next step.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot

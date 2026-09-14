@@ -82,12 +82,19 @@ func New(ctx context.Context, conn *nats.Conn) (*KV, error) {
 	return &KV{kv: kv, now: time.Now}, nil
 }
 
-// Claim supersedes whatever held the step and returns the new fence. The write
-// is a plain Put: the revision the server assigns is monotonic, so two control
-// planes racing on the same step cannot come away with the same fence, and the
-// later writer is by definition the current holder.
+// Claim takes the lease on a step for an attempt whose holder is the caller
+// from the first instant, and returns the new fence.
+//
+// It is the same compare-and-set Offer is, and refuses with ErrAlreadyOffered
+// on the same rule: the key already carries this attempt or a later one. Its
+// callers are a cache hit and a step the plane runs itself, and each of them
+// used to Put unconditionally. A cache hit racing a dispatch of the same
+// attempt then superseded the fence the committed dispatch carries, and two
+// planes that both found a plane-hosted step ready both claimed it and both
+// ran it. A claim of an EARLIER attempt is still superseded, which is what a
+// retry is.
 func (k *KV) Claim(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error) {
-	return k.claim(ctx, tenantID, runID, stepID, attempt, ttl, false)
+	return k.take(ctx, tenantID, runID, stepID, attempt, ttl, false)
 }
 
 // Offer is Claim for a dispatch that will wait in a work queue. The fence is
@@ -95,15 +102,22 @@ func (k *KV) Claim(ctx context.Context, tenantID, runID, stepID string, attempt 
 // deadline is not: it starts at the first Renew, which is the engine saying it
 // has the step. See Manager.
 //
-// Unlike Claim it is a compare-and-set. It writes only over no record at all,
-// or over one for an EARLIER attempt, and at exactly the revision it read — so
-// of two offers of one attempt, from one plane or several, the server lets one
+// It is a compare-and-set. It writes only over no record at all, or over one
+// for an EARLIER attempt, and at exactly the revision it read — so of two
+// offers of one attempt, from one plane or several, the server lets one
 // through and the other is refused with ErrAlreadyOffered, whichever order
 // their reads and writes interleave in. A plain Put let the second replace the
 // fence the first had already dispatched under, and every step on kw lost an
 // attempt to it.
 func (k *KV) Offer(ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration) (Token, error) {
-	key, data, err := k.record(tenantID, runID, stepID, attempt, ttl, true)
+	return k.take(ctx, tenantID, runID, stepID, attempt, ttl, true)
+}
+
+// take is the compare-and-set behind Claim and Offer.
+func (k *KV) take(
+	ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration, offered bool,
+) (Token, error) {
+	key, data, err := k.record(tenantID, runID, stepID, attempt, ttl, offered)
 	if err != nil {
 		return Token{}, err
 	}
@@ -126,7 +140,7 @@ func (k *KV) Offer(ctx context.Context, tenantID, runID, stepID string, attempt 
 				return Token{}, fmt.Errorf("lease: decoding %s: %w", key, err)
 			}
 			if current.Attempt >= attempt {
-				return Token{}, fmt.Errorf("%w: %s/%s/%s is at attempt %d (fence %d), offering %d",
+				return Token{}, fmt.Errorf("%w: %s/%s/%s is at attempt %d (fence %d), leasing %d",
 					ErrAlreadyOffered, tenantID, runID, stepID, current.Attempt, entry.Revision(), attempt)
 			}
 			fence, err = k.kv.Update(ctx, key, data, entry.Revision())
@@ -135,15 +149,15 @@ func (k *KV) Offer(ctx context.Context, tenantID, runID, stepID string, attempt 
 			return Token{Value: key, Fence: fence}, nil
 		}
 		if !lostRace(err) {
-			return Token{}, fmt.Errorf("lease: offer %s/%s/%s: %w", tenantID, runID, stepID, err)
+			return Token{}, fmt.Errorf("lease: taking %s/%s/%s: %w", tenantID, runID, stepID, err)
 		}
 	}
-	return Token{}, fmt.Errorf("lease: offer %s/%s/%s: the key kept changing under %d attempts to write it",
+	return Token{}, fmt.Errorf("lease: taking %s/%s/%s: the key kept changing under %d attempts to write it",
 		tenantID, runID, stepID, maxOfferRaces)
 }
 
-// maxOfferRaces bounds how many compare-and-set conflicts one Offer re-reads
-// through before giving up with an error.
+// maxOfferRaces bounds how many compare-and-set conflicts one Claim or Offer
+// re-reads through before giving up with an error.
 const maxOfferRaces = 8
 
 // lostRace reports whether err is a compare-and-set refused because the key
@@ -155,20 +169,6 @@ func lostRace(err error) bool {
 	var apiErr *jetstream.APIError
 	return errors.As(err, &apiErr) && (apiErr.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
 		apiErr.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant)
-}
-
-func (k *KV) claim(
-	ctx context.Context, tenantID, runID, stepID string, attempt uint32, ttl time.Duration, offered bool,
-) (Token, error) {
-	key, data, err := k.record(tenantID, runID, stepID, attempt, ttl, offered)
-	if err != nil {
-		return Token{}, err
-	}
-	fence, err := k.kv.Put(ctx, key, data)
-	if err != nil {
-		return Token{}, fmt.Errorf("lease: claim %s/%s/%s: %w", tenantID, runID, stepID, err)
-	}
-	return Token{Value: key, Fence: fence}, nil
 }
 
 // record builds the key and the encoded claim record a Claim or an Offer

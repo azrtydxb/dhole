@@ -570,3 +570,65 @@ func TestWithdrawRemovesNothingButTheOfferItNames(t *testing.T) {
 		require.NoError(t, mgr.Validate(ctx, token), "a claim has a holder from the start and is not an offer to withdraw")
 	})
 }
+
+// TestAClaimOfAnAttemptAlreadyLeasedIsRefusedAndLeavesTheFenceAlone is the
+// offer's rule held by every lease. A cache hit and a plane-hosted step claim
+// rather than offer, and a claim that superseded the fence a dispatch of the
+// same attempt had already gone out under cost that attempt exactly as a
+// second offer did: the dispatch's engine reports into a fence nobody honours.
+func TestAClaimOfAnAttemptAlreadyLeasedIsRefusedAndLeavesTheFenceAlone(t *testing.T) {
+	ctx := testContext(t)
+	srv, err := bus.StartEmbedded(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+	mgr := managerOn(ctx, t, srv.URL())
+	other := managerOn(ctx, t, srv.URL())
+
+	offered, err := mgr.Offer(ctx, "tenant-a", "run-1", "offered", 2, testTTL)
+	require.NoError(t, err)
+	claimed, err := mgr.Claim(ctx, "tenant-a", "run-1", "claimed", 2, testTTL)
+	require.NoError(t, err)
+
+	for step, held := range map[string]lease.Token{"offered": offered, "claimed": claimed} {
+		for name, m := range map[string]*lease.KV{"the same plane": mgr, "another plane": other} {
+			_, err = m.Claim(ctx, "tenant-a", "run-1", step, 2, testTTL)
+			require.ErrorIs(t, err, lease.ErrAlreadyOffered,
+				"%s claimed attempt 2 of a step already %s at attempt 2 and was not refused", name, step)
+			_, err = m.Claim(ctx, "tenant-a", "run-1", step, 1, testTTL)
+			require.ErrorIs(t, err, lease.ErrAlreadyOffered,
+				"%s claimed an EARLIER attempt over a step %s at attempt 2 and was not refused", name, step)
+		}
+		require.NoError(t, mgr.Validate(ctx, held), "a refused claim moved the %s lease's fence", step)
+
+		// A later attempt is a genuine retry, and still supersedes.
+		next, err := other.Claim(ctx, "tenant-a", "run-1", step, 3, testTTL)
+		require.NoError(t, err)
+		require.Greater(t, next.Fence, held.Fence)
+		require.ErrorIs(t, mgr.Validate(ctx, held), lease.ErrFenced)
+	}
+}
+
+// TestAClaimWhoseHolderDiedExpiresAndTheAttemptCanBeClaimedAgain is what the
+// refusal must not cost. A plane that claims a step and dies before recording
+// anything leaves a claim no other plane may replace; it has a holder from the
+// first instant, so it expires when that holder stops renewing, and the sweep
+// that removes it frees the attempt for the next plane.
+func TestAClaimWhoseHolderDiedExpiresAndTheAttemptCanBeClaimedAgain(t *testing.T) {
+	ctx := testContext(t)
+	mgr := newManager(ctx, t)
+
+	dead, err := mgr.Claim(ctx, "tenant-a", "run-1", "step-1", 1, 100*time.Millisecond)
+	require.NoError(t, err)
+	_, err = mgr.Claim(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+	require.ErrorIs(t, err, lease.ErrAlreadyOffered)
+
+	require.Eventually(t, func() bool {
+		orphans, expErr := mgr.Expire(ctx)
+		require.NoError(t, expErr)
+		return len(orphans) == 1
+	}, 5*time.Second, 20*time.Millisecond, "a claim nobody renewed never expired")
+
+	again, err := mgr.Claim(ctx, "tenant-a", "run-1", "step-1", 1, testTTL)
+	require.NoError(t, err, "the attempt behind a swept claim could not be claimed again")
+	require.Greater(t, again.Fence, dead.Fence)
+}
