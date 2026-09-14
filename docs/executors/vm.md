@@ -34,9 +34,11 @@ QEMU is a fallback rather than a peer for two reasons that are paid per step:
 it boots a full machine model where Firecracker boots four devices, and it has
 no snapshot restore in Dhole, so every sandbox is a cold boot.
 
-One caveat, and it is a real one: the QEMU path has been written and its
-command line is unit-tested, but the contract has **not** been run against it —
-see "Building a rootfs" below for exactly what is missing.
+Both are held to that contract on real arm64 hardware with one guest kernel between
+them — see "Building a guest kernel" below. QEMU needs one thing from the host
+that Firecracker does not: `/dev/vhost-vsock`, because its
+`vhost-vsock-device` is the kernel's vhost backend where Firecracker proxies
+vsock over a unix socket of its own.
 
 ## Configuration
 
@@ -128,19 +130,45 @@ A dynamically linked busybox in an initramfs with no libc fails as
 `exec: "sh": executable file not found in $PATH`, which reads as a missing
 program rather than a missing loader. It has to be the static one.
 
-The kernel is any Linux image with virtio-mmio, virtio-vsock, devtmpfs and
-initramfs support. **vsock has to be built in, not a module**: the agent is the
-init, so nothing has loaded a module by the time it needs the socket.
+### Building a guest kernel
 
-The Firecracker CI kernels
+The kernel needs virtio-mmio, virtio-vsock, devtmpfs and initramfs support.
+**vsock has to be built in, not a module**: the agent is the init, so nothing
+has loaded a module by the time it needs the socket.
+
+Two readily available kernels each miss one half. The Firecracker CI kernels
 (`https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.11/<arch>/vmlinux-6.1.102`)
-are built for exactly this and are what the Firecracker backend is tested
-against. They do **not** boot under QEMU's `virt` machine — the guest resets
-before printing a line, with or without KVM, with or without `earlycon` — and a
-stock distribution kernel that does boot ships vsock as a module. So the QEMU
-backend currently has no guest image to run against, and
-`TestQEMUExecutorContract` is unrun rather than passing. Supplying a kernel
-with `CONFIG_VIRTIO_VSOCKETS=y` is the whole of what it is waiting for.
+boot Firecracker but **not** QEMU's `virt` machine — the guest resets before
+printing a line, with or without KVM, with or without `earlycon`. A stock
+distribution kernel boots under QEMU and runs the agent, and then the agent
+cannot open a vsock socket because vsock is a module the initramfs never loads.
+
+`hack/vm-guest/build-kernel.sh` builds one that does both. It takes a pinned
+kernel.org release (`KERNEL_VERSION`, default `6.12.110`), starts from the
+architecture's `defconfig`, merges `hack/vm-guest/guest-kernel.config` (plus
+`guest-kernel.<arch>.config` where one exists) and refuses to build if any of
+the options that matter did not end up `=y`. It builds natively — run it on a
+machine of the target architecture:
+
+```bash
+# Debian: build-essential bc bison flex libelf-dev libssl-dev curl xz-utils
+hack/vm-guest/build-kernel.sh out/
+# out/Image (arm64) or out/vmlinux (amd64), and out/config beside it
+```
+
+The arm64 image this produced on 2026-09-14 — linux 6.12.110, gcc from Debian
+trixie, sha256 `2f3edcb947b13ea8454b44be326df9f9489943dd3c3414ca0118d9dda8bbd001`
+— passes `TestVMExecutorContract` under Firecracker v1.13.1 **and**
+`TestQEMUExecutorContract` under QEMU 10.0.13 with KVM, with the rootfs above.
+A rebuild is not bit-for-bit identical (the build embeds a timestamp and host
+name), which is why the digest is a record of what was tested rather than
+something to verify a rebuild against. The amd64 build of the same recipe has
+not been run.
+
+On Kubernetes, QEMU's `/dev/vhost-vsock` is not one of the devices KubeVirt's
+plugin serves (it serves `kvm`, `tun` and `vhost-net`), so the pod that ran the
+QEMU contract was privileged. A vm engine pod that must stay unprivileged runs
+Firecracker.
 
 ## Environment identity is the rootfs digest
 
@@ -194,7 +222,7 @@ guest measures nothing the scheduler relies on:
 ```bash
 DHOLE_TEST_FIRECRACKER_BIN=/opt/vm/firecracker \
 DHOLE_TEST_QEMU_BIN=/usr/bin/qemu-system-aarch64 \
-DHOLE_TEST_VM_KERNEL=/opt/vm/vmlinux \
+DHOLE_TEST_VM_KERNEL=/opt/vm/Image \
 DHOLE_TEST_VM_ROOTFS=/opt/vm/rootfs.cpio.gz \
 go test ./internal/executor/vm -count=1 -v
 ```
