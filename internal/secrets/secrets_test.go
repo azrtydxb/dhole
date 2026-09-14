@@ -106,7 +106,7 @@ func TestABusRedeemerExchangesAHandleForItsValueOverTheRedemptionSubject(t *test
 	require.Error(t, err, "there is no unscoped redemption from an engine that knows its tenant")
 }
 
-// TestAHandleIsRefusedOnAnotherTenantsSubject is ADR 0028's plane half. The
+// TestAHandleIsRefusedOnAnotherTenantsSubject is ADR 0029's plane half. The
 // broker answers by handle, and before this the handle was all it ever saw: a
 // handle presented by an engine of another tenant was redeemed. The subject a
 // request arrives on names the tenant, so a handle issued for another is
@@ -145,7 +145,7 @@ func TestAHandleIsRefusedOnAnotherTenantsSubject(t *testing.T) {
 
 // TestAnEngineFallsBackToTheLegacySubjectWhenNothingServesTheScopedOne is the
 // other direction of the compatibility window: an engine upgraded before its
-// plane. A plane older than ADR 0028 serves only the unscoped subject, so a
+// plane. A plane older than ADR 0029 serves only the unscoped subject, so a
 // request on the scoped one has no responder at all — and the engine asks
 // there instead rather than failing a step its plane could have served.
 func TestAnEngineFallsBackToTheLegacySubjectWhenNothingServesTheScopedOne(t *testing.T) {
@@ -205,7 +205,7 @@ func (r *subjectRecorder) all() []string {
 	return append([]string{}, r.subjects...)
 }
 
-// TestRevokingAnAttemptLeavesEveryOtherAttemptsHandles is ADR 0028's revocation
+// TestRevokingAnAttemptLeavesEveryOtherAttemptsHandles is ADR 0029's revocation
 // rule at the broker. An attempt that ends takes its unspent handles with it,
 // and nothing else: not the retry of the same step, which may already have
 // been issued, not a sibling step, and not another run or another tenant's run

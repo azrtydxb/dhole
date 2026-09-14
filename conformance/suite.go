@@ -276,7 +276,7 @@ type harness struct {
 	redeemed   map[string]int
 	// unscoped counts redemptions asked on the bare DHOLE_SECRET_SUBJECT
 	// rather than on <subject>.<tenant>, which is what an engine written
-	// before ADR 0028 does.
+	// before ADR 0029 does.
 	unscoped int
 	seq      int
 }

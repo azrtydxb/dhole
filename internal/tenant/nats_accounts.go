@@ -33,7 +33,7 @@ var (
 		"engine.registration",
 		// Every tenant's redemption subject, inside this tenant's account:
 		// the account credential is the plane's identity here and serves
-		// secret.redeem.* (ADR 0028). The account is still the boundary; the
+		// secret.redeem.* (ADR 0029). The account is still the boundary; the
 		// token is what lets the plane refuse a handle of another tenant.
 		"secret.redeem.*",
 		// Deprecated, unscoped; served while the plane accepts protocol

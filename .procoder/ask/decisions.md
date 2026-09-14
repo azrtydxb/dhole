@@ -481,7 +481,7 @@ conversation.
 
 ## Which dispatch policy `dhole serve` runs, now that it can decide each step secret (2026-09-14)
 
-ADR 0028 puts every secret a step declares to the tier's policy at dispatch,
+ADR 0029 puts every secret a step declares to the tier's policy at dispatch,
 with `input.secret_name`, and records a refusal as `STEP_POLICY_DENIED`. The
 mechanism is built and tested in the scheduler. But `dhole serve` wires no
 dispatch policy at all (`scheduler.Config.Policy` is nil), so on the single

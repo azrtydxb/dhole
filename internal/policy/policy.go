@@ -91,7 +91,7 @@ type Input struct {
 	// read nothing at all still holds an untrusted token.
 	PrincipalUntrusted bool
 
-	// SecretName is the name of the step secret being decided (ADR 0028), and
+	// SecretName is the name of the step secret being decided (ADR 0029), and
 	// empty for a decision about anything else. Always present in the input,
 	// so a rule reading it does not error — and deny — on every other kind of
 	// decision.

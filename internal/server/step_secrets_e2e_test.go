@@ -120,7 +120,7 @@ func TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere(t *testing
 	}))
 }
 
-// TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd runs ADR 0028
+// TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd runs ADR 0029
 // through the single binary. The hosted engine redeems the step's handle on
 // its tenant's subject — and only there — and the plane refuses a handle
 // presented on any other tenant's, in both directions.

@@ -190,7 +190,7 @@ func TestAnEngineRedeemsEveryHandleAndBindsTheValueToTheStepsEnvironment(t *test
 	redeemer.mu.Lock()
 	defer redeemer.mu.Unlock()
 	require.Equal(t, []string{d.GetTenant().GetId()}, redeemer.tenants,
-		"the engine must redeem as the dispatch's tenant, which names the subject it asks on (ADR 0028)")
+		"the engine must redeem as the dispatch's tenant, which names the subject it asks on (ADR 0029)")
 }
 
 // TestARedeemedValueNeverReachesALogChunkTheAuthoritativeLogAnOutputRefOrAStatusError

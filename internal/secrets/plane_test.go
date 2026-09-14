@@ -119,7 +119,7 @@ func TestThePlaneRedeemsItsOwnSecretThroughTheBrokerItServesRatherThanReadingThe
 	require.Len(t, handles, 1, "the value must have crossed the redemption subject, not a back door")
 	wire.mu.Lock()
 	require.Equal(t, []string{bus.SubjectSecretRedeemFor("t1")}, wire.subjects,
-		"the plane redeems as a principal of the step's tenant, on that tenant's subject (ADR 0028)")
+		"the plane redeems as a principal of the step's tenant, on that tenant's subject (ADR 0029)")
 	wire.mu.Unlock()
 	require.NotEmpty(t, handles[0])
 	require.NotContains(t, handles[0], planeSecret, "a handle is not the value")

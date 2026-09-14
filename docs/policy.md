@@ -91,7 +91,7 @@ rule can refuse it an effect it allows a person:
 ```
 
 `input.secret_name` is set when the decision is about one secret a step
-declares ([ADR 0028](../.procoder/adr/0028-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
+declares ([ADR 0029](../.procoder/adr/0029-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
 At dispatch the scheduler decides the step, and then each of its declared
 secrets as a decision of its own, with `input.subject` `secret:<name>` and every
 other key exactly as it was for the step. A rule that never reads

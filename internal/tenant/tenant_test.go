@@ -651,7 +651,7 @@ func TestAnEngineInATenantAccountIsLimitedToItsOwnTier(t *testing.T) {
 
 	// Redemption, on the credential the deployment path issues: its own
 	// tenant's subject answers, and the plane serving every tenant's subject
-	// never hears a request this engine spelled for another (ADR 0028).
+	// never hears a request this engine spelled for another (ADR 0029).
 	var (
 		mu   sync.Mutex
 		seen []string

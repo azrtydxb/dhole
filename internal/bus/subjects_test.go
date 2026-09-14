@@ -43,14 +43,14 @@ func TestSecretRedemptionSubjectIsPinned(t *testing.T) {
 	require.Equal(t, "secret.redeem.acme", bus.SubjectSecretRedeemFor("acme"))
 	require.Equal(t, "secret.redeem.*", bus.SubjectSecretRedeemAny())
 	// Deprecated, and still served while the plane accepts protocol version
-	// 3: an engine written before ADR 0028 redeems here.
+	// 3: an engine written before ADR 0029 redeems here.
 	require.Equal(t, "secret.redeem", bus.SubjectSecretRedeem())
 }
 
 // TestATierCredentialNamesExactlyOneTenant: the tenant is spelled into the
 // redemption subject a tier credential may request on, so a tenant that is not
 // one token would widen the permission instead of naming it — `*` would let an
-// engine redeem on every tenant's subject (ADR 0028).
+// engine redeem on every tenant's subject (ADR 0029).
 func TestATierCredentialNamesExactlyOneTenant(t *testing.T) {
 	for _, bad := range []string{"", "*", ">", "a.b", "a b"} {
 		_, err := bus.TierPermissions(bad, "untrusted")

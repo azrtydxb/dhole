@@ -334,7 +334,7 @@ func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 	}
 }
 
-// TestATierEngineMayRedeemOnlyOnItsOwnTenantsSubject is ADR 0028's bus half. A
+// TestATierEngineMayRedeemOnlyOnItsOwnTenantsSubject is ADR 0029's bus half. A
 // tier credential belongs to one tenant, so the one redemption subject it may
 // request on is that tenant's: an engine presenting a handle it obtained from
 // another tenant is refused by the SERVER before any responder sees it.

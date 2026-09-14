@@ -632,7 +632,7 @@ func BenchmarkDispatchPolicyEvaluation(b *testing.B) {
 // caller, which nothing ever was: the only control over a step's secrets was
 // the SECRETS capability, and no rule could refuse one secret while allowing
 // another. Each declared secret is now decided where the step is judged, with
-// the step's own facts plus its name (ADR 0028), and a refusal names it.
+// the step's own facts plus its name (ADR 0029), and a refusal names it.
 func TestPolicyDecidesEachSecretAStepDeclares(t *testing.T) {
 	const ruleSigningKey = "secrets.no-signing-key"
 	source := tenantSource{tenantID: testTenant, p: policy.TierPolicy{

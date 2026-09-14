@@ -107,7 +107,7 @@ func (i *StepIssuer) Issue(
 }
 
 // Revoke forgets the unspent handles issued for one attempt, when it ends
-// (ADR 0028).
+// (ADR 0029).
 func (i *StepIssuer) Revoke(_ context.Context, scope Scope) {
 	if i == nil || i.broker == nil {
 		return

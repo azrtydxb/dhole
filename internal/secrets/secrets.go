@@ -85,7 +85,7 @@ func (b *Broker) Issue(tenantID, name, value string, ttl time.Duration) (*dholev
 }
 
 // IssueFor is Issue for one attempt of a step: the handle remembers the scope
-// it was minted for, so the attempt's end can revoke it (ADR 0028). A scope
+// it was minted for, so the attempt's end can revoke it (ADR 0029). A scope
 // carrying only a tenant is a handle no attempt owns, which is what the plane's
 // own resolutions are.
 func (b *Broker) IssueFor(scope Scope, name, value string, ttl time.Duration) (*dholev1.SecretRef, error) {
@@ -156,7 +156,7 @@ func (b *Broker) Redeem(handle string) (string, error) {
 // RevokeAttempt forgets every unspent handle issued for exactly this attempt,
 // and reports how many. It is called when the attempt ends — whatever way it
 // ends — so a handle its engine never redeemed stops being a live credential
-// then rather than at its expiry (ADR 0028).
+// then rather than at its expiry (ADR 0029).
 //
 // Exact, and only exact: a scope missing any field matches nothing. Matching
 // by step would reach the retry of the same step, which may already have been
@@ -210,7 +210,7 @@ func (b *Broker) revoke(match func(entry) bool) int {
 }
 
 // RedeemFor exchanges a handle for its value, once, on behalf of tenantID —
-// the tenant named by the subject the request arrived on (ADR 0028).
+// the tenant named by the subject the request arrived on (ADR 0029).
 //
 // A handle issued for another tenant is refused with the one refusal every
 // other rule gives, so the reply does not say that the handle exists; and it is
@@ -259,7 +259,7 @@ type SubjectResponder interface {
 // — `<base>.<tenant>` — until the returned function is called. The tenant is
 // the token after base on the subject the request ARRIVED on, never anything
 // the request carries, and a handle issued for any other tenant is refused
-// (ADR 0028).
+// (ADR 0029).
 func ServeTenants(ctx context.Context, r SubjectResponder, b *Broker, base string) (func(), error) {
 	prefix := base + "."
 	return r.RespondRawSubject(ctx, prefix+"*", func(subject string, req []byte) []byte {
@@ -278,7 +278,7 @@ func ServeTenants(ctx context.Context, r SubjectResponder, b *Broker, base strin
 // Serve answers redemptions from b on subject until the returned function is
 // called, by handle alone.
 //
-// It is the DEPRECATED unscoped path (ADR 0028): an engine written before the
+// It is the DEPRECATED unscoped path (ADR 0029): an engine written before the
 // redemption subject named its tenant requests on bare secret.redeem, and the
 // plane keeps answering it while it accepts that engine's protocol version.
 // The tenant is the handle's own, which is what it always was.
@@ -302,7 +302,7 @@ func Serve(ctx context.Context, r Responder, b *Broker, subject string) (func(),
 // dispatch carrying a secret when it does not.
 //
 // tenantID is the tenant the dispatch carrying ref belongs to, and it is what
-// names the subject the redemption is asked on (ADR 0028).
+// names the subject the redemption is asked on (ADR 0029).
 type Redeemer interface {
 	Redeem(ctx context.Context, tenantID string, ref *dholev1.SecretRef) (string, error)
 }
@@ -330,7 +330,7 @@ func NewBusRedeemer(req Requester, base string) *BusRedeemer {
 //
 // The request goes to the tenant's own subject. It falls back to the unscoped
 // base ONLY when nothing at all serves the scoped one — a plane that predates
-// ADR 0028 — so an engine may still be upgraded before its plane. A refusal is
+// ADR 0029 — so an engine may still be upgraded before its plane. A refusal is
 // a reply, not an absence, and is never retried elsewhere; and a request the
 // bus refuses for permissions times out rather than reporting no responder, so
 // a credential cannot be talked into the unscoped path either.

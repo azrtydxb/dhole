@@ -99,7 +99,7 @@ type PlaneResolver struct {
 
 // NewPlaneResolver returns the resolver a control plane holds. subject must be
 // the base the broker is served under: the resolver redeems on the step's
-// tenant's subject beneath it (ADR 0028), and one pointed elsewhere redeems
+// tenant's subject beneath it (ADR 0029), and one pointed elsewhere redeems
 // nothing, which is a start-up fault and reads as one.
 func NewPlaneResolver(b *Broker, src Source, req Requester, subject string) *PlaneResolver {
 	return &PlaneResolver{broker: b, source: src, req: req, subject: subject, ttl: planeHandleTTL}

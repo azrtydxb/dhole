@@ -604,7 +604,7 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	}
 	s.stopSub = append(s.stopSub, stopSecrets)
 	// And the unscoped subject, deprecated, for an engine written before the
-	// redemption subject named its tenant (ADR 0028). It is served for as long
+	// redemption subject named its tenant (ADR 0029). It is served for as long
 	// as this plane accepts protocol version 3, and the tenant it redeems for
 	// is the handle's own, as it always was.
 	stopLegacySecrets, err := secrets.Serve(startCtx, s.infra.plane, s.broker, bus.SubjectSecretRedeem())

@@ -242,7 +242,7 @@ func requireRefusedNaming(ctx context.Context, t *testing.T, h *harness, named s
 // attempt, and it is a bearer credential until it expires. An attempt that
 // ended without its engine redeeming — it failed before the sandbox came up,
 // it was cancelled, its engine died — used to leave that credential live for
-// the rest of its ten minutes (ADR 0028).
+// the rest of its ten minutes (ADR 0029).
 func TestAnEndedAttemptsUnspentHandlesAreRevoked(t *testing.T) {
 	const ttl = 250 * time.Millisecond
 	for _, end := range []struct {
@@ -374,7 +374,7 @@ func (g *armingGate) Arm(_ context.Context, _ runstore.Tx, _, _ string, step *dh
 // plane and never has a JobDispatch, so the secrets it declared were dropped
 // on the floor — the author believed a credential was delivered and nothing
 // was. It is refused like any other step whose secrets cannot be given, before
-// a plane worker takes it or a gate is armed (ADR 0028).
+// a plane worker takes it or a gate is armed (ADR 0029).
 func TestABuiltinStepDeclaringASecretIsRefused(t *testing.T) {
 	for _, ref := range []string{"builtin:llm", "builtin:wait"} {
 		t.Run(ref, func(t *testing.T) {

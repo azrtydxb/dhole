@@ -736,7 +736,7 @@ func (a *Agent) redeem(ctx context.Context, d *dholev1.JobDispatch) (map[string]
 	}
 	for _, ref := range d.GetSecrets() {
 		// As the dispatch's tenant: it names the subject the redemption is
-		// asked on, and the plane refuses a handle of any other (ADR 0028).
+		// asked on, and the plane refuses a handle of any other (ADR 0029).
 		value, err := a.cfg.Secrets.Redeem(ctx, d.GetTenant().GetId(), ref)
 		if err != nil {
 			// Wrapped, not re-worded. The redeemer's error already names the

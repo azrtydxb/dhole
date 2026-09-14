@@ -148,7 +148,7 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// its own would be a second control plane.
 		Control: api.NewBusControl(s.infra.plane),
 		// The step-secret issuer over the plane's broker, so a cancelled
-		// run's unspent handles are revoked with it (ADR 0028).
+		// run's unspent handles are revoked with it (ADR 0029).
 		Secrets: secrets.NewStepIssuer(s.broker, nil),
 		// The same connection carries presence. It is an ephemeral subject
 		// per pipeline and nothing about it is stored (internal/api's

@@ -109,7 +109,7 @@ and agent orchestration are profiles over a shared core.
   before anything is dispatched, naming the secret. An engine redeems on its tenant's
   subject and the plane refuses a handle presented for another tenant; an attempt's unspent
   handles are revoked when it ends; a `builtin:` step declaring secrets is refused; and a
-  configured dispatch policy decides each declared secret (ADR 0028).
+  configured dispatch policy decides each declared secret (ADR 0029).
 
 ## Out of scope
 

@@ -42,7 +42,7 @@ that account are further limited to its own tier. Secret redemption is the
 exception, and the reason is on the other end of it: the plane answers every
 tenant's redemptions from one connection and one broker, so wherever tenants
 share an account the subject is the only thing on the path that says whose
-request it is (ADR 0028, and "The redemption exchange" below).
+request it is (ADR 0029, and "The redemption exchange" below).
 
 | Subject                             | Direction        | Message                          |
 | ----------------------------------- | ---------------- | -------------------------------- |
@@ -530,7 +530,7 @@ uses that instead, and appends the tenant to it. Dhole's engine reads
 
 #### The unscoped subject, and upgrading across it
 
-Before ADR 0028 the subject was the bare `secret.redeem`, and the tenant was
+Before ADR 0029 the subject was the bare `secret.redeem`, and the tenant was
 whatever the handle had been issued for. That subject is **deprecated and still
 served**:
 
