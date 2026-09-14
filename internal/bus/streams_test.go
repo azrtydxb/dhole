@@ -26,7 +26,7 @@ func TestATierThatCannotBeAStreamNameIsRefusedWhereItIsConfigured(t *testing.T) 
 			_, err := bus.DispatchStreamName(tier)
 			require.Error(t, err, "a tier that cannot be a stream name was accepted")
 
-			_, err = bus.TierPermissions(tier)
+			_, err = bus.TierPermissions("acme", tier)
 			require.Error(t, err, "a tier that cannot be a stream name got permissions")
 			if tier != "" {
 				// %q escapes, so compare against the quoted spelling: what
@@ -36,7 +36,7 @@ func TestATierThatCannotBeAStreamNameIsRefusedWhereItIsConfigured(t *testing.T) 
 					"the refusal must name the tier")
 			}
 
-			_, err = bus.StartEmbeddedWithTiers(t.TempDir(), []string{tier})
+			_, err = bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{tier})
 			require.Error(t, err, "a server started with a tier it cannot name a stream for")
 		})
 	}

@@ -786,7 +786,7 @@ class Engine:
 
         try:
             for secret in d["secrets"]:
-                env[secret["name"]] = self.redeem(secret)
+                env[secret["name"]] = self.redeem(d["tenant"], secret)
         except Exception as exc:  # noqa: BLE001
             # The refusal names the BINDING, never the handle or the value: a
             # status is durable and archived.
@@ -988,22 +988,29 @@ class Engine:
             )
         return outputs
 
-    def redeem(self, secret):
+    def redeem(self, tenant, secret):
         """Exchange a handle for a value, at the moment it is needed.
 
         The value is bound to the step's environment and goes nowhere else: not
         into a log, not into the object store, not into an error message.
 
-        GAP: the contract says a handle is redeemed and single-use.  It does
-        not say on what subject, with what message, or what a refusal looks
-        like.  This is the conformance suite's convention.
+        The request goes to <DHOLE_SECRET_SUBJECT>.<tenant>, the dispatch's own
+        tenant: the plane refuses a handle issued for any other, and a tier
+        credential may request on its own tenant's subject only
+        (docs/wire-contract.md, "The redemption exchange").
         """
         if not self.secret_subject:
             raise ValueError(
                 "no redemption endpoint configured for %r" % secret["name"]
             )
+        if not tenant:
+            raise ValueError(
+                "the dispatch carrying %r names no tenant" % secret["name"]
+            )
         data, _, _ = self.nats.request(
-            self.secret_subject, secret["handle"].encode(), timeout=10
+            "%s.%s" % (self.secret_subject, tenant),
+            secret["handle"].encode(),
+            timeout=10,
         )
         value = data.decode()
         if value.startswith("ERR "):

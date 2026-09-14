@@ -29,14 +29,16 @@ const secretValue = "correcthorsebatterystaple"
 type fakeRedeemer struct {
 	mu      sync.Mutex
 	handles []string
+	tenants []string
 	value   string
 	err     error
 }
 
-func (f *fakeRedeemer) Redeem(_ context.Context, ref *dholev1.SecretRef) (string, error) {
+func (f *fakeRedeemer) Redeem(_ context.Context, tenantID string, ref *dholev1.SecretRef) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.handles = append(f.handles, ref.GetHandle())
+	f.tenants = append(f.tenants, tenantID)
 	if f.err != nil {
 		return "", f.err
 	}
@@ -185,6 +187,10 @@ func TestAnEngineRedeemsEveryHandleAndBindsTheValueToTheStepsEnvironment(t *test
 		"the step compares $DHOLE_TEST_SECRET against the redeemed value; error %q", status.GetError())
 	require.Equal(t, []string{"handle-4"}, redeemer.redeemed(),
 		"the engine must redeem the handle it was given, once")
+	redeemer.mu.Lock()
+	defer redeemer.mu.Unlock()
+	require.Equal(t, []string{d.GetTenant().GetId()}, redeemer.tenants,
+		"the engine must redeem as the dispatch's tenant, which names the subject it asks on (ADR 0030)")
 }
 
 // TestARedeemedValueNeverReachesALogChunkTheAuthoritativeLogAnOutputRefOrAStatusError

@@ -23,14 +23,16 @@ const planeSecret = "correcthorsebatterystaple"
 // how a case tells "the plane went through the broker it serves" apart from
 // "the plane read the value out of the source and called it a redemption".
 type recordingRequester struct {
-	inner   secrets.Requester
-	mu      sync.Mutex
-	handles []string
+	inner    secrets.Requester
+	mu       sync.Mutex
+	handles  []string
+	subjects []string
 }
 
 func (r *recordingRequester) RequestRaw(ctx context.Context, subject string, body []byte) ([]byte, error) {
 	r.mu.Lock()
 	r.handles = append(r.handles, string(body))
+	r.subjects = append(r.subjects, subject)
 	r.mu.Unlock()
 	return r.inner.RequestRaw(ctx, subject, body)
 }
@@ -89,7 +91,7 @@ func planeBroker(
 	t.Cleanup(plane.Close)
 
 	broker := secrets.NewBroker()
-	stop, err := secrets.Serve(ctx, plane, broker, bus.SubjectSecretRedeem())
+	stop, err := secrets.ServeTenants(ctx, plane, broker, bus.SubjectSecretRedeem())
 	require.NoError(t, err)
 	t.Cleanup(stop)
 
@@ -115,6 +117,10 @@ func TestThePlaneRedeemsItsOwnSecretThroughTheBrokerItServesRatherThanReadingThe
 
 	handles := wire.redeemed()
 	require.Len(t, handles, 1, "the value must have crossed the redemption subject, not a back door")
+	wire.mu.Lock()
+	require.Equal(t, []string{bus.SubjectSecretRedeemFor("t1")}, wire.subjects,
+		"the plane redeems as a principal of the step's tenant, on that tenant's subject (ADR 0030)")
+	wire.mu.Unlock()
 	require.NotEmpty(t, handles[0])
 	require.NotContains(t, handles[0], planeSecret, "a handle is not the value")
 }

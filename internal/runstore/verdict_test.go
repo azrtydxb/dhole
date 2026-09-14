@@ -19,8 +19,9 @@ import (
 // scheduler could rename would stop matching the rows in the log without
 // anything failing to compile.
 const (
-	awaitingReplay runstore.EventType = "STEP_AWAITING_REPLAY"
-	policyDenied   runstore.EventType = "STEP_POLICY_DENIED"
+	awaitingReplay    runstore.EventType = "STEP_AWAITING_REPLAY"
+	policyDenied      runstore.EventType = "STEP_POLICY_DENIED"
+	secretUnavailable runstore.EventType = "STEP_SECRET_UNAVAILABLE"
 )
 
 // TestAStepHoldsAtMostOneVerdictOfEachKind is migration 0020's rule one level
@@ -36,7 +37,7 @@ const (
 // The store is where that has to be refused, because it is the only place the
 // decision and the write are one act.
 func TestAStepHoldsAtMostOneVerdictOfEachKind(t *testing.T) {
-	for _, verdict := range []runstore.EventType{awaitingReplay, policyDenied} {
+	for _, verdict := range []runstore.EventType{awaitingReplay, policyDenied, secretUnavailable} {
 		t.Run(string(verdict), func(t *testing.T) {
 			ctx := context.Background()
 			store := openRunStore(t)
@@ -147,7 +148,9 @@ func TestOpeningADatabaseThatAlreadyHoldsTwoStepVerdictsRepairsIt(t *testing.T) 
 	// because they are what now makes that impossible.
 	db, err := runstore.OpenSQLite(path)
 	require.NoError(t, err)
-	for _, index := range []string{"run_events_one_awaiting_replay", "run_events_one_policy_denied"} {
+	for _, index := range []string{
+		"run_events_one_awaiting_replay", "run_events_one_policy_denied", "run_events_one_secret_unavailable",
+	} {
 		_, err = db.ExecContext(ctx, `DROP INDEX `+index)
 		require.NoError(t, err)
 	}
@@ -156,6 +159,7 @@ func TestOpeningADatabaseThatAlreadyHoldsTwoStepVerdictsRepairsIt(t *testing.T) 
 		verdict  runstore.EventType
 	}{
 		{2, awaitingReplay}, {3, awaitingReplay}, {4, policyDenied}, {5, policyDenied},
+		{6, secretUnavailable}, {7, secretUnavailable},
 	} {
 		_, err = db.ExecContext(ctx, `INSERT INTO run_events
 			(tenant_id, run_id, step_id, attempt, sequence, type, payload, at)
@@ -173,7 +177,7 @@ func TestOpeningADatabaseThatAlreadyHoldsTwoStepVerdictsRepairsIt(t *testing.T) 
 	for _, kept := range []struct {
 		verdict  runstore.EventType
 		earliest uint64
-	}{{awaitingReplay, 2}, {policyDenied, 4}} {
+	}{{awaitingReplay, 2}, {policyDenied, 4}, {secretUnavailable, 6}} {
 		survivors := eventsOfType(events, kept.verdict)
 		require.Len(t, survivors, 1)
 		require.Equal(t, kept.earliest, survivors[0].Sequence,

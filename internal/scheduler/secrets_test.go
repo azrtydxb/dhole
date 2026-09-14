@@ -3,6 +3,8 @@ package scheduler_test
 import (
 	"bytes"
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +54,23 @@ func newSecretHarness(
 	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline, issuer scheduler.StepSecrets,
 ) *harness {
 	t.Helper()
+	return newSecretHarnessWith(ctx, t, pipeline, issuer, secretHarnessOptions{})
+}
+
+// secretHarnessOptions bend the secret harness for the cases that need a lease
+// to expire, or a dispatch to fail to commit.
+type secretHarnessOptions struct {
+	ttl      time.Duration
+	leases   func(lease.Manager) lease.Manager
+	builtins scheduler.BuiltinSteps
+	gate     scheduler.Gate
+}
+
+func newSecretHarnessWith(
+	ctx context.Context, t *testing.T, pipeline *dholev1.Pipeline, issuer scheduler.StepSecrets,
+	opts secretHarnessOptions,
+) *harness {
+	t.Helper()
 	store, err := runstore.NewSQLite(t.TempDir() + "/run.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -64,15 +83,20 @@ func newSecretHarness(
 	t.Cleanup(conn.Close)
 	leases, err := lease.New(ctx, conn)
 	require.NoError(t, err)
+	var manager lease.Manager = leases
+	if opts.leases != nil {
+		manager = opts.leases(leases)
+	}
 
 	recorder := &recordingBus{}
 	ob := outbox.New(store, recorder, "test-plane")
 	fleet := staticFleet{instances: []registry.Instance{redeemingEngine("e1")}}
 	defs := staticDefs{pipeline: pipeline}
 	sched, err := scheduler.New(scheduler.Config{
-		Store: store, Outbox: ob, Leases: leases, Fleet: fleet, Definitions: defs,
+		Store: store, Outbox: ob, Leases: manager, Fleet: fleet, Definitions: defs,
 		Tier: testTier, OS: "linux", Arch: "amd64",
-		Secrets: issuer,
+		Secrets: issuer, LeaseTTL: opts.ttl,
+		Builtins: opts.builtins, Gate: opts.gate,
 	})
 	require.NoError(t, err)
 
@@ -212,4 +236,166 @@ func requireRefusedNaming(ctx context.Context, t *testing.T, h *harness, named s
 	// And the refusal is final: another pass does not dispatch it either.
 	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
 	require.Empty(t, storedDispatches(ctx, t, h.store))
+}
+
+// TestAnEndedAttemptsUnspentHandlesAreRevoked: a handle is minted for one
+// attempt, and it is a bearer credential until it expires. An attempt that
+// ended without its engine redeeming — it failed before the sandbox came up,
+// it was cancelled, its engine died — used to leave that credential live for
+// the rest of its ten minutes (ADR 0030).
+func TestAnEndedAttemptsUnspentHandlesAreRevoked(t *testing.T) {
+	const ttl = 250 * time.Millisecond
+	for _, end := range []struct {
+		name string
+		end  func(ctx context.Context, t *testing.T, h *harness, d *dholev1.JobDispatch)
+	}{
+		{"succeeded", reportPhase(dholev1.Phase_PHASE_SUCCEEDED)},
+		{"failed", reportPhase(dholev1.Phase_PHASE_FAILED)},
+		{"cancelled", reportPhase(dholev1.Phase_PHASE_CANCELLED)},
+		{"lost", func(ctx context.Context, t *testing.T, h *harness, _ *dholev1.JobDispatch) {
+			time.Sleep(2 * ttl)
+			lost, err := h.sched.SweepOrphans(ctx)
+			require.NoError(t, err)
+			require.Equal(t, 1, lost, "the attempt was not recorded lost")
+		}},
+	} {
+		t.Run(end.name, func(t *testing.T) {
+			ctx := testContext(t)
+			src := secrets.NewMapSource()
+			src.Set(testTenant, "harbor-robot", registryPassword)
+			broker := secrets.NewBroker()
+			h := newSecretHarnessWith(ctx, t, pushPipeline(), secrets.NewStepIssuer(broker, src),
+				secretHarnessOptions{ttl: ttl})
+
+			require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+			require.Equal(t, []string{"push"}, h.drain(ctx, t))
+			d := h.latestDispatch(t, "push")
+			require.Len(t, d.GetSecrets(), 1)
+			h.report(ctx, t, h.sched, d, dholev1.Phase_PHASE_ACCEPTED)
+
+			end.end(ctx, t, h, d)
+
+			_, err := broker.Redeem(d.GetSecrets()[0].GetHandle())
+			require.Error(t, err, "the handle of an attempt that %s is still redeemable", end.name)
+		})
+	}
+}
+
+func reportPhase(phase dholev1.Phase) func(context.Context, *testing.T, *harness, *dholev1.JobDispatch) {
+	return func(ctx context.Context, t *testing.T, h *harness, d *dholev1.JobDispatch) {
+		t.Helper()
+		h.report(ctx, t, h.sched, d, phase)
+	}
+}
+
+// fencedLeases loses every commit: the lease is proven stale inside the
+// dispatch's own transaction, which is what another plane taking the step
+// looks like from here.
+type fencedLeases struct{ lease.Manager }
+
+func (fencedLeases) Validate(context.Context, lease.Token) error { return lease.ErrFenced }
+
+// recordingIssuer keeps the handles it issued, so a case can try them after the
+// dispatch that carried them never happened.
+type recordingIssuer struct {
+	*secrets.StepIssuer
+	mu     sync.Mutex
+	issued []*dholev1.SecretRef
+}
+
+func (r *recordingIssuer) Issue(
+	ctx context.Context, scope secrets.Scope, step *dholev1.Step, ttl time.Duration,
+) ([]*dholev1.SecretRef, error) {
+	refs, err := r.StepIssuer.Issue(ctx, scope, step, ttl)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.issued = append(r.issued, refs...)
+	return refs, err
+}
+
+// TestHandlesIssuedForADispatchThatDidNotCommitAreRevoked: the handles are
+// minted while the dispatch is built, before the transaction that writes it.
+// A dispatch that then loses its lease writes nothing and publishes nothing,
+// and the handles it minted belong to no attempt anybody will ever run.
+func TestHandlesIssuedForADispatchThatDidNotCommitAreRevoked(t *testing.T) {
+	ctx := testContext(t)
+	src := secrets.NewMapSource()
+	src.Set(testTenant, "harbor-robot", registryPassword)
+	broker := secrets.NewBroker()
+	issuer := &recordingIssuer{StepIssuer: secrets.NewStepIssuer(broker, src)}
+	h := newSecretHarnessWith(ctx, t, pushPipeline(), issuer, secretHarnessOptions{
+		leases: func(m lease.Manager) lease.Manager { return fencedLeases{Manager: m} },
+	})
+
+	require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	require.Empty(t, storedDispatches(ctx, t, h.store), "a fenced dispatch was written")
+
+	issuer.mu.Lock()
+	defer issuer.mu.Unlock()
+	require.Len(t, issuer.issued, 1, "the dispatch never got as far as issuing, so this proves nothing")
+	_, err := broker.Redeem(issuer.issued[0].GetHandle())
+	require.Error(t, err, "a handle minted for a dispatch that never committed is still redeemable")
+}
+
+// takingBuiltins takes every `builtin:` step it is offered, the way the plane's
+// own dispatcher does, and remembers that it did.
+type takingBuiltins struct {
+	mu    sync.Mutex
+	taken []string
+}
+
+func (b *takingBuiltins) Take(_ context.Context, _, _ string, step *dholev1.Step, _ uint32) (bool, error) {
+	if !strings.HasPrefix(step.GetPluginRef(), "builtin:") {
+		return false, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.taken = append(b.taken, step.GetId())
+	return true, nil
+}
+
+// armingGate arms every `builtin:wait` step, and remembers that it did.
+type armingGate struct {
+	mu    sync.Mutex
+	armed []string
+}
+
+func (g *armingGate) Arm(_ context.Context, _ runstore.Tx, _, _ string, step *dholev1.Step) (bool, error) {
+	if step.GetPluginRef() != "builtin:wait" {
+		return false, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.armed = append(g.armed, step.GetId())
+	return true, nil
+}
+
+// TestABuiltinStepDeclaringASecretIsRefused: a `builtin:` step runs on the
+// plane and never has a JobDispatch, so the secrets it declared were dropped
+// on the floor — the author believed a credential was delivered and nothing
+// was. It is refused like any other step whose secrets cannot be given, before
+// a plane worker takes it or a gate is armed (ADR 0030).
+func TestABuiltinStepDeclaringASecretIsRefused(t *testing.T) {
+	for _, ref := range []string{"builtin:llm", "builtin:wait"} {
+		t.Run(ref, func(t *testing.T) {
+			ctx := testContext(t)
+			src := secrets.NewMapSource()
+			src.Set(testTenant, "harbor-robot", registryPassword)
+			p := pushPipeline()
+			p.GetSteps()[0].PluginRef = ref
+			builtins, gate := &takingBuiltins{}, &armingGate{}
+			h := newSecretHarnessWith(ctx, t, p, secrets.NewStepIssuer(secrets.NewBroker(), src),
+				secretHarnessOptions{builtins: builtins, gate: gate})
+
+			require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+			requireRefusedNaming(ctx, t, h, "builtin:")
+
+			builtins.mu.Lock()
+			defer builtins.mu.Unlock()
+			gate.mu.Lock()
+			defer gate.mu.Unlock()
+			require.Empty(t, builtins.taken, "the plane took a builtin step whose declared secrets it cannot give")
+			require.Empty(t, gate.armed, "a gate declaring secrets was armed as if they had been given")
+		})
+	}
 }

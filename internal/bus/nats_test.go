@@ -3,6 +3,7 @@ package bus_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func TestEngineCannotSubscribeToForeignTier(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"trusted", "untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 
@@ -145,7 +146,7 @@ func TestAnEngineCanBindItsOwnKindsWorkQueueButNotAnotherTiers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"trusted", "untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"trusted", "untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 
@@ -227,7 +228,7 @@ func TestPublishToDurableSubjectReportsRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 
@@ -295,15 +296,15 @@ func TestSubscribingWithADeadlinelessContextWorks(t *testing.T) {
 
 // TestATierEngineMayRedeemASecretButNotAnswerOne is the permission the
 // redemption subject needs and the one it must not have. An engine requests on
-// secret.redeem; the control plane answers. An engine allowed to SUBSCRIBE
-// there could answer a sibling's redemption with a value of its own choosing,
-// which is a credential-substitution attack inside the tier the bus exists to
-// contain.
+// its tenant's secret.redeem.<tenant>; the control plane answers. An engine
+// allowed to SUBSCRIBE there could answer a sibling's redemption with a value
+// of its own choosing, which is a credential-substitution attack inside the
+// tier the bus exists to contain.
 func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 
@@ -311,8 +312,8 @@ func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(plane.Close)
 
-	stop, err := plane.RespondRaw(ctx, bus.SubjectSecretRedeem(), func(req []byte) []byte {
-		return []byte("value-for-" + string(req))
+	stop, err := plane.RespondRawSubject(ctx, bus.SubjectSecretRedeemAny(), func(subject string, req []byte) []byte {
+		return []byte("value-for-" + string(req) + "-on-" + subject)
 	})
 	require.NoError(t, err)
 	t.Cleanup(stop)
@@ -321,13 +322,63 @@ func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(engine.Close)
 
-	reply, err := engine.RequestRaw(ctx, bus.SubjectSecretRedeem(), []byte("handle-1"))
+	reply, err := engine.RequestRaw(ctx, bus.SubjectSecretRedeemFor("acme"), []byte("handle-1"))
 	require.NoError(t, err)
-	require.Equal(t, "value-for-handle-1", string(reply))
+	require.Equal(t, "value-for-handle-1-on-secret.redeem.acme", string(reply),
+		"the responder must learn the tenant from the subject the request arrived on")
 
-	_, err = engine.SubscribeEphemeral(ctx, bus.SubjectSecretRedeem(), func([]byte) {})
-	require.Error(t, err, "an engine that could answer redemptions could substitute a value")
-	require.ErrorIs(t, err, bus.ErrPermissionDenied)
+	for _, subject := range []string{bus.SubjectSecretRedeemAny(), bus.SubjectSecretRedeemFor("acme")} {
+		_, err = engine.SubscribeEphemeral(ctx, subject, func([]byte) {})
+		require.Error(t, err, "an engine that could answer redemptions on %s could substitute a value", subject)
+		require.ErrorIs(t, err, bus.ErrPermissionDenied)
+	}
+}
+
+// TestATierEngineMayRedeemOnlyOnItsOwnTenantsSubject is ADR 0030's bus half. A
+// tier credential belongs to one tenant, so the one redemption subject it may
+// request on is that tenant's: an engine presenting a handle it obtained from
+// another tenant is refused by the SERVER before any responder sees it.
+func TestATierEngineMayRedeemOnlyOnItsOwnTenantsSubject(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"untrusted"})
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	plane, err := bus.Connect(ctx, srv.PlaneURL())
+	require.NoError(t, err)
+	t.Cleanup(plane.Close)
+
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	stop, err := plane.RespondRawSubject(ctx, bus.SubjectSecretRedeemAny(), func(subject string, _ []byte) []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, subject)
+		return []byte("value")
+	})
+	require.NoError(t, err)
+	t.Cleanup(stop)
+
+	engine, err := bus.Connect(ctx, srv.TierURL("untrusted"))
+	require.NoError(t, err)
+	t.Cleanup(engine.Close)
+
+	_, err = engine.RequestRaw(ctx, bus.SubjectSecretRedeemFor("acme"), []byte("mine"))
+	require.NoError(t, err, "an engine was refused redemption on its own tenant's subject")
+
+	short, stopShort := context.WithTimeout(ctx, 2*time.Second)
+	defer stopShort()
+	_, err = engine.RequestRaw(short, bus.SubjectSecretRedeemFor("globex"), []byte("theirs"))
+	require.Error(t, err, "an engine of tenant acme redeemed on tenant globex's subject")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{bus.SubjectSecretRedeemFor("acme")}, seen,
+		"a request on another tenant's redemption subject reached the responder")
 }
 
 // TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance is the acceptance
@@ -340,7 +391,7 @@ func TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"untrusted"})
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), "acme", []string{"untrusted"})
 	require.NoError(t, err)
 	t.Cleanup(srv.Close)
 

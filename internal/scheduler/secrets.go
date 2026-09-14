@@ -42,6 +42,11 @@ type StepSecrets interface {
 	Check(ctx context.Context, tenantID string, step *dholev1.Step) error
 	// Issue mints one handle per declaration for exactly this attempt.
 	Issue(ctx context.Context, scope secrets.Scope, step *dholev1.Step, ttl time.Duration) ([]*dholev1.SecretRef, error)
+	// Revoke forgets the unspent handles of exactly one attempt, when that
+	// attempt ends (ADR 0030).
+	Revoke(ctx context.Context, scope secrets.Scope)
+	// Discard forgets handles issued for a dispatch that never committed.
+	Discard(ctx context.Context, refs []*dholev1.SecretRef)
 }
 
 // SecretUnavailable is the STEP_SECRET_UNAVAILABLE payload.
@@ -84,9 +89,42 @@ func (s *Scheduler) refuseSecrets(
 	if reason == nil {
 		return false, nil
 	}
+	return true, s.recordSecretRefusal(ctx, tenantID, runID, step, reason)
+}
+
+// builtinScheme is the plugin reference of a step the control plane runs
+// itself. It is the public contract a pipeline author types, and internal/server
+// owns the step types behind it; this package only needs to recognise it.
+const builtinScheme = "builtin:"
+
+// refuseBuiltinSecrets refuses a `builtin:` step that declares secrets, before
+// it is served from cache, taken by a plane worker or armed as a gate. A step
+// the plane hosts never has a JobDispatch, so its declared secrets would go
+// nowhere and the author would believe a credential had been delivered. A
+// builtin that needs one names it in its own configuration (ADR 0024, 0030).
+//
+// It reports whether the step was refused.
+func (s *Scheduler) refuseBuiltinSecrets(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+) (bool, error) {
+	if len(step.GetSecrets()) == 0 || !strings.HasPrefix(step.GetPluginRef(), builtinScheme) {
+		return false, nil
+	}
+	return true, s.recordSecretRefusal(ctx, tenantID, runID, step, fmt.Errorf(
+		"step %q is %s, which the control plane runs itself and never dispatches, so it cannot be "+
+			"given step secrets; a builtin: step names a credential in its own configuration instead",
+		step.GetId(), step.GetPluginRef()))
+}
+
+// recordSecretRefusal writes STEP_SECRET_UNAVAILABLE and fails the run. The
+// store keeps one per step (migration 0026), so a pass that races another to
+// the same refusal appends nothing.
+func (s *Scheduler) recordSecretRefusal(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, reason error,
+) error {
 	payload, err := MarshalSecretUnavailable(SecretUnavailable{Reason: reason.Error()})
 	if err != nil {
-		return true, err
+		return err
 	}
 	if err := s.append(ctx, tenantID, runstore.Event{
 		RunID:   runID,
@@ -95,9 +133,9 @@ func (s *Scheduler) refuseSecrets(
 		Type:    StepSecretUnavailable,
 		Payload: payload,
 	}); err != nil {
-		return true, err
+		return err
 	}
-	return true, s.fail(ctx, tenantID, runID, []string{step.GetId()})
+	return s.fail(ctx, tenantID, runID, []string{step.GetId()})
 }
 
 // secretRefs issues the handles one attempt's dispatch carries.
@@ -115,4 +153,25 @@ func (s *Scheduler) secretRefs(
 	return s.secrets.Issue(ctx, secrets.Scope{
 		TenantID: tenantID, RunID: runID, StepID: step.GetId(), Attempt: attempt,
 	}, step, DefaultSecretTTL)
+}
+
+// revokeSecrets forgets the unspent handles of one attempt that has ended —
+// succeeded, failed, cancelled, or lost with its engine (ADR 0030). Handles
+// live in the memory of the plane that issued them, so on any other plane this
+// revokes nothing and the handle's expiry remains the backstop.
+func (s *Scheduler) revokeSecrets(ctx context.Context, tenantID, runID, stepID string, attempt uint32) {
+	if s.secrets == nil {
+		return
+	}
+	s.secrets.Revoke(ctx, secrets.Scope{TenantID: tenantID, RunID: runID, StepID: stepID, Attempt: attempt})
+}
+
+// discardSecrets forgets the handles a dispatch minted and then did not commit.
+// By handle rather than by attempt: the attempt number it was built under may
+// be one another pass has already dispatched, whose handles are live.
+func (s *Scheduler) discardSecrets(ctx context.Context, refs []*dholev1.SecretRef) {
+	if s.secrets == nil || len(refs) == 0 {
+		return
+	}
+	s.secrets.Discard(ctx, refs)
 }

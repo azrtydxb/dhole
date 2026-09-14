@@ -42,5 +42,30 @@ func TestTierWildcardsScopeToOneTier(t *testing.T) {
 // TestSecretRedemptionSubjectIsPinned holds the one subject an engine in
 // another language has to spell exactly right to redeem anything.
 func TestSecretRedemptionSubjectIsPinned(t *testing.T) {
+	require.Equal(t, "secret.redeem.acme", bus.SubjectSecretRedeemFor("acme"))
+	require.Equal(t, "secret.redeem.*", bus.SubjectSecretRedeemAny())
+	// Deprecated, and still served while the plane accepts protocol version
+	// 3: an engine written before ADR 0030 redeems here.
 	require.Equal(t, "secret.redeem", bus.SubjectSecretRedeem())
+}
+
+// TestATierCredentialNamesExactlyOneTenant: the tenant is spelled into the
+// redemption subject a tier credential may request on, so a tenant that is not
+// one token would widen the permission instead of naming it — `*` would let an
+// engine redeem on every tenant's subject (ADR 0030).
+func TestATierCredentialNamesExactlyOneTenant(t *testing.T) {
+	for _, bad := range []string{"", "*", ">", "a.b", "a b"} {
+		_, err := bus.TierPermissions(bad, "untrusted")
+		require.Error(t, err, "a tier credential was built for the tenant %q", bad)
+		_, err = bus.StartEmbeddedWithTiers(t.TempDir(), bad, []string{"untrusted"})
+		require.Error(t, err, "a tiered server was started for the tenant %q", bad)
+	}
+
+	perms, err := bus.TierPermissions("acme", "untrusted")
+	require.NoError(t, err)
+	require.Contains(t, perms.Publish.Allow, bus.SubjectSecretRedeemFor("acme"))
+	require.NotContains(t, perms.Publish.Allow, bus.SubjectSecretRedeemAny(),
+		"a tier credential may request on every tenant's redemption subject")
+	require.NotContains(t, perms.Subscribe.Allow, bus.SubjectSecretRedeemAny())
+	require.NotContains(t, perms.Subscribe.Allow, bus.SubjectSecretRedeemFor("acme"))
 }

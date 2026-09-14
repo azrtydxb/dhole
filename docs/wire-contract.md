@@ -35,10 +35,14 @@ namespace, so the same subject string in two accounts is two different
 subjects. Isolation is enforced by the server against the connection's
 credentials, not by a prefix an engine could get wrong or forge.
 
-That is why no `<tenant>` appears in the table below. An engine never spells
-its tenant and could not reach another one by spelling it differently: its
-credentials place it in exactly one account, and its permissions within that
-account are further limited to its own tier.
+That is why `<tenant>` appears in only one row of the table below. An engine
+could not reach another tenant's dispatches by spelling a subject differently:
+its credentials place it in exactly one account, and its permissions within
+that account are further limited to its own tier. Secret redemption is the
+exception, and the reason is on the other end of it: the plane answers every
+tenant's redemptions from one connection and one broker, so wherever tenants
+share an account the subject is the only thing on the path that says whose
+request it is (ADR 0030, and "The redemption exchange" below).
 
 | Subject                             | Direction        | Message                            |
 | ----------------------------------- | ---------------- | ---------------------------------- |
@@ -49,7 +53,8 @@ account are further limited to its own tier.
 | `engine.control.<engine-id>`        | plane → engine   | `EngineControl`                    |
 | `engine.heartbeat.<engine-id>`      | engine → plane   | `EngineHeartbeat`                  |
 | `engine.registration`               | engine → plane   | `EngineRegistration`               |
-| `secret.redeem`                     | engine → plane   | a handle, raw (reply: the value)   |
+| `secret.redeem.<tenant>`            | engine → plane   | a handle, raw (reply: the value)   |
+| `secret.redeem` (deprecated)        | engine → plane   | a handle, raw (reply: the value)   |
 | `job.accept.<run>.<step>`           | engine → plane   | `JobStatus` (reply: `AcceptReply`) |
 
 `<tier>` is the trust tier the work is dispatched to — `trusted`, `untrusted`,
@@ -529,8 +534,9 @@ backend to advertise it is the same mistake with the answer inverted.
 
 ### The redemption exchange
 
-Request/reply on `secret.redeem`, and both bodies are RAW BYTES rather than
-protobuf messages:
+Request/reply on `secret.redeem.<tenant>`, where `<tenant>` is the
+`JobDispatch.tenant.id` of the dispatch carrying the reference, and both bodies
+are RAW BYTES rather than protobuf messages:
 
 - The **request** body is the `SecretRef.handle`, UTF-8, and nothing else.
 - The **reply** body is the value's bytes, and nothing else — unless it begins
@@ -552,6 +558,13 @@ Rules that bind both ends:
 
 - **The control plane serves it.** A reference nothing can redeem is not a
   feature. The plane answers on this subject for as long as it is running.
+- **The subject names the tenant, and the plane checks it.** A handle issued for
+  one tenant and presented on another tenant's subject is refused with the same
+  refusal as every other rule, and it is spent: single use means spent by being
+  presented. An engine's tier credential may request on its own tenant's
+  subject and not on any other, so a request spelled for another tenant is
+  refused by the bus before the plane sees it. Neither half depends on the
+  other.
 - **Single use.** The second redemption of a handle is refused, whatever the
   outcome of the first. A dispatch redelivered after a lost ack must not be able
   to read a value the earlier attempt already took.
@@ -573,16 +586,43 @@ Rules that bind both ends:
 - **An engine that cannot redeem fails the step**, with an error naming the
   BINDING — the environment variable the step expected — and never the handle.
 
-The subject is a deployment's to move: an engine that is told a different one
-uses that instead. Dhole's engine reads `DHOLE_SECRET_SUBJECT` and falls back to
-`secret.redeem`.
+The subject is a deployment's to move: an engine that is told a different BASE
+uses that instead, and appends the tenant to it. Dhole's engine reads
+`DHOLE_SECRET_SUBJECT` for the base and defaults to `secret.redeem`.
+
+#### The unscoped subject, and upgrading across it
+
+Before ADR 0030 the subject was the bare `secret.redeem`, and the tenant was
+whatever the handle had been issued for. That subject is **deprecated and still
+served**:
+
+- **An older engine keeps working.** The plane accepts engines one protocol
+  version behind its own, and an engine written before the change redeems on
+  `secret.redeem`. The plane answers there, by handle alone, exactly as before
+  — no worse than it was, and in a deployment with an account per tenant still
+  scoped by the account. Tier credentials keep the permission for it.
+- **When it goes.** No protocol bump was made: the plane serves both subjects,
+  so no engine has to do anything differently to keep working. The change was
+  made under **protocol version 3**, so any engine at version 4 or later is
+  written against a contract naming the scoped subject. The first plane whose
+  compatibility window no longer includes version 3 stops serving
+  `secret.redeem` and tier credentials stop allowing it.
+- **Either upgrade order works.** An engine that gets NO RESPONDER on the scoped
+  subject — a plane that predates it — asks on the unscoped base instead. A
+  refusal is a reply and is never retried elsewhere, and a request the bus
+  refuses for permissions is not "no responder" (it times out), so neither a
+  plane nor a credential can talk an engine into the unscoped path.
+- **One thing to do first.** A tier credential issued before the change carries
+  no permission for the scoped subject, and an engine holding one does not fall
+  back — the bus refuses rather than reporting no responder. Re-issue those
+  credentials before upgrading the engines that hold them.
 
 ### The plane redeems here too
 
 The control plane is not an exception to any of the above. `builtin:llm` runs on
 the plane and needs a model API key; a model configuration therefore names a
 secret (`api_key_secret` in the step's config) rather than carrying a value, and
-the plane mints a handle for it and redeems it on this same subject, as a
+the plane mints a handle for it and redeems it on the same scoped subject, as a
 principal of the tenant whose step is running (ADR 0024).
 
 Two consequences bind an implementation:

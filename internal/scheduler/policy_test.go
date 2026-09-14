@@ -627,3 +627,62 @@ func BenchmarkDispatchPolicyEvaluation(b *testing.B) {
 		}
 	}
 }
+
+// TestPolicyDecidesEachSecretAStepDeclares is ADR 0012's secret-resolver
+// caller, which nothing ever was: the only control over a step's secrets was
+// the SECRETS capability, and no rule could refuse one secret while allowing
+// another. Each declared secret is now decided where the step is judged, with
+// the step's own facts plus its name (ADR 0030), and a refusal names it.
+func TestPolicyDecidesEachSecretAStepDeclares(t *testing.T) {
+	const ruleSigningKey = "secrets.no-signing-key"
+	source := tenantSource{tenantID: testTenant, p: policy.TierPolicy{
+		Revision: "secrets/1",
+		Rules: []policy.Rule{{
+			ID:         ruleSigningKey,
+			Expression: `input.secret_name != "prod-signing-key"`,
+			Reason:     "only the release tier may read the signing key",
+		}},
+	}}
+
+	t.Run("a refused secret refuses its step", func(t *testing.T) {
+		ctx := testContext(t)
+		p := pushPipeline()
+		p.GetSteps()[0].Secrets = append(p.GetSteps()[0].GetSecrets(),
+			&dholev1.StepSecret{Name: "prod-signing-key", Env: "SIGNING_KEY"})
+		h := newPolicyHarness(ctx, t, policyOptions{source: source, pipeline: p})
+
+		require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+		require.Empty(t, h.bus.dispatchSubjects(), "a step declaring a refused secret reached an engine")
+
+		denial := h.policyDenial(ctx, t, "push")
+		require.Equal(t, ruleSigningKey, denial.Rule)
+		require.Equal(t, "prod-signing-key", denial.Secret, "the refusal does not name the secret it refused")
+		failed, ok := h.runFailed(ctx, t)
+		require.True(t, ok, "the run was left open with a step that will never run")
+		require.Equal(t, []string{"push"}, failed)
+
+		var subjects []string
+		for _, r := range h.audit.all() {
+			subjects = append(subjects, r.Subject)
+		}
+		require.Equal(t, []string{"step:push", "secret:harbor-robot", "secret:prod-signing-key"}, subjects,
+			"each declared secret is one decision on the audit trail, after the step's own")
+	})
+
+	t.Run("a permitted secret is decided and let through", func(t *testing.T) {
+		ctx := testContext(t)
+		h := newPolicyHarness(ctx, t, policyOptions{source: source, pipeline: pushPipeline()})
+
+		require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+		require.Zero(t, h.countEvents(ctx, t, scheduler.StepPolicyDenied, "push"),
+			"a secret no rule refuses was refused")
+		var decided bool
+		for _, r := range h.audit.all() {
+			if r.Subject == "secret:harbor-robot" {
+				decided = true
+				require.True(t, r.Allow)
+			}
+		}
+		require.True(t, decided, "the declared secret was never put to policy")
+	})
+}

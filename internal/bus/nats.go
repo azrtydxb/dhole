@@ -18,6 +18,11 @@ import (
 // tier's work sees this.
 var ErrPermissionDenied = errors.New("bus: permission denied")
 
+// ErrNoResponders is what a request reports when nothing is serving its
+// subject at all — as opposed to a responder that refused. It is how an engine
+// tells a plane that predates a subject from one that answered no.
+var ErrNoResponders = nats.ErrNoResponders
+
 // ErrSubscriptionClosed is returned by Next after its Subscription is closed.
 var ErrSubscriptionClosed = errors.New("bus: subscription closed")
 
@@ -247,6 +252,25 @@ func (n *NATS) RequestRaw(ctx context.Context, subject string, body []byte) ([]b
 func (n *NATS) RespondRaw(ctx context.Context, subject string, fn func([]byte) []byte) (func(), error) {
 	sub, err := n.conn.Subscribe(subject, func(m *nats.Msg) {
 		_ = m.Respond(fn(m.Data))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bus: respond on %q: %w", subject, err)
+	}
+	if err := n.confirmSubscribed(ctx, sub, subject); err != nil {
+		return nil, err
+	}
+	return func() { _ = sub.Unsubscribe() }, nil
+}
+
+// RespondRawSubject is RespondRaw for a wildcard subject: fn is also told the
+// subject each request actually arrived on. Secret redemption needs it — the
+// plane serves every tenant's secret.redeem.<tenant> and the tenant is the
+// last token of that subject, not anything the request body could claim.
+func (n *NATS) RespondRawSubject(
+	ctx context.Context, subject string, fn func(subject string, body []byte) []byte,
+) (func(), error) {
+	sub, err := n.conn.Subscribe(subject, func(m *nats.Msg) {
+		_ = m.Respond(fn(m.Subject, m.Data))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bus: respond on %q: %w", subject, err)

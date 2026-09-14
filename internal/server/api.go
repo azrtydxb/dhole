@@ -18,6 +18,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/defstore"
 	"github.com/azrtydxb/dhole/internal/health"
 	"github.com/azrtydxb/dhole/internal/identity"
+	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/webui"
 )
 
@@ -146,6 +147,9 @@ func (s *Server) startAPI(runCtx context.Context) (err error) {
 		// every dispatch does. An API reaching engines over a connection of
 		// its own would be a second control plane.
 		Control: api.NewBusControl(s.infra.plane),
+		// The step-secret issuer over the plane's broker, so a cancelled
+		// run's unspent handles are revoked with it (ADR 0030).
+		Secrets: secrets.NewStepIssuer(s.broker, nil),
 		// The same connection carries presence. It is an ephemeral subject
 		// per pipeline and nothing about it is stored (internal/api's
 		// presence.go); giving the API a bus connection of its own would be a

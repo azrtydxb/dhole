@@ -42,6 +42,8 @@ const (
 
 	keyPrincipalKind      = "principal_kind"
 	keyPrincipalUntrusted = "principal_untrusted"
+
+	keySecretName = "secret_name"
 )
 
 // newEnv builds the CEL environment every policy is compiled in.
@@ -95,6 +97,8 @@ func inputMap(in Input) map[string]any {
 
 		keyPrincipalKind:      in.PrincipalKind,
 		keyPrincipalUntrusted: in.PrincipalUntrusted,
+
+		keySecretName: in.SecretName,
 	}
 }
 
