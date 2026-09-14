@@ -159,7 +159,13 @@ and agent orchestration are profiles over a shared core.
 - gRPC and JSON-over-HTTP from one protobuf definition via ConnectRPC; generated Go server
   and TypeScript client; MCP tool definitions and OpenAPI derived from the same schemas.
 - Operation-level editing API: `add_step`, `connect`, `set_property`, `remove_edge`,
-  `rename`, each taking a document version and returning a diff plus its inverse.
+  `rename`, each taking a document version and returning a diff plus its inverse. The set is
+  closed under inversion (ADR 0020) and reaches every authored scalar and list of a step one
+  element at a time (ADR 0028): `set_property` covers `plugin_ref`, `effect_class`,
+  `lease_scope`, `image`, `engine_type` and `timeout_seconds`; `set_step_config`,
+  `set_step_secret` and `set_step_capability` edit one config key, one secret binding and one
+  capability; `set_file` one definition file. Ports and file bindings are changed by replacing
+  the step.
 - Read-only `validate` (structured diagnostics with source positions) and `plan` (resolved
   DAG, cache-hit prediction, engine assignment per step).
 - Bus subject layout as an engine-author-facing contract: `job.dispatch.<tier>.<caps>`,
@@ -380,6 +386,12 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
       fails naming it and is never dispatched —
       `TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere`,
       `TestAStepDeclaringASecretThePlaneDoesNotHoldIsNeverDispatched`.
+- [ ] [S-13] [S-23] A secret binding and a capability are added to, rebound on and removed
+      from an existing step one operation each, every inverse lands back on the original
+      revision id, and a step declaring a secret without `CAPABILITY_SECRETS` is an error from
+      `Validate` in the scheduler's own words —
+      `TestSetStepSecretInvertsInEveryDirection`, `TestSetStepCapabilityInvertsInEveryDirection`,
+      `TestValidateReportsASecretWithoutItsCapability`.
 - [ ] [S-1] [S-9] [S-6] `TestAcceptanceCICacheHit` (`make acceptance-ci`): the CI acceptance
       pipeline builds a container image and hits the cache on a second run with unchanged
       inputs; fails if the second run rebuilds the image or reports no cache hit.

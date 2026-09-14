@@ -301,6 +301,16 @@ func basePipeline(tenantID string) *dholev1.Pipeline {
 				Id: "b", Name: "build",
 				EffectClass: dholev1.EffectClass_EFFECT_CLASS_PURE,
 				Inputs:      []*dholev1.Port{blobPort("in"), blobPort("aux")},
+				// Two of each, so the inverse of removing the FIRST has a
+				// position to restore — an inverse that appended would land
+				// on the same set and a different revision (ADR 0028).
+				Capabilities: []dholev1.Capability{
+					dholev1.Capability_CAPABILITY_NETWORK, dholev1.Capability_CAPABILITY_SECRETS,
+				},
+				Secrets: []*dholev1.StepSecret{
+					{Name: "registry-robot", Env: "REGISTRY_USER"},
+					{Name: "registry-robot-password", Env: "REGISTRY_PASSWORD"},
+				},
 			},
 			{
 				Id:      "c",
@@ -351,6 +361,16 @@ var operationFixtures = map[string]*dholev1.Operation{
 	// which is the case a "set it back to empty" inverse would get wrong.
 	"set_step_config": {Kind: &dholev1.Operation_SetStepConfig{
 		SetStepConfig: &dholev1.SetStepConfig{StepId: "c", Key: "target", Value: "staging"},
+	}},
+	// Both remove the FIRST element of step "b"'s list, which is the case an
+	// appending inverse gets wrong: the set comes back, the order does not.
+	"set_step_secret": {Kind: &dholev1.Operation_SetStepSecret{
+		SetStepSecret: &dholev1.SetStepSecret{StepId: "b", Env: "REGISTRY_USER", Remove: true},
+	}},
+	"set_step_capability": {Kind: &dholev1.Operation_SetStepCapability{
+		SetStepCapability: &dholev1.SetStepCapability{
+			StepId: "b", Capability: dholev1.Capability_CAPABILITY_NETWORK, Remove: true,
+		},
 	}},
 	// Attaching a file the harness has already uploaded, so the definition
 	// names bytes that really exist — a set_file naming a digest nobody put

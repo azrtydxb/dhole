@@ -1069,6 +1069,53 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `STEP_SECRET_UNAVAILABLE` (two racing advances can record it twice — the run fails once);
       a `builtin:` step's declared secrets are ignored rather than refused; and the policy items
       above.
+- [x] **A secret or a capability cannot be added to an existing step.** Found 2026-09-14 running a
+      real pipeline on kw: declaring `nexus-push` on the `image` step took eight revisions —
+      three `remove_edge`, `remove_step`, `add_step` with the fields, three `connect` — because
+      `Step.secrets` and `Step.capabilities` have no operation, and neither do `image`,
+      `engine_type` or `timeout_seconds`. ADR 0028 decides the shape. Files:
+      `proto/dhole/v1/api.proto` (`SetStepSecret`, `SetStepCapability`, oneof fields 9 and 10),
+      `internal/api/operations.go` (apply, inverse, summaries; `settableProperties` gains
+      `image`, `engine_type`, `timeout_seconds`), `internal/api/presence.go` (`touchedBy`),
+      `internal/api/validate.go` and `internal/secrets/step.go` (`ValidateDeclarations`, the
+      scheduler's own check, exported so `Validate` reports it in the same words),
+      `web/src/shell/StepDeclarations.tsx`, `web/src/shell/useStepEdits.ts` and
+      `web/src/shell/Editor.tsx` (the inspector shows and edits both lists). Interfaces: produces
+      `secrets.ValidateDeclarations(step) error` and `secrets.IsEnvName(string) bool`, consumed
+      by `api.Server.Validate` and `api.Apply`; the web client is regenerated with `npm run gen`.
+      Tests, red first: `TestEveryOperationInverseRoundTrips/set_step_secret` and
+      `/set_step_capability` fail with "apply: unsupported operation *dholev1.Operation_SetStepSecret";
+      `TestSetStepSecretInvertsInEveryDirection` and `TestSetStepCapabilityInvertsInEveryDirection`
+      fail the same way; `TestSetPropertyReachesEveryStepScalar` fails with "unknown property
+      "image""; `TestADeclarationEditMergesWithAConcurrentEditToAnotherStep` fails with "revision
+      conflict … touches this pipeline as well"; `TestValidateReportsASecretWithoutItsCapability`
+      fails with "no diagnostic on step "nocap""; `StepDeclarations.test.tsx` and
+      `useStepEdits.test.tsx` fail resolving the module.
+      CLOSED 2026-09-14. `SetStepSecret{step_id=1, env=2, name=3, remove=4, optional index=5}` and
+      `SetStepCapability{step_id=1, capability=2, remove=3, optional index=4}` are oneof members 9
+      and 10; `buf breaking` against main is clean. Each edits one element: an absent env or
+      capability is inserted (at `index`, else appended) and inverts to its removal; a rebind
+      keeps its place and inverts to the old name; a removal inverts to re-adding AT THE INDEX IT
+      HELD, because list order is part of the content hash. Refusals hold in both directions
+      (invalid env, removing what is absent, declaring a present capability, UNSPECIFIED or an
+      undeclared value, index past the end, an index on a rebind, an element listed twice). The
+      ADR 0027 rules are NOT refused by the operations — that would refuse the undo of the edit
+      that repairs a step — and `Validate` reports them as errors in the scheduler's words.
+      `touchedBy` claims only the step, so a concurrent edit elsewhere still merges. The CLI needed
+      no change (`pipeline apply --operation` is protojson; `TestPipelineApplyDeclaresASecretOnAnExistingStep`
+      applies both and then the printed undo lines); nor did the agent's `apply_operation`, which
+      unmarshals any `Operation` and enumerates no kinds. The inspector draws capabilities as
+      toggles and secrets as env ← name rows with bind, rebind-on-Enter and unbind, warns with a
+      one-click fix when `CAPABILITY_SECRETS` is missing, and chains edits on the revision each
+      returns. Mutation-checked (cp backup, hand-revert, red, cp restore, cmp identical): 22 Go
+      and 9 web mutations, every one red; the one that first survived (dropping the old `image`
+      from the inverse, invisible from a step with no image) strengthened the test first. STILL OPEN: ports (`inputs`, `outputs`) and
+      `file_inputs` are reachable only by replacing the step — a port edit interacts with the edges
+      and file bindings that name it and needs its own decision; the editor's canvas keeps its own
+      head, so an inspector edit followed by a canvas edit is rebased by the plane rather than
+      chained; effect class in the shell inspector is still not wired to `set_property`; `add_step`
+      still accepts a step with duplicate list elements, which these operations then refuse to
+      touch; no Playwright spec covers the shell inspector (the panel spec covers the harness panel).
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

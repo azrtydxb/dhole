@@ -10,6 +10,7 @@ import (
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/dag"
 	"github.com/azrtydxb/dhole/internal/scheduler"
+	"github.com/azrtydxb/dhole/internal/secrets"
 )
 
 // The two severities a diagnostic carries. They are the wire's own strings
@@ -63,6 +64,20 @@ func (s *Server) Validate(
 	// definition.
 	if _, err := dag.Build(pipeline); err != nil {
 		diags = append(diags, &dholev1.Diagnostic{Severity: severityError, Message: err.Error()})
+	}
+
+	// A step's secret declarations are refused by the scheduler at dispatch
+	// when they break ADR 0027's rules. The editing operations deliberately do
+	// not refuse them (ADR 0028), so this is where the author hears it — in
+	// the scheduler's own words, because it is the scheduler's own check.
+	for _, step := range pipeline.GetSteps() {
+		if err := secrets.ValidateDeclarations(step); err != nil {
+			diags = append(diags, &dholev1.Diagnostic{
+				Severity: severityError,
+				StepId:   step.GetId(),
+				Message:  err.Error(),
+			})
+		}
 	}
 
 	pluginDiags, err := s.pluginDiagnostics(ctx, p.TenantID, pipeline)
