@@ -90,6 +90,12 @@ type Input struct {
 	// It is separate from Tainted, which is about the DATA: an agent that has
 	// read nothing at all still holds an untrusted token.
 	PrincipalUntrusted bool
+
+	// SecretName is the name of the step secret being decided (ADR 0028), and
+	// empty for a decision about anything else. Always present in the input,
+	// so a rule reading it does not error — and deny — on every other kind of
+	// decision.
+	SecretName string
 }
 
 // Decision is the answer, plus enough of the reasoning to answer for it later.

@@ -63,6 +63,7 @@ rewritten to a zero value.
 | `input.engine_capabilities` | list of string | what the ENGINE the work would run on advertises    |
 | `input.principal_kind`      | string         | who is asking: `user`, `service`, `agent`, or empty |
 | `input.principal_untrusted` | bool           | the CREDENTIAL is untrusted, whatever the data is   |
+| `input.secret_name`         | string         | the step secret being decided, or empty             |
 
 Enums are the short name — `PRIVILEGED`, not `CAPABILITY_PRIVILEGED`; `PURE`,
 not `EFFECT_CLASS_PURE` — because that is what a policy author writes and the
@@ -87,6 +88,22 @@ rule can refuse it an effect it allows a person:
 - id: agents-do-not-deploy
   expression: '!input.principal_untrusted || input.effect_class != "AT_MOST_ONCE"'
   reason: an agent may ask for an at-most-once action, and a person decides it
+```
+
+`input.secret_name` is set when the decision is about one secret a step
+declares ([ADR 0028](../.procoder/adr/0028-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
+At dispatch the scheduler decides the step, and then each of its declared
+secrets as a decision of its own, with `input.subject` `secret:<name>` and every
+other key exactly as it was for the step. A rule that never reads
+`input.secret_name` therefore answers a secret's decision the way it answered
+the step's; the key is present, and empty, for every other decision, so a rule
+reading it does not fail closed on them. A refused secret is recorded as the
+step's `STEP_POLICY_DENIED`, naming the secret, and the run fails:
+
+```yaml
+- id: signing-key-for-releases-only
+  expression: 'input.secret_name != "release-signing-key" || input.tier == "release"'
+  reason: only the release tier may read the signing key
 ```
 
 ## Rules worth having

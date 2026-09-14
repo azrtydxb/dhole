@@ -479,3 +479,25 @@ conversation.
 - Point the pipeline and the kw deploys at a different registry
 - Skip pushing for now; fix everything that does not need the registry
 
+## Which dispatch policy `dhole serve` runs, now that it can decide each step secret (2026-09-14)
+
+ADR 0028 puts every secret a step declares to the tier's policy at dispatch,
+with `input.secret_name`, and records a refusal as `STEP_POLICY_DENIED`. The
+mechanism is built and tested in the scheduler. But `dhole serve` wires no
+dispatch policy at all (`scheduler.Config.Policy` is nil), so on the single
+binary and the chart nothing is evaluated — for secrets or for steps — and the
+only control over which step reads which secret is the `SECRETS` capability.
+Wiring one means choosing what it says, and a policy fails closed: a tier with
+no rules refuses everything. That is a decision about what a fresh install
+permits, and it is not an implementer's to invent.
+
+- Keep it unwired: policy stays opt-in, a deployment that wants secret rules
+  wires its own, and docs/secrets.md says so (today's behaviour).
+- Wire a `--policy FILE` flag (and `controlPlane.policy` in the chart) that is
+  empty by default, so nothing changes until an operator supplies rules.
+- Wire it and ship a permissive default rule set (every existing step allowed,
+  every secret allowed) that operators tighten, so the audit trail exists from
+  day one.
+- Wire it and ship a restrictive default for secrets (e.g. a secret is readable
+  only by a step whose plugin is signed, or only in a named tier), accepting
+  that some pipelines stop running on upgrade until an operator allows them.

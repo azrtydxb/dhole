@@ -1695,7 +1695,7 @@ func (s *Scheduler) permit(
 		}, signed, upstream)
 	}
 
-	decision, err := s.pol.Evaluate(ctx, policy.Input{
+	in := policy.Input{
 		Tier:         s.tier,
 		TenantID:     tenantID,
 		Subject:      "step:" + step.GetId(),
@@ -1704,7 +1704,33 @@ func (s *Scheduler) permit(
 		PluginRef:    step.GetPluginRef(),
 		Signed:       signed,
 		Upstream:     upstream,
-	})
+	}
+	allowed, err := s.decide(ctx, tenantID, runID, step, in, "")
+	if err != nil || !allowed {
+		return false, err
+	}
+	// Each secret the step declares is a decision of its own (ADR 0012: the
+	// secret resolver is a policy caller; ADR 0028). Same facts as the step's,
+	// plus the secret's name, so a rule that does not read input.secret_name
+	// answers exactly as it just did for the step.
+	for _, decl := range step.GetSecrets() {
+		secretIn := in
+		secretIn.Subject = "secret:" + decl.GetName()
+		secretIn.SecretName = decl.GetName()
+		if allowed, err := s.decide(ctx, tenantID, runID, step, secretIn, decl.GetName()); err != nil || !allowed {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// decide puts one input to policy and, on anything but an allow, records the
+// refusal and closes the run. secret names the declared secret the input is
+// about, or is empty for the step itself.
+func (s *Scheduler) decide(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, in policy.Input, secret string,
+) (bool, error) {
+	decision, err := s.pol.Evaluate(ctx, in)
 	if err != nil {
 		// Evaluate errors only for a caller bug or an audit write that
 		// failed. A decision nobody can answer for later must not take
@@ -1719,7 +1745,7 @@ func (s *Scheduler) permit(
 	if decision.Allow {
 		return true, nil
 	}
-	return false, s.deny(ctx, tenantID, runID, step, decision, signed, upstream)
+	return false, s.denyFor(ctx, tenantID, runID, step, decision, in.Signed, in.Upstream, secret)
 }
 
 // provenance resolves the two facts save time cannot know, for the digest THIS
@@ -1762,6 +1788,19 @@ func (s *Scheduler) deny(
 	signed bool,
 	upstream string,
 ) error {
+	return s.denyFor(ctx, tenantID, runID, step, decision, signed, upstream, "")
+}
+
+// denyFor is deny, naming the declared secret the decision refused, if any.
+func (s *Scheduler) denyFor(
+	ctx context.Context,
+	tenantID, runID string,
+	step *dholev1.Step,
+	decision policy.Decision,
+	signed bool,
+	upstream string,
+	secret string,
+) error {
 	payload, err := MarshalPolicyDenied(PolicyDenied{
 		Tier:      s.tier,
 		Rule:      decision.Rule,
@@ -1769,6 +1808,7 @@ func (s *Scheduler) deny(
 		PluginRef: step.GetPluginRef(),
 		Signed:    signed,
 		Upstream:  upstream,
+		Secret:    secret,
 	})
 	if err != nil {
 		return err
@@ -2405,6 +2445,9 @@ type PolicyDenied struct {
 	PluginRef string `json:"plugin_ref,omitempty"`
 	Signed    bool   `json:"signed"`
 	Upstream  string `json:"upstream,omitempty"`
+	// Secret names the declared step secret the rule refused, when the
+	// decision was about one rather than about the step (ADR 0028).
+	Secret string `json:"secret,omitempty"`
 }
 
 // MarshalPolicyDenied encodes the STEP_POLICY_DENIED payload.

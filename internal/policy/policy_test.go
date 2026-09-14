@@ -475,3 +475,45 @@ func TestAPolicyRuleCanRefuseAnAgentWhatItAllowsAPerson(t *testing.T) {
 	require.False(t, decision.Allow, "an agent held a capability the same rule denies it")
 	require.Equal(t, "no-at-most-once-for-an-agent", decision.Rule)
 }
+
+// TestTheSecretNameIsReadableByARuleAndEmptyOtherwise: ADR 0012 names the
+// secret resolver as a policy caller, and a rule could not tell one secret
+// from another — `input` held no key for it, and naming a missing key is an
+// evaluation error, which denies. The key is ALWAYS present (ADR 0028): empty
+// for a decision about anything that is not a secret, so a rule reading it
+// does not start refusing every step.
+func TestTheSecretNameIsReadableByARuleAndEmptyOtherwise(t *testing.T) {
+	ctx := context.Background()
+	src := policy.NewStaticSource()
+	require.NoError(t, src.Set("prod", policy.TierPolicy{
+		Revision: "secrets/1",
+		Rules: []policy.Rule{{
+			ID:         "secrets.no-signing-key",
+			Expression: `input.secret_name != "prod-signing-key"`,
+			Reason:     "only the release tier may read the signing key",
+		}},
+	}))
+	engine, err := policy.New(src, policy.DiscardAudit{})
+	require.NoError(t, err)
+
+	base := policy.Input{Tier: "prod", TenantID: "acme", PluginRef: "oci://x/y:1"}
+
+	step := base
+	step.Subject = "step:push"
+	decision, err := engine.Evaluate(ctx, step)
+	require.NoError(t, err)
+	require.True(t, decision.Allow, "a decision about no secret was refused: %s", decision.Reason)
+
+	allowed := base
+	allowed.Subject, allowed.SecretName = "secret:harbor-robot", "harbor-robot"
+	decision, err = engine.Evaluate(ctx, allowed)
+	require.NoError(t, err)
+	require.True(t, decision.Allow, "a secret the rule does not name was refused: %s", decision.Reason)
+
+	denied := base
+	denied.Subject, denied.SecretName = "secret:prod-signing-key", "prod-signing-key"
+	decision, err = engine.Evaluate(ctx, denied)
+	require.NoError(t, err)
+	require.False(t, decision.Allow, "the rule on input.secret_name did not refuse the secret it names")
+	require.Equal(t, "secrets.no-signing-key", decision.Rule)
+}

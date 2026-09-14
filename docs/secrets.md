@@ -80,18 +80,38 @@ key is not readable by pipeline steps unless it is also configured here.
    (`scheduler.DefaultSecretTTL`): long enough for the dispatch to be picked up
    and its sandbox acquired, not the length of the step.
 3. The engine redeems each handle over the bus immediately before running the
-   command, and binds the value into the command's environment only. It is not
-   placed in the executor's sandbox spec, which a backend such as Kubernetes
-   stores ([wire contract](wire-contract.md), "Secrets").
+   command, on its tenant's subject `secret.redeem.<tenant>`, and binds the
+   value into the command's environment only. It is not placed in the
+   executor's sandbox spec, which a backend such as Kubernetes stores
+   ([wire contract](wire-contract.md), "Secrets"). The plane refuses a handle
+   presented on another tenant's subject, and an engine's tier credential may
+   not ask on one.
+4. When the attempt ends — succeeded, failed, cancelled or lost — the plane
+   revokes whichever of its handles were not redeemed. Cancelling a run revokes
+   every handle of the run, including those of a dispatch still waiting in a
+   queue ([ADR 0028](../.procoder/adr/0028-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
 
 A retry gets new handles. A dispatch that waits longer than the handle's expiry
 has its redemption refused, fails, and is retried under its effect class.
+Handles live in the memory of the plane that issued them; on a deployment of
+several planes, one that did not issue a handle cannot revoke it, and the expiry
+is what bounds it.
+
+## Steps the plane runs itself
+
+A `builtin:` step — `builtin:llm`, `builtin:wait`, `builtin:loop` and the rest —
+runs on the control plane and is never dispatched to an engine, so it has
+nowhere to receive a step secret. A `builtin:` step that declares `secrets:` is
+refused with `STEP_SECRET_UNAVAILABLE` saying so, and the run fails. A builtin
+that needs a credential names it in its own configuration, as `builtin:llm`
+does with `api_key_secret`.
 
 ## When a secret is not there
 
 A step declaring a secret the plane does not hold for its tenant is **never
-dispatched**. The run's log records `STEP_SECRET_UNAVAILABLE` naming the secret,
-and the run fails. It is not retried: it is a deployment fault, and the fix is to
+dispatched**. The run's log records `STEP_SECRET_UNAVAILABLE` naming the secret
+— once, however many scheduler passes reach the step together — and the run
+fails. It is not retried: it is a deployment fault, and the fix is to
 configure the secret and run the pipeline again. A step never runs with the
 variable missing or empty.
 
@@ -111,8 +131,13 @@ process holding one.
 
 ## Policy
 
-Today the only control over which steps may read secrets is the `SECRETS`
-capability, which a tier policy can refuse with a rule on `input.capabilities`.
-There is no rule keyed on an individual secret's name. The dispatch path does
-not set `input.tainted`, and `dhole serve` does not yet wire the dispatch-time
-policy check at all; both are recorded as open in the plan.
+A step declaring secrets must declare `CAPABILITY_SECRETS`, which a tier policy
+can refuse with a rule on `input.capabilities`. Where a dispatch policy is
+configured, each declared secret is also decided on its own, and a rule can name
+the secret with `input.secret_name` ([policy](policy.md)); a refusal is the
+step's `STEP_POLICY_DENIED`, naming the secret. There is no default rule: a
+tier's policy decides.
+
+Two things remain open. `dhole serve` does not yet wire a dispatch-time policy
+at all, so on the single binary nothing is evaluated; and the dispatch path does
+not set `input.tainted`.
