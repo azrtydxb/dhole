@@ -217,6 +217,10 @@ func tierPermissions(tier string) *server.Permissions {
 		// of its own choosing — credential substitution inside the
 		// tier this account exists to contain.
 		SubjectSecretRedeem(),
+		// Requesting only, for the same reason: an engine that could
+		// subscribe could answer a sibling's acceptance CURRENT for a
+		// dispatch the plane would refuse (ADR 0028).
+		SubjectAcceptWildcard(),
 		"$JS.API.STREAM.INFO.>",
 		"$JS.API.STREAM.NAMES",
 		"$JS.ACK.>",

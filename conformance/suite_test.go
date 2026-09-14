@@ -67,6 +67,7 @@ func TestConformanceMinimalPythonEngine(t *testing.T) {
 		"secret-redemption",
 		"lease-renewal-during-a-long-step",
 		"fenced-out-attempt-refused",
+		"superseded-dispatch-never-started",
 	} {
 		require.True(t, names[want], "case %q did not run; the suite must cover every contract obligation", want)
 	}

@@ -32,6 +32,7 @@ var (
 		"engine.heartbeat.>",
 		"engine.registration",
 		"secret.redeem",
+		"job.accept.>",
 		"_INBOX.>",
 		"$JS.API.>",
 	}

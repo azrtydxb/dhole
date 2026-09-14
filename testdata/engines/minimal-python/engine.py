@@ -188,6 +188,11 @@ KILLED_EXIT_CODE = 137
 STREAM_STDOUT = 1
 STREAM_STDERR = 2
 
+EFFECT_CLASS_AT_MOST_ONCE = 3
+
+ACCEPTANCE_CURRENT = 1
+ACCEPTANCE_FENCED = 2
+
 CAPABILITY_NETWORK = 1
 CAPABILITY_SECRETS = 2
 
@@ -674,6 +679,13 @@ class Engine:
         self.free.acquire()
         try:
             status = self.run_job(job, key)
+            if status is SUPERSEDED:
+                # The plane says a newer attempt holds the step.  Acknowledged,
+                # not nacked -- a nack hands a dead dispatch to the next engine
+                # to refuse again -- and no status: nobody is waiting on it.
+                log("not starting %s: the plane answered ACCEPTANCE_FENCED" % key)
+                self.nats.publish(ack_subject, b"")
+                return
             # The ordering rule: the terminal status goes out BEFORE the ack.
             # Acking first would lose the step in silence if this process died
             # between the two.
@@ -704,6 +716,13 @@ class Engine:
         if not d["command"]:
             return {"phase": PHASE_FAILED, "error": "dispatch carries no command"}
 
+        # "Confirming a dispatch before starting it": after the slot, before
+        # anything runs or is held.  A dispatch that waited in the queue while
+        # its attempt was declared lost and re-dispatched still carries the old
+        # fence, and only the plane knows that.
+        if d["confirm_acceptance"] and not self.confirm(d):
+            return SUPERSEDED
+
         with self.jobs_lock:
             self.jobs[key] = job
         self.publish_status(d, {"phase": PHASE_ACCEPTED})
@@ -715,6 +734,40 @@ class Engine:
             return self.execute(job, workdir)
         finally:
             subprocess.call(["rm", "-rf", workdir])
+
+    def confirm(self, d):
+        """Ask the plane whether this dispatch may still start.
+
+        True to start, False only when the plane answers ACCEPTANCE_FENCED.
+        No answer starts a pure or idempotent step -- the fence still discards
+        its stale result -- and keeps an at-most-once step asking, because its
+        effect cannot be discarded afterwards.
+        """
+        subject = "job.accept.%s.%s" % (d["run_id"], d["step_id"])
+        while self.running:
+            answer = None
+            try:
+                data, _, status = self.nats.request(
+                    subject, self.status_bytes(d, {"phase": PHASE_ACCEPTED}), timeout=5
+                )
+                if not status.startswith("NATS/1.0 5"):
+                    answer = one(parse(data), 1, 0)
+            except queue.Empty:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                log("acceptance request for %s failed: %r" % (subject, exc))
+            if answer == ACCEPTANCE_FENCED:
+                return False
+            if answer == ACCEPTANCE_CURRENT:
+                return True
+            if d["effect_class"] != EFFECT_CLASS_AT_MOST_ONCE:
+                log(
+                    "starting %s unconfirmed: no answer on %s" % (d["step_id"], subject)
+                )
+                return True
+            log("an at-most-once step waits for the plane on %s" % subject)
+            time.sleep(1.0)
+        return False
 
     def execute(self, job, workdir):
         d = job.d
@@ -1017,6 +1070,13 @@ class Engine:
     def publish_status(self, d, status):
         """Every status echoes the fence token unchanged: it is what lets the
         plane discard the report of an attempt that has been superseded."""
+        self.nats.publish(
+            "job.status.%s.%s" % (d["run_id"], d["step_id"]),
+            self.status_bytes(d, status),
+        )
+
+    @staticmethod
+    def status_bytes(d, status):
         body = (
             f_bytes(1, d["run_id"])
             + f_bytes(2, d["step_id"])
@@ -1036,7 +1096,12 @@ class Engine:
         body += f_bytes(8, status.get("error", "")) + f_bytes(
             9, status.get("log_key", "")
         )
-        self.nats.publish("job.status.%s.%s" % (d["run_id"], d["step_id"]), body)
+        return body
+
+
+# run_job's answer for a dispatch the plane refused: not a status, because
+# nothing is published for it.
+SUPERSEDED = object()
 
 
 class Counter:
@@ -1107,6 +1172,12 @@ def decode_dispatch(data):
         # ignored this wrote one tenant's log where another tenant's key would
         # resolve.
         "tenant": text(parse(one(f, 10, b"") or b""), 1),
+        # Step.effect_class: an at-most-once step waits for the plane to
+        # confirm it rather than starting on no answer.
+        "effect_class": one(step, 4, 0),
+        # Set by a plane that answers on job.accept.<run>.<step>.  Absent, the
+        # plane answers nothing and is not asked.
+        "confirm_acceptance": bool(one(f, 14, 0)),
     }
 
 

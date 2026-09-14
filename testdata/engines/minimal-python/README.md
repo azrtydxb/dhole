@@ -36,8 +36,10 @@ So the file contains, in order:
    socket, plus the JetStream pull consumer API (`$JS.API.CONSUMER.DURABLE.CREATE`
    and `$JS.API.CONSUMER.MSG.NEXT`) as request/reply.
 3. The engine itself: register, pull dispatches, run the command with
-   `subprocess`, stream logs, publish status, heartbeat, honour `Cancel`, and
-   kill a step that outlives `Step.timeout_seconds`.
+   `subprocess`, stream logs, publish status, heartbeat, honour `Cancel`,
+   kill a step that outlives `Step.timeout_seconds`, and ask the plane on
+   `job.accept.<run>.<step>` before starting a dispatch that carries
+   `confirm_acceptance`.
 
 If you would rather have the libraries, `pip install nats-py protobuf` and
 generate `dhole/v1/*_pb2.py` with `buf generate` — the engine would be a third

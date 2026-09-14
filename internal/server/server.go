@@ -509,8 +509,11 @@ func (s *Server) Start(ctx context.Context) error {
 		Definitions: defs,
 		Tier:        DefaultTier,
 		LeaseTTL:    s.cfg.LeaseTTL,
-		OS:          runtime.GOOS,
-		Arch:        runtime.GOARCH,
+		// serve answers job.accept.* before anything is dispatched, so every
+		// dispatch may tell its engine to ask (ADR 0028).
+		ConfirmAcceptance: true,
+		OS:                runtime.GOOS,
+		Arch:              runtime.GOARCH,
 		// There is deliberately no environment identity here. It belongs to
 		// the engines, arrives on their registrations, and is agreed per tier
 		// (ADR 0021): a plane reading it off an executor of its own reported
@@ -604,6 +607,14 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	}
 	s.stopSub = append(s.stopSub, stopSecrets)
 	s.started("secret redemption")
+
+	// Before the advance loop for the same reason: every dispatch this plane
+	// writes says it answers, and an at-most-once step on an engine that asked
+	// a plane not yet serving would wait for nothing.
+	if err := s.serveAcceptance(startCtx, runCtx); err != nil {
+		return err
+	}
+	s.started("acceptance")
 
 	if err := s.consumeRegistrations(startCtx, runCtx); err != nil {
 		return err
@@ -829,9 +840,10 @@ func logHeartbeatRefusal(log *slog.Logger, engineID string, err error) {
 // saying it holds the step, whether or not its ACCEPTED status has been
 // applied yet.
 //
-// A fence that is no longer current is not an error and not news: the engine
-// has been superseded and is about to find out, and renewing nothing is
-// exactly right — its report will be discarded too.
+// A fence that is no longer current is not an error: the engine has been
+// superseded, renewing nothing is exactly right, and its report will be
+// discarded too. It IS news to the engine, which is still running the attempt
+// for nobody, so this is where it finds out — see fenceOut.
 func (s *Server) renewHeld(ctx context.Context, beat *dholev1.EngineHeartbeat) {
 	for _, held := range beat.GetInFlight() {
 		_, token, err := scheduler.DecodeFence(held.GetFenceToken())
@@ -841,14 +853,86 @@ func (s *Server) renewHeld(ctx context.Context, beat *dholev1.EngineHeartbeat) {
 				"step", held.GetStepId(), "error", err)
 			continue
 		}
-		if err := s.leases.Renew(ctx, token); err != nil &&
-			!errors.Is(err, lease.ErrFenced) && ctx.Err() == nil {
+		err = s.leases.Renew(ctx, token)
+		switch {
+		case err == nil:
+		case errors.Is(err, lease.ErrFenced):
+			s.fenceOut(ctx, beat.GetEngineId(), held)
+		case ctx.Err() == nil:
 			s.log.Error("renewing a held lease",
 				"engine", beat.GetEngineId(), "run", held.GetRunId(),
 				"step", held.GetStepId(), "error", err)
 		}
 	}
 }
+
+// fenceOut stops an attempt an engine is still running under a fence that has
+// been superseded, by sending it the Cancel an operator's cancel sends — under
+// the fence the engine HOLDS, which is the one fence it will obey
+// (docs/wire-contract.md, "Heartbeats and orphans"; ADR 0028).
+//
+// The engine has been overtaken: its lease expired while it was partitioned,
+// or its dispatch was re-issued, and a newer attempt owns the step. Its result
+// would be discarded, and until this existed it ran to the end anyway — a
+// sandbox doing a build for nobody, or an at-most-once effect repeated.
+// Every engine already obeys Cancel, so this stops an engine that predates
+// acceptance requests too.
+//
+// Sent on every heartbeat that still names the attempt, not once: control is
+// a core subject, a Cancel published while the engine was reconnecting is
+// gone, and the engine stops naming the job as soon as it has stopped it.
+func (s *Server) fenceOut(ctx context.Context, engineID string, held *dholev1.InFlight) {
+	if engineID == "" {
+		return
+	}
+	s.log.Info("cancelling an attempt whose lease was superseded",
+		"engine", engineID, "run", held.GetRunId(), "step", held.GetStepId(),
+		"attempt", held.GetAttempt())
+	control := &dholev1.EngineControl{Kind: &dholev1.EngineControl_Cancel{Cancel: &dholev1.Cancel{
+		RunId:      held.GetRunId(),
+		StepId:     held.GetStepId(),
+		Attempt:    held.GetAttempt(),
+		FenceToken: held.GetFenceToken(),
+	}}}
+	if err := s.infra.plane.Publish(ctx, bus.SubjectEngineControl(engineID), control); err != nil && ctx.Err() == nil {
+		s.log.Error("cancelling a superseded attempt",
+			"engine", engineID, "run", held.GetRunId(), "step", held.GetStepId(), "error", err)
+	}
+}
+
+// serveAcceptance answers engines asking, before they start a dispatch,
+// whether its fence is still the step's lease (Scheduler.Accept, ADR 0028).
+//
+// Every reply is sent, UNSPECIFIED with the reason included: an engine waiting
+// on an at-most-once step retries on it, and one with nothing to retry on
+// would wait out its whole timeout for a plane that had already decided it
+// could not decide.
+func (s *Server) serveAcceptance(startCtx, runCtx context.Context) error {
+	stop, err := s.infra.plane.Respond(startCtx, bus.SubjectAcceptWildcard(), func(raw []byte) (proto.Message, error) {
+		st := &dholev1.JobStatus{}
+		if err := proto.Unmarshal(raw, st); err != nil {
+			return &dholev1.AcceptReply{Error: "undecodable acceptance request: " + err.Error()}, nil
+		}
+		ctx, cancel := context.WithTimeout(runCtx, acceptanceTimeout)
+		defer cancel()
+		verdict, err := s.sched.Accept(ctx, st)
+		if err != nil {
+			s.log.Error("answering an acceptance request",
+				"run", st.GetRunId(), "step", st.GetStepId(), "error", err)
+			return &dholev1.AcceptReply{Error: err.Error()}, nil
+		}
+		return &dholev1.AcceptReply{Acceptance: verdict}, nil
+	})
+	if err != nil {
+		return err
+	}
+	s.stopSub = append(s.stopSub, stop)
+	return nil
+}
+
+// acceptanceTimeout bounds the lease read and write behind one acceptance
+// answer, below the engine's own bound on the request.
+const acceptanceTimeout = 3 * time.Second
 
 // consumeStatuses applies every engine report to the run it belongs to.
 //

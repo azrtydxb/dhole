@@ -330,6 +330,47 @@ func TestATierEngineMayRedeemASecretButNotAnswerOne(t *testing.T) {
 	require.ErrorIs(t, err, bus.ErrPermissionDenied)
 }
 
+// TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance is the acceptance
+// subject's permission, for the same reason as redemption's. An engine asks on
+// job.accept.<run>.<step> before it starts a dispatch; the control plane
+// answers. An engine allowed to SUBSCRIBE there could answer a sibling's
+// request CURRENT for a dispatch the plane would have refused, and the
+// superseded attempt would run again (ADR 0028).
+func TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bus.StartEmbeddedWithTiers(t.TempDir(), []string{"untrusted"})
+	require.NoError(t, err)
+	t.Cleanup(srv.Close)
+
+	plane, err := bus.Connect(ctx, srv.PlaneURL())
+	require.NoError(t, err)
+	t.Cleanup(plane.Close)
+
+	stop, err := plane.Respond(ctx, bus.SubjectAcceptWildcard(), func([]byte) (proto.Message, error) {
+		return &dholev1.AcceptReply{Acceptance: dholev1.Acceptance_ACCEPTANCE_FENCED}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(stop)
+
+	engine, err := bus.Connect(ctx, srv.TierURL("untrusted"))
+	require.NoError(t, err)
+	t.Cleanup(engine.Close)
+
+	reqCtx, done := context.WithTimeout(ctx, 5*time.Second)
+	defer done()
+	reply := &dholev1.AcceptReply{}
+	require.NoError(t, engine.Request(reqCtx, bus.SubjectAccept("run-1", "build"),
+		&dholev1.JobStatus{RunId: "run-1", StepId: "build", Phase: dholev1.Phase_PHASE_ACCEPTED}, reply),
+		"a tier engine cannot ask the plane whether its dispatch is still current")
+	require.Equal(t, dholev1.Acceptance_ACCEPTANCE_FENCED, reply.GetAcceptance())
+
+	_, err = engine.SubscribeEphemeral(ctx, bus.SubjectAcceptWildcard(), func([]byte) {})
+	require.Error(t, err, "an engine that could answer acceptance requests could confirm a superseded dispatch")
+	require.ErrorIs(t, err, bus.ErrPermissionDenied)
+}
+
 // dispatchStream names one tier's work queue, failing the test rather than
 // returning an error for a tier a test spelled wrong.
 func dispatchStream(t *testing.T, tier string) string {

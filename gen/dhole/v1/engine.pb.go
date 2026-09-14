@@ -21,6 +21,63 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Acceptance is the control plane's answer to an engine asking to start a
+// dispatch it pulled.
+type Acceptance int32
+
+const (
+	// The plane could not decide — it could not read the lease. An engine treats
+	// it exactly as no answer at all.
+	Acceptance_ACCEPTANCE_UNSPECIFIED Acceptance = 0
+	// The fence is the step's current lease, and the plane has accepted it for
+	// this engine: start the step.
+	Acceptance_ACCEPTANCE_CURRENT Acceptance = 1
+	// A newer attempt holds the step, or its lease is gone. Never start it:
+	// acknowledge the dispatch off the queue and publish nothing.
+	Acceptance_ACCEPTANCE_FENCED Acceptance = 2
+)
+
+// Enum value maps for Acceptance.
+var (
+	Acceptance_name = map[int32]string{
+		0: "ACCEPTANCE_UNSPECIFIED",
+		1: "ACCEPTANCE_CURRENT",
+		2: "ACCEPTANCE_FENCED",
+	}
+	Acceptance_value = map[string]int32{
+		"ACCEPTANCE_UNSPECIFIED": 0,
+		"ACCEPTANCE_CURRENT":     1,
+		"ACCEPTANCE_FENCED":      2,
+	}
+)
+
+func (x Acceptance) Enum() *Acceptance {
+	p := new(Acceptance)
+	*p = x
+	return p
+}
+
+func (x Acceptance) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Acceptance) Descriptor() protoreflect.EnumDescriptor {
+	return file_dhole_v1_engine_proto_enumTypes[0].Descriptor()
+}
+
+func (Acceptance) Type() protoreflect.EnumType {
+	return &file_dhole_v1_engine_proto_enumTypes[0]
+}
+
+func (x Acceptance) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Acceptance.Descriptor instead.
+func (Acceptance) EnumDescriptor() ([]byte, []int) {
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{0}
+}
+
 // Phase is where a job stands. Only terminal phases carry an exit code.
 type Phase int32
 
@@ -64,11 +121,11 @@ func (x Phase) String() string {
 }
 
 func (Phase) Descriptor() protoreflect.EnumDescriptor {
-	return file_dhole_v1_engine_proto_enumTypes[0].Descriptor()
+	return file_dhole_v1_engine_proto_enumTypes[1].Descriptor()
 }
 
 func (Phase) Type() protoreflect.EnumType {
-	return &file_dhole_v1_engine_proto_enumTypes[0]
+	return &file_dhole_v1_engine_proto_enumTypes[1]
 }
 
 func (x Phase) Number() protoreflect.EnumNumber {
@@ -77,7 +134,7 @@ func (x Phase) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Phase.Descriptor instead.
 func (Phase) EnumDescriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{0}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{1}
 }
 
 // Stream distinguishes the two output streams of a step.
@@ -114,11 +171,11 @@ func (x Stream) String() string {
 }
 
 func (Stream) Descriptor() protoreflect.EnumDescriptor {
-	return file_dhole_v1_engine_proto_enumTypes[1].Descriptor()
+	return file_dhole_v1_engine_proto_enumTypes[2].Descriptor()
 }
 
 func (Stream) Type() protoreflect.EnumType {
-	return &file_dhole_v1_engine_proto_enumTypes[1]
+	return &file_dhole_v1_engine_proto_enumTypes[2]
 }
 
 func (x Stream) Number() protoreflect.EnumNumber {
@@ -127,7 +184,7 @@ func (x Stream) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Stream.Descriptor instead.
 func (Stream) EnumDescriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{1}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{2}
 }
 
 // InputRef points an engine at bytes it must fetch. The engine resolves it
@@ -356,9 +413,19 @@ type JobDispatch struct {
 	// it; an engine that wants its work to appear in the run's trace starts its
 	// step span from it rather than from a root of its own. Absent when the
 	// control plane has no tracing configured, which is not an error.
-	TraceContext  map[string]string `protobuf:"bytes,13,rep,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TraceContext map[string]string `protobuf:"bytes,13,rep,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Set by a control plane that answers acceptance requests on
+	// `job.accept.<run>.<step>`. An engine handed a dispatch with this set asks
+	// there, before it starts anything, whether this dispatch's fence is still
+	// the step's current lease — and never starts one the plane answers
+	// ACCEPTANCE_FENCED. A dispatch that sat in the queue while its attempt was
+	// declared lost and re-dispatched is otherwise run a second time for nobody,
+	// which for an at-most-once step is the side effect happening twice
+	// (ADR 0028). Unset on a dispatch from a plane that predates it: such a
+	// plane answers nothing, and an engine starts the step without asking.
+	ConfirmAcceptance bool `protobuf:"varint,14,opt,name=confirm_acceptance,json=confirmAcceptance,proto3" json:"confirm_acceptance,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *JobDispatch) Reset() {
@@ -482,6 +549,68 @@ func (x *JobDispatch) GetTraceContext() map[string]string {
 	return nil
 }
 
+func (x *JobDispatch) GetConfirmAcceptance() bool {
+	if x != nil {
+		return x.ConfirmAcceptance
+	}
+	return false
+}
+
+// AcceptReply answers a JobStatus{PHASE_ACCEPTED} sent as a request on
+// `job.accept.<run>.<step>`.
+type AcceptReply struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Acceptance Acceptance             `protobuf:"varint,1,opt,name=acceptance,proto3,enum=dhole.v1.Acceptance" json:"acceptance,omitempty"`
+	// Why the plane could not decide, when acceptance is UNSPECIFIED.
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcceptReply) Reset() {
+	*x = AcceptReply{}
+	mi := &file_dhole_v1_engine_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcceptReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcceptReply) ProtoMessage() {}
+
+func (x *AcceptReply) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_engine_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcceptReply.ProtoReflect.Descriptor instead.
+func (*AcceptReply) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *AcceptReply) GetAcceptance() Acceptance {
+	if x != nil {
+		return x.Acceptance
+	}
+	return Acceptance_ACCEPTANCE_UNSPECIFIED
+}
+
+func (x *AcceptReply) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 // JobStatus is an engine's report on a dispatch. The fence token it echoes is
 // what lets the control plane ignore a report from a superseded attempt.
 type JobStatus struct {
@@ -502,7 +631,7 @@ type JobStatus struct {
 
 func (x *JobStatus) Reset() {
 	*x = JobStatus{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[4]
+	mi := &file_dhole_v1_engine_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -514,7 +643,7 @@ func (x *JobStatus) String() string {
 func (*JobStatus) ProtoMessage() {}
 
 func (x *JobStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[4]
+	mi := &file_dhole_v1_engine_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -527,7 +656,7 @@ func (x *JobStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStatus.ProtoReflect.Descriptor instead.
 func (*JobStatus) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{4}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *JobStatus) GetRunId() string {
@@ -611,7 +740,7 @@ type LogChunk struct {
 
 func (x *LogChunk) Reset() {
 	*x = LogChunk{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[5]
+	mi := &file_dhole_v1_engine_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +752,7 @@ func (x *LogChunk) String() string {
 func (*LogChunk) ProtoMessage() {}
 
 func (x *LogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[5]
+	mi := &file_dhole_v1_engine_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +765,7 @@ func (x *LogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogChunk.ProtoReflect.Descriptor instead.
 func (*LogChunk) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{5}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *LogChunk) GetRunId() string {
@@ -718,7 +847,7 @@ type EngineRegistration struct {
 
 func (x *EngineRegistration) Reset() {
 	*x = EngineRegistration{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[6]
+	mi := &file_dhole_v1_engine_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -730,7 +859,7 @@ func (x *EngineRegistration) String() string {
 func (*EngineRegistration) ProtoMessage() {}
 
 func (x *EngineRegistration) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[6]
+	mi := &file_dhole_v1_engine_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -743,7 +872,7 @@ func (x *EngineRegistration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineRegistration.ProtoReflect.Descriptor instead.
 func (*EngineRegistration) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{6}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *EngineRegistration) GetEngineId() string {
@@ -822,7 +951,7 @@ type InFlight struct {
 
 func (x *InFlight) Reset() {
 	*x = InFlight{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[7]
+	mi := &file_dhole_v1_engine_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -834,7 +963,7 @@ func (x *InFlight) String() string {
 func (*InFlight) ProtoMessage() {}
 
 func (x *InFlight) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[7]
+	mi := &file_dhole_v1_engine_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -847,7 +976,7 @@ func (x *InFlight) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InFlight.ProtoReflect.Descriptor instead.
 func (*InFlight) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{7}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *InFlight) GetRunId() string {
@@ -890,7 +1019,7 @@ type EngineHeartbeat struct {
 
 func (x *EngineHeartbeat) Reset() {
 	*x = EngineHeartbeat{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[8]
+	mi := &file_dhole_v1_engine_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -902,7 +1031,7 @@ func (x *EngineHeartbeat) String() string {
 func (*EngineHeartbeat) ProtoMessage() {}
 
 func (x *EngineHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[8]
+	mi := &file_dhole_v1_engine_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -915,7 +1044,7 @@ func (x *EngineHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineHeartbeat.ProtoReflect.Descriptor instead.
 func (*EngineHeartbeat) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{8}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *EngineHeartbeat) GetEngineId() string {
@@ -963,7 +1092,7 @@ type EngineMessage struct {
 
 func (x *EngineMessage) Reset() {
 	*x = EngineMessage{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[9]
+	mi := &file_dhole_v1_engine_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -975,7 +1104,7 @@ func (x *EngineMessage) String() string {
 func (*EngineMessage) ProtoMessage() {}
 
 func (x *EngineMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[9]
+	mi := &file_dhole_v1_engine_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -988,7 +1117,7 @@ func (x *EngineMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineMessage.ProtoReflect.Descriptor instead.
 func (*EngineMessage) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{9}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *EngineMessage) GetBody() isEngineMessage_Body {
@@ -1045,7 +1174,7 @@ type Cancel struct {
 
 func (x *Cancel) Reset() {
 	*x = Cancel{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[10]
+	mi := &file_dhole_v1_engine_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1057,7 +1186,7 @@ func (x *Cancel) String() string {
 func (*Cancel) ProtoMessage() {}
 
 func (x *Cancel) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[10]
+	mi := &file_dhole_v1_engine_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1070,7 +1199,7 @@ func (x *Cancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cancel.ProtoReflect.Descriptor instead.
 func (*Cancel) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{10}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Cancel) GetRunId() string {
@@ -1112,7 +1241,7 @@ type Drain struct {
 
 func (x *Drain) Reset() {
 	*x = Drain{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[11]
+	mi := &file_dhole_v1_engine_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1124,7 +1253,7 @@ func (x *Drain) String() string {
 func (*Drain) ProtoMessage() {}
 
 func (x *Drain) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[11]
+	mi := &file_dhole_v1_engine_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1137,7 +1266,7 @@ func (x *Drain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Drain.ProtoReflect.Descriptor instead.
 func (*Drain) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{11}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Drain) GetDeadlineSeconds() uint32 {
@@ -1161,7 +1290,7 @@ type Attach struct {
 
 func (x *Attach) Reset() {
 	*x = Attach{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[12]
+	mi := &file_dhole_v1_engine_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1173,7 +1302,7 @@ func (x *Attach) String() string {
 func (*Attach) ProtoMessage() {}
 
 func (x *Attach) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[12]
+	mi := &file_dhole_v1_engine_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1186,7 +1315,7 @@ func (x *Attach) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Attach.ProtoReflect.Descriptor instead.
 func (*Attach) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{12}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Attach) GetRunId() string {
@@ -1233,7 +1362,7 @@ type EngineControl struct {
 
 func (x *EngineControl) Reset() {
 	*x = EngineControl{}
-	mi := &file_dhole_v1_engine_proto_msgTypes[13]
+	mi := &file_dhole_v1_engine_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1245,7 +1374,7 @@ func (x *EngineControl) String() string {
 func (*EngineControl) ProtoMessage() {}
 
 func (x *EngineControl) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_engine_proto_msgTypes[13]
+	mi := &file_dhole_v1_engine_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1258,7 +1387,7 @@ func (x *EngineControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineControl.ProtoReflect.Descriptor instead.
 func (*EngineControl) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{13}
+	return file_dhole_v1_engine_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EngineControl) GetKind() isEngineControl_Kind {
@@ -1336,7 +1465,7 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06handle\x18\x02 \x01(\tR\x06handle\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x03 \x01(\x03R\texpiresAt\"\x84\x05\n" +
+	"expires_at\x18\x03 \x01(\x03R\texpiresAt\"\xb3\x05\n" +
 	"\vJobDispatch\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x18\n" +
@@ -1352,13 +1481,19 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	" \x01(\v2\x10.dhole.v1.TenantR\x06tenant\x12\x18\n" +
 	"\acommand\x18\v \x03(\tR\acommand\x120\n" +
 	"\x03env\x18\f \x03(\v2\x1e.dhole.v1.JobDispatch.EnvEntryR\x03env\x12L\n" +
-	"\rtrace_context\x18\r \x03(\v2'.dhole.v1.JobDispatch.TraceContextEntryR\ftraceContext\x1a6\n" +
+	"\rtrace_context\x18\r \x03(\v2'.dhole.v1.JobDispatch.TraceContextEntryR\ftraceContext\x12-\n" +
+	"\x12confirm_acceptance\x18\x0e \x01(\bR\x11confirmAcceptance\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +
 	"\x11TraceContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x98\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Y\n" +
+	"\vAcceptReply\x124\n" +
+	"\n" +
+	"acceptance\x18\x01 \x01(\x0e2\x14.dhole.v1.AcceptanceR\n" +
+	"acceptance\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x98\x02\n" +
 	"\tJobStatus\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x18\n" +
@@ -1417,7 +1552,12 @@ const file_dhole_v1_engine_proto_rawDesc = "" +
 	"\x06cancel\x18\x01 \x01(\v2\x10.dhole.v1.CancelH\x00R\x06cancel\x12'\n" +
 	"\x05drain\x18\x02 \x01(\v2\x0f.dhole.v1.DrainH\x00R\x05drain\x12*\n" +
 	"\x06attach\x18\x03 \x01(\v2\x10.dhole.v1.AttachH\x00R\x06attachB\x06\n" +
-	"\x04kind*\x81\x01\n" +
+	"\x04kind*W\n" +
+	"\n" +
+	"Acceptance\x12\x1a\n" +
+	"\x16ACCEPTANCE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12ACCEPTANCE_CURRENT\x10\x01\x12\x15\n" +
+	"\x11ACCEPTANCE_FENCED\x10\x02*\x81\x01\n" +
 	"\x05Phase\x12\x15\n" +
 	"\x11PHASE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0ePHASE_ACCEPTED\x10\x01\x12\x11\n" +
@@ -1443,56 +1583,59 @@ func file_dhole_v1_engine_proto_rawDescGZIP() []byte {
 	return file_dhole_v1_engine_proto_rawDescData
 }
 
-var file_dhole_v1_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_dhole_v1_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_dhole_v1_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_dhole_v1_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_dhole_v1_engine_proto_goTypes = []any{
-	(Phase)(0),                 // 0: dhole.v1.Phase
-	(Stream)(0),                // 1: dhole.v1.Stream
-	(*InputRef)(nil),           // 2: dhole.v1.InputRef
-	(*OutputRef)(nil),          // 3: dhole.v1.OutputRef
-	(*SecretRef)(nil),          // 4: dhole.v1.SecretRef
-	(*JobDispatch)(nil),        // 5: dhole.v1.JobDispatch
-	(*JobStatus)(nil),          // 6: dhole.v1.JobStatus
-	(*LogChunk)(nil),           // 7: dhole.v1.LogChunk
-	(*EngineRegistration)(nil), // 8: dhole.v1.EngineRegistration
-	(*InFlight)(nil),           // 9: dhole.v1.InFlight
-	(*EngineHeartbeat)(nil),    // 10: dhole.v1.EngineHeartbeat
-	(*EngineMessage)(nil),      // 11: dhole.v1.EngineMessage
-	(*Cancel)(nil),             // 12: dhole.v1.Cancel
-	(*Drain)(nil),              // 13: dhole.v1.Drain
-	(*Attach)(nil),             // 14: dhole.v1.Attach
-	(*EngineControl)(nil),      // 15: dhole.v1.EngineControl
-	nil,                        // 16: dhole.v1.JobDispatch.EnvEntry
-	nil,                        // 17: dhole.v1.JobDispatch.TraceContextEntry
-	(*Digest)(nil),             // 18: dhole.v1.Digest
-	(*Step)(nil),               // 19: dhole.v1.Step
-	(*Tenant)(nil),             // 20: dhole.v1.Tenant
-	(Capability)(0),            // 21: dhole.v1.Capability
+	(Acceptance)(0),            // 0: dhole.v1.Acceptance
+	(Phase)(0),                 // 1: dhole.v1.Phase
+	(Stream)(0),                // 2: dhole.v1.Stream
+	(*InputRef)(nil),           // 3: dhole.v1.InputRef
+	(*OutputRef)(nil),          // 4: dhole.v1.OutputRef
+	(*SecretRef)(nil),          // 5: dhole.v1.SecretRef
+	(*JobDispatch)(nil),        // 6: dhole.v1.JobDispatch
+	(*AcceptReply)(nil),        // 7: dhole.v1.AcceptReply
+	(*JobStatus)(nil),          // 8: dhole.v1.JobStatus
+	(*LogChunk)(nil),           // 9: dhole.v1.LogChunk
+	(*EngineRegistration)(nil), // 10: dhole.v1.EngineRegistration
+	(*InFlight)(nil),           // 11: dhole.v1.InFlight
+	(*EngineHeartbeat)(nil),    // 12: dhole.v1.EngineHeartbeat
+	(*EngineMessage)(nil),      // 13: dhole.v1.EngineMessage
+	(*Cancel)(nil),             // 14: dhole.v1.Cancel
+	(*Drain)(nil),              // 15: dhole.v1.Drain
+	(*Attach)(nil),             // 16: dhole.v1.Attach
+	(*EngineControl)(nil),      // 17: dhole.v1.EngineControl
+	nil,                        // 18: dhole.v1.JobDispatch.EnvEntry
+	nil,                        // 19: dhole.v1.JobDispatch.TraceContextEntry
+	(*Digest)(nil),             // 20: dhole.v1.Digest
+	(*Step)(nil),               // 21: dhole.v1.Step
+	(*Tenant)(nil),             // 22: dhole.v1.Tenant
+	(Capability)(0),            // 23: dhole.v1.Capability
 }
 var file_dhole_v1_engine_proto_depIdxs = []int32{
-	18, // 0: dhole.v1.InputRef.digest:type_name -> dhole.v1.Digest
-	18, // 1: dhole.v1.OutputRef.digest:type_name -> dhole.v1.Digest
-	19, // 2: dhole.v1.JobDispatch.step:type_name -> dhole.v1.Step
-	2,  // 3: dhole.v1.JobDispatch.inputs:type_name -> dhole.v1.InputRef
-	4,  // 4: dhole.v1.JobDispatch.secrets:type_name -> dhole.v1.SecretRef
-	20, // 5: dhole.v1.JobDispatch.tenant:type_name -> dhole.v1.Tenant
-	16, // 6: dhole.v1.JobDispatch.env:type_name -> dhole.v1.JobDispatch.EnvEntry
-	17, // 7: dhole.v1.JobDispatch.trace_context:type_name -> dhole.v1.JobDispatch.TraceContextEntry
-	0,  // 8: dhole.v1.JobStatus.phase:type_name -> dhole.v1.Phase
-	3,  // 9: dhole.v1.JobStatus.outputs:type_name -> dhole.v1.OutputRef
-	1,  // 10: dhole.v1.LogChunk.stream:type_name -> dhole.v1.Stream
-	21, // 11: dhole.v1.EngineRegistration.capabilities:type_name -> dhole.v1.Capability
-	9,  // 12: dhole.v1.EngineHeartbeat.in_flight:type_name -> dhole.v1.InFlight
-	8,  // 13: dhole.v1.EngineMessage.registration:type_name -> dhole.v1.EngineRegistration
-	10, // 14: dhole.v1.EngineMessage.heartbeat:type_name -> dhole.v1.EngineHeartbeat
-	12, // 15: dhole.v1.EngineControl.cancel:type_name -> dhole.v1.Cancel
-	13, // 16: dhole.v1.EngineControl.drain:type_name -> dhole.v1.Drain
-	14, // 17: dhole.v1.EngineControl.attach:type_name -> dhole.v1.Attach
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	20, // 0: dhole.v1.InputRef.digest:type_name -> dhole.v1.Digest
+	20, // 1: dhole.v1.OutputRef.digest:type_name -> dhole.v1.Digest
+	21, // 2: dhole.v1.JobDispatch.step:type_name -> dhole.v1.Step
+	3,  // 3: dhole.v1.JobDispatch.inputs:type_name -> dhole.v1.InputRef
+	5,  // 4: dhole.v1.JobDispatch.secrets:type_name -> dhole.v1.SecretRef
+	22, // 5: dhole.v1.JobDispatch.tenant:type_name -> dhole.v1.Tenant
+	18, // 6: dhole.v1.JobDispatch.env:type_name -> dhole.v1.JobDispatch.EnvEntry
+	19, // 7: dhole.v1.JobDispatch.trace_context:type_name -> dhole.v1.JobDispatch.TraceContextEntry
+	0,  // 8: dhole.v1.AcceptReply.acceptance:type_name -> dhole.v1.Acceptance
+	1,  // 9: dhole.v1.JobStatus.phase:type_name -> dhole.v1.Phase
+	4,  // 10: dhole.v1.JobStatus.outputs:type_name -> dhole.v1.OutputRef
+	2,  // 11: dhole.v1.LogChunk.stream:type_name -> dhole.v1.Stream
+	23, // 12: dhole.v1.EngineRegistration.capabilities:type_name -> dhole.v1.Capability
+	11, // 13: dhole.v1.EngineHeartbeat.in_flight:type_name -> dhole.v1.InFlight
+	10, // 14: dhole.v1.EngineMessage.registration:type_name -> dhole.v1.EngineRegistration
+	12, // 15: dhole.v1.EngineMessage.heartbeat:type_name -> dhole.v1.EngineHeartbeat
+	14, // 16: dhole.v1.EngineControl.cancel:type_name -> dhole.v1.Cancel
+	15, // 17: dhole.v1.EngineControl.drain:type_name -> dhole.v1.Drain
+	16, // 18: dhole.v1.EngineControl.attach:type_name -> dhole.v1.Attach
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_engine_proto_init() }
@@ -1502,11 +1645,11 @@ func file_dhole_v1_engine_proto_init() {
 	}
 	file_dhole_v1_common_proto_init()
 	file_dhole_v1_pipeline_proto_init()
-	file_dhole_v1_engine_proto_msgTypes[9].OneofWrappers = []any{
+	file_dhole_v1_engine_proto_msgTypes[10].OneofWrappers = []any{
 		(*EngineMessage_Registration)(nil),
 		(*EngineMessage_Heartbeat)(nil),
 	}
-	file_dhole_v1_engine_proto_msgTypes[13].OneofWrappers = []any{
+	file_dhole_v1_engine_proto_msgTypes[14].OneofWrappers = []any{
 		(*EngineControl_Cancel)(nil),
 		(*EngineControl_Drain)(nil),
 		(*EngineControl_Attach)(nil),
@@ -1516,8 +1659,8 @@ func file_dhole_v1_engine_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_engine_proto_rawDesc), len(file_dhole_v1_engine_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   16,
+			NumEnums:      3,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
