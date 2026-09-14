@@ -433,6 +433,11 @@ unaffected.
 replayable, and archived; a secret value inside one would be a secret at rest in
 the run history.
 
+Dhole's control plane fills it from `Step.secrets`: one fresh handle per declared
+secret per attempt, with `SecretRef.name` set to the environment variable the
+step bound it to (see [Step secrets](secrets.md)). Nothing about the exchange
+below changes for an engine; an engine never reads `Step.secrets` itself.
+
 An engine redeems a handle for the value at the moment it needs it. Handles are
 short-lived and single-use. An engine must not log a redeemed value, write it to
 the object store, or include it in an error message.

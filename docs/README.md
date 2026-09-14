@@ -7,6 +7,7 @@
 | [Writing an engine](writing-an-engine.md)    | contract, engine, conformance suite — in that order      |
 | [Writing a plugin](writing-a-plugin.md)      | manifests, capabilities, effect classes, signatures      |
 | [Policy authoring](policy.md)                | CEL rules, the variables they read, and how to test them |
+| [Step secrets](secrets.md)                   | declaring a credential, providing one, and where it goes |
 | [Deployment topologies](deployment.md)       | laptop, homelab, cluster, and the Helm chart             |
 | [Upgrades and version skew](upgrades.md)     | what "N and N-1" means for a fleet mid-upgrade           |
 | [Design history](design-history.md)          | how each decision was reached, including the reversals   |

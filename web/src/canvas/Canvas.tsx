@@ -412,6 +412,9 @@ export function Canvas({
             // a set_file operation, which is a deliberate act and not a
             // default this canvas invents.
             fileInputs: [],
+            // Nor a secret: a credential is something an author asks for by
+            // name (ADR 0027), never something a new step is given.
+            secrets: [],
             inputs: [...kind.inputs],
             outputs: [...kind.outputs],
           },

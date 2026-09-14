@@ -231,6 +231,16 @@ type Config struct {
 	// manager behind the broker — is deliberately left open by ADR 0024 and
 	// is what this interface exists to make replaceable.
 	SecretSource secrets.Source
+	// StepSecrets is where the secrets a pipeline STEP declares come from
+	// (ADR 0027): the plane issues a short-lived handle per declaration per
+	// attempt, and the engine redeems it at exec time.
+	//
+	// It is deliberately a second source, not SecretSource. A credential an
+	// operator gave the plane for its own model calls is not thereby given to
+	// every pipeline author in the tenant; naming it here as well is how an
+	// operator says it is. Nil means the plane holds none, and a step
+	// declaring one is refused, naming it, before it is dispatched.
+	StepSecrets secrets.Source
 	// LeaseTTL is how long a step's lease lives before its holder is presumed
 	// dead and the step is swept back. Zero means scheduler.DefaultLeaseTTL.
 	//
@@ -521,6 +531,10 @@ func (s *Server) Start(ctx context.Context) error {
 		// engines, none of which can run any of the four.
 		Builtins: built,
 		Gate:     waits,
+		// The secrets a step declares, minted through the same broker the
+		// plane's own credentials go through: one way a credential reaches a
+		// running thing (ADR 0024, 0027).
+		Secrets: secrets.NewStepIssuer(s.broker, s.cfg.StepSecrets),
 	})
 	if err != nil {
 		in.close()

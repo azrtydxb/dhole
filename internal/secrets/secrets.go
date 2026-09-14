@@ -100,6 +100,16 @@ func (b *Broker) Issue(tenantID, name, value string, ttl time.Duration) (*dholev
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Forget what can no longer be honoured. Only a redemption used to delete a
+	// handle, and every step dispatch now mints some: a dispatch cancelled,
+	// lost or refused before its engine redeemed would otherwise keep its value
+	// in this process for as long as the plane runs.
+	now := time.Now()
+	for h, e := range b.handles {
+		if now.After(e.expires) {
+			delete(b.handles, h)
+		}
+	}
 	b.handles[handle] = entry{tenantID: tenantID, name: name, value: value, expires: expires}
 	return &dholev1.SecretRef{
 		Name:      name,

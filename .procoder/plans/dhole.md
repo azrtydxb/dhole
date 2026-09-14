@@ -1029,6 +1029,46 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       still fails on the port layout. (Both are closed below as of 2026-09-10, and the case now
       passes outright: `make conformance` is 11/11 for the shipped Go engine and for the reference
       Python one.)
+- [x] **A step cannot be given a secret: nothing produces a `SecretRef`.** Found 2026-09-14
+      running a real CI/CD pipeline whose registry now refuses anonymous push. The engine half
+      is complete and conformance-tested, but `Step` has no field to declare a secret,
+      `scheduler.buildDispatch` never sets `JobDispatch.secrets`, and the plane's only
+      `secrets.Source` is the model-credential one ADR 0024 introduced for `builtin:llm`.
+      ADR 0027 decides the shape. Files: `proto/dhole/v1/pipeline.proto` (`Step.secrets`,
+      `StepSecret`), `internal/secrets/step.go`, `internal/scheduler/secrets.go` plus the
+      `Secrets` config field and `buildDispatch`, `internal/server/server.go`
+      (`Config.StepSecrets`), `cmd/dhole/cli/serve.go` (`--secret TENANT/NAME=ENVVAR`),
+      `charts/dhole` (`controlPlane.secrets`), `docs/secrets.md`.
+      Interfaces: produces `scheduler.StepSecrets`, implemented by `secrets.StepIssuer`, with
+      `Check(ctx, tenantID, step) error` and `Issue(ctx, scope, step, ttl) ([]*SecretRef, error)`
+      over `secrets.Scope`; consumes `secrets.Broker.Issue` and `secrets.Source`.
+      Tests, red first: `TestAStepReceivesTheSecretItDeclaresAndTheValueIsRecordedNowhere`
+      (server e2e) fails with "the step did not see the declared secret's value";
+      `TestAStepDeclaringASecretThePlaneDoesNotHoldIsNeverDispatched` (server e2e) fails with the
+      dispatch erroring instead of a refusal; `TestTheStoredDispatchCarriesHandlesAndNeverTheValue`
+      (scheduler, reads the outbox row before it drains) fails with "the dispatch carries no
+      SecretRef for the declared secret".
+      POLICY AND TAINT, as found rather than invented: ADR 0012 names the secret resolver as a
+      policy caller, and nothing does call it — `PlaneResolver` consults no policy, the
+      scheduler's dispatch-time `permit` sees only `input.capabilities`, and `dhole serve`
+      wires no dispatch policy at all. Taint (ADR 0015) is evaluated only inside
+      `builtin:agent`; the dispatch path never sets `input.tainted`. So the only existing
+      control over a step's secret access is the `SECRETS` capability, which is why a step
+      declaring a secret must declare it. No rule keyed on the secret NAME exists, and none is
+      added here: which tier may read which secret is a policy decision still to be made.
+      CLOSED 2026-09-14. `Step.secrets` (field 14, `StepSecret{name, env}`) is additive and needs
+      no protocol bump: engines read only `JobDispatch.secrets`. The scheduler refuses a step
+      whose secrets cannot be issued, or that omits `CAPABILITY_SECRETS`, before any lease, slot
+      or outbox row (`STEP_SECRET_UNAVAILABLE` names it, the run fails), and otherwise issues one
+      handle per declaration per attempt with `DefaultSecretTTL` (10 minutes). The broker now
+      forgets expired unredeemed handles on issue. `dhole serve --secret TENANT/NAME=ENVVAR` and
+      `controlPlane.secrets[{name, tenant, existingSecret, key}]` feed a step source separate
+      from the model one. Every behavioural test was mutation-checked; `make conformance` is
+      11/11 for both the Python and Go engines. STILL OPEN: revoking an attempt's unspent
+      handles when it ends; a tenant-scoped redemption subject; a unique index on
+      `STEP_SECRET_UNAVAILABLE` (two racing advances can record it twice — the run fails once);
+      a `builtin:` step's declared secrets are ignored rather than refused; and the policy items
+      above.
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

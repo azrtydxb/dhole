@@ -17,6 +17,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/obs"
 	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/server"
+	"github.com/azrtydxb/dhole/internal/tenant"
 	"github.com/azrtydxb/dhole/internal/version"
 )
 
@@ -31,7 +32,7 @@ import (
 func serveCmd(o *options) *cobra.Command {
 	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr, triggerFile string
 	var otlpInsecure, noAPI bool
-	var apiOrigins, modelSecrets []string
+	var apiOrigins, modelSecrets, stepSecrets []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "run the control plane",
@@ -92,6 +93,13 @@ func serveCmd(o *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The secrets a pipeline step may declare (ADR 0027). A second
+			// source on purpose: a model credential is not a step's to read
+			// unless the operator names it here as well.
+			stepSource, err := loadStepSecrets(stepSecrets)
+			if err != nil {
+				return err
+			}
 
 			srv, err := server.New(server.Config{
 				Mode:     server.Mode(mode),
@@ -110,6 +118,7 @@ func serveCmd(o *options) *cobra.Command {
 				// key: the plane redeems one per call and hands it in.
 				Models:       server.DefaultModels,
 				SecretSource: modelSource,
+				StepSecrets:  stepSource,
 
 				APIAddr:           apiAddr,
 				NoAPI:             noAPI,
@@ -180,6 +189,9 @@ func serveCmd(o *options) *cobra.Command {
 		"browser origin allowed to make cross-origin API calls; repeatable, and none by default")
 	flags.StringArrayVar(&modelSecrets, "model-secret", nil,
 		"NAME=ENVVAR: a secret a `builtin:llm` step's `api_key_secret` may name, and the "+
+			"environment variable its value is read from; repeatable, and none by default")
+	flags.StringArrayVar(&stepSecrets, "secret", nil,
+		"TENANT/NAME=ENVVAR: a secret a pipeline step in TENANT may declare by NAME, and the "+
 			"environment variable its value is read from; repeatable, and none by default")
 	flags.StringVar(&triggerFile, "triggers", os.Getenv("DHOLE_TRIGGERS"),
 		"YAML file declaring the cron schedules and webhook endpoints this plane runs")
@@ -274,6 +286,53 @@ func loadModelSecrets(specs []string) (secrets.Source, error) {
 					"credential it cannot read", spec, variable)
 		}
 		source.Set(server.DefaultTenant, name, value)
+	}
+	return source, nil
+}
+
+// loadStepSecrets builds the source the secrets a pipeline STEP declares are
+// issued from (ADR 0027).
+//
+// Each spec is `TENANT/NAME=ENVVAR`. The tenant is part of the spec and never
+// implied, even while `dhole serve` serves one tenant: a secret that belonged
+// to whichever tenant asked would be the ambient credential this design
+// refuses, and a tenant id cannot contain a `/`, so the split is unambiguous.
+// The value is read from ENVVAR, never taken as an argument, for the reason
+// loadModelSecrets gives.
+//
+// Every fault is an error at start-up — a malformed spec, an invalid tenant, an
+// unset variable, a name given twice — because the alternative is a step that
+// fails days later naming a secret the operator believes is configured.
+func loadStepSecrets(specs []string) (secrets.Source, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	source := secrets.NewMapSource()
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		scoped, variable, ok := strings.Cut(spec, "=")
+		tenantID, name, scopedOK := strings.Cut(scoped, "/")
+		tenantID, name, variable = strings.TrimSpace(tenantID), strings.TrimSpace(name), strings.TrimSpace(variable)
+		if !ok || !scopedOK || name == "" || variable == "" {
+			return nil, fmt.Errorf(
+				"--secret %q: expected TENANT/NAME=ENVVAR, the tenant it belongs to, the name a step "+
+					"declares, and the environment variable holding its value", spec)
+		}
+		if err := tenant.Validate(tenantID); err != nil {
+			return nil, fmt.Errorf("--secret %q: %w", spec, err)
+		}
+		if seen[tenantID+"/"+name] {
+			return nil, fmt.Errorf("--secret %q: %s/%s is already configured, and the second would silently win",
+				spec, tenantID, name)
+		}
+		seen[tenantID+"/"+name] = true
+		value := os.Getenv(variable)
+		if value == "" {
+			return nil, fmt.Errorf(
+				"--secret %q: %s is unset or empty, so this plane would start with a secret it cannot read",
+				spec, variable)
+		}
+		source.Set(tenantID, name, value)
 	}
 	return source, nil
 }

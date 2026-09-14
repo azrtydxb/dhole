@@ -1,0 +1,118 @@
+package scheduler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
+	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/secrets"
+)
+
+// StepSecretUnavailable records that a step declared a secret it cannot be
+// given, and why — naming the secret, never a value (ADR 0027).
+//
+// It is an event for the reason StepPolicyDenied is: nothing was dispatched,
+// so no status will ever come back, and a refusal that were merely logged
+// would leave the run looking slow. Stored values are a persistence contract:
+// add types, never rename one.
+const StepSecretUnavailable runstore.EventType = "STEP_SECRET_UNAVAILABLE"
+
+// DefaultSecretTTL is how long a step's secret handles live.
+//
+// It bounds the time between the dispatch being written and the engine
+// redeeming, which happens after the sandbox is acquired and the inputs are
+// materialised and before the command starts. It is NOT the step's runtime:
+// a handle is spent the moment it is redeemed, so a three-hour build needs
+// its handle for the minutes before it starts, not for three hours. A
+// dispatch that waits longer than this — a queue backed up, an image pull
+// that takes a quarter of an hour — has its redemption refused, fails, and is
+// retried under its effect class with fresh handles.
+const DefaultSecretTTL = 10 * time.Minute
+
+// StepSecrets resolves and issues the secrets a step declares. It is
+// implemented by *secrets.StepIssuer; it is an interface so this package need
+// not know where the values come from.
+type StepSecrets interface {
+	// Check reports, without issuing anything, why the step's declared
+	// secrets cannot be issued for this tenant — or nil when they can.
+	Check(ctx context.Context, tenantID string, step *dholev1.Step) error
+	// Issue mints one handle per declaration for exactly this attempt.
+	Issue(ctx context.Context, scope secrets.Scope, step *dholev1.Step, ttl time.Duration) ([]*dholev1.SecretRef, error)
+}
+
+// SecretUnavailable is the STEP_SECRET_UNAVAILABLE payload.
+type SecretUnavailable struct {
+	Reason string `json:"reason"`
+}
+
+// MarshalSecretUnavailable encodes the STEP_SECRET_UNAVAILABLE payload.
+func MarshalSecretUnavailable(u SecretUnavailable) ([]byte, error) { return marshalPayload(u) }
+
+// UnmarshalSecretUnavailable decodes the STEP_SECRET_UNAVAILABLE payload.
+func UnmarshalSecretUnavailable(b []byte) (SecretUnavailable, error) {
+	return unmarshalPayload[SecretUnavailable](b, string(StepSecretUnavailable))
+}
+
+// refuseSecrets decides, before a step takes a lease, a slot or an outbox row,
+// whether the secrets it declares can be given to it. A step that cannot is
+// refused for good: the refusal is recorded naming the secret, and the run
+// fails. It is a deployment fault — a secret nobody configured — and retrying
+// would only repeat it.
+//
+// It reports whether the step was refused.
+func (s *Scheduler) refuseSecrets(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+) (bool, error) {
+	if len(step.GetSecrets()) == 0 {
+		return false, nil
+	}
+	var reason error
+	if s.secrets == nil {
+		names := make([]string, 0, len(step.GetSecrets()))
+		for _, decl := range step.GetSecrets() {
+			names = append(names, fmt.Sprintf("%q", decl.GetName()))
+		}
+		reason = fmt.Errorf("this control plane issues no step secrets, so step %q cannot be given %s",
+			step.GetId(), strings.Join(names, ", "))
+	} else {
+		reason = s.secrets.Check(ctx, tenantID, step)
+	}
+	if reason == nil {
+		return false, nil
+	}
+	payload, err := MarshalSecretUnavailable(SecretUnavailable{Reason: reason.Error()})
+	if err != nil {
+		return true, err
+	}
+	if err := s.append(ctx, tenantID, runstore.Event{
+		RunID:   runID,
+		StepID:  step.GetId(),
+		Attempt: state0Attempt,
+		Type:    StepSecretUnavailable,
+		Payload: payload,
+	}); err != nil {
+		return true, err
+	}
+	return true, s.fail(ctx, tenantID, runID, []string{step.GetId()})
+}
+
+// secretRefs issues the handles one attempt's dispatch carries.
+func (s *Scheduler) secretRefs(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step, attempt uint32,
+) ([]*dholev1.SecretRef, error) {
+	if len(step.GetSecrets()) == 0 {
+		return nil, nil
+	}
+	if s.secrets == nil {
+		// refuseSecrets ran first and refused; reaching here is a caller bug,
+		// and a dispatch without its declared secret is never the answer.
+		return nil, errors.New("scheduler: a step declaring secrets reached dispatch on a plane that issues none")
+	}
+	return s.secrets.Issue(ctx, secrets.Scope{
+		TenantID: tenantID, RunID: runID, StepID: step.GetId(), Attempt: attempt,
+	}, step, DefaultSecretTTL)
+}

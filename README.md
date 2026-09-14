@@ -207,6 +207,7 @@ command is executed by the test suite.
 | [Writing an engine](docs/writing-an-engine.md)    | contract, engine, `make conformance`         |
 | [Writing a plugin](docs/writing-a-plugin.md)      | manifests, capabilities, effect classes      |
 | [Policy authoring](docs/policy.md)                | CEL rules and how to test them               |
+| [Step secrets](docs/secrets.md)                   | giving a step a credential, and nothing else |
 | [Deployment topologies](docs/deployment.md)       | laptop, homelab, cluster, Helm               |
 | [Upgrades and version skew](docs/upgrades.md)     | what N and N-1 obliges                       |
 

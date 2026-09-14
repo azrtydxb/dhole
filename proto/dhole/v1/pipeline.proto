@@ -77,6 +77,23 @@ message FileInput {
   string path = 2;
 }
 
+// StepSecret is one secret a step asks for, by NAME, and the environment
+// variable the step sees its value as (ADR 0027).
+//
+// It carries no value and no reference to one. A definition is content-hashed,
+// mirrored to git and archived with every run; a credential in it would be a
+// credential in all three. The plane resolves the name against what its
+// operator configured for the step's tenant and issues a short-lived handle per
+// attempt in JobDispatch.secrets, which the engine redeems at exec time.
+message StepSecret {
+  // The secret's name as the operator configured it for this tenant, e.g.
+  // "harbor-robot".
+  string name = 1;
+  // The environment variable the step's process receives the value in, e.g.
+  // "REGISTRY_PASSWORD".
+  string env = 2;
+}
+
 // Step is one unit of work: a plugin reference, its typed ports, the effect
 // class that governs caching and retry, and the capabilities it requires.
 message Step {
@@ -155,6 +172,17 @@ message Step {
   // digests arriving over edges — which is what makes a changed file a cache
   // miss rather than a stale hit.
   repeated FileInput file_inputs = 13;
+  // Secrets this step needs, each bound to the environment variable it sees
+  // the value as (ADR 0027). A step declaring any must also declare
+  // CAPABILITY_SECRETS: that is what routes it to an engine able to redeem, and
+  // what policy sees.
+  //
+  // Nothing about the wire changes for an engine: the plane turns each
+  // declaration into a SecretRef in JobDispatch.secrets, which every engine
+  // already reads. A declared secret the plane does not hold refuses the step
+  // before it is dispatched — never a dispatch with the variable missing or
+  // empty. See docs/secrets.md.
+  repeated StepSecret secrets = 14;
 }
 
 // Edge connects one step's output port to another step's input port. The DAG

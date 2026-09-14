@@ -61,6 +61,9 @@ spec:
             {{- range .Values.controlPlane.modelSecrets }}
             - --model-secret={{ .name }}=DHOLE_MODEL_SECRET_{{ .name }}
             {{- end }}
+            {{- range $i, $s := .Values.controlPlane.secrets }}
+            - --secret={{ $s.tenant }}/{{ $s.name }}=DHOLE_STEP_SECRET_{{ $i }}
+            {{- end }}
           env:
             - name: DHOLE_BUS_URL
               value: {{ include "dhole.busURL" . | quote }}
@@ -83,6 +86,29 @@ spec:
                 secretKeyRef:
                   name: {{ .existingSecret }}
                   key: {{ .key | default "apiKey" }}
+            {{- end }}
+            {{- /* A secret a pipeline step may declare (ADR 0027), from a
+                   Secret for the same reason. The variable is named by
+                   position, not by the secret's name, because a secret name
+                   need not be a valid variable name. */}}
+            {{- range $i, $s := .Values.controlPlane.secrets }}
+            {{- if not $s.name }}
+            {{- fail (printf "controlPlane.secrets[%d] names no secret" $i) }}
+            {{- end }}
+            {{- if not $s.tenant }}
+            {{- fail (printf "controlPlane.secrets: %s names no tenant, and a step secret belongs to exactly one" $s.name) }}
+            {{- end }}
+            {{- if not $s.existingSecret }}
+            {{- fail (printf "controlPlane.secrets: %s names no existingSecret, so the plane would start with a secret it cannot read" $s.name) }}
+            {{- end }}
+            {{- if not $s.key }}
+            {{- fail (printf "controlPlane.secrets: %s names no key within Secret %s" $s.name $s.existingSecret) }}
+            {{- end }}
+            - name: DHOLE_STEP_SECRET_{{ $i }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.existingSecret }}
+                  key: {{ $s.key }}
             {{- end }}
           ports:
             - name: api

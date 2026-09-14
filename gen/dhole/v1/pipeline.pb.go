@@ -409,6 +409,70 @@ func (x *FileInput) GetPath() string {
 	return ""
 }
 
+// StepSecret is one secret a step asks for, by NAME, and the environment
+// variable the step sees its value as (ADR 0027).
+//
+// It carries no value and no reference to one. A definition is content-hashed,
+// mirrored to git and archived with every run; a credential in it would be a
+// credential in all three. The plane resolves the name against what its
+// operator configured for the step's tenant and issues a short-lived handle per
+// attempt in JobDispatch.secrets, which the engine redeems at exec time.
+type StepSecret struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The secret's name as the operator configured it for this tenant, e.g.
+	// "harbor-robot".
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The environment variable the step's process receives the value in, e.g.
+	// "REGISTRY_PASSWORD".
+	Env           string `protobuf:"bytes,2,opt,name=env,proto3" json:"env,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StepSecret) Reset() {
+	*x = StepSecret{}
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StepSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StepSecret) ProtoMessage() {}
+
+func (x *StepSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StepSecret.ProtoReflect.Descriptor instead.
+func (*StepSecret) Descriptor() ([]byte, []int) {
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *StepSecret) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *StepSecret) GetEnv() string {
+	if x != nil {
+		return x.Env
+	}
+	return ""
+}
+
 // Step is one unit of work: a plugin reference, its typed ports, the effect
 // class that governs caching and retry, and the capabilities it requires.
 type Step struct {
@@ -487,14 +551,25 @@ type Step struct {
 	// inputs/<port>, and its digest is folded into the cache key alongside the
 	// digests arriving over edges — which is what makes a changed file a cache
 	// miss rather than a stale hit.
-	FileInputs    []*FileInput `protobuf:"bytes,13,rep,name=file_inputs,json=fileInputs,proto3" json:"file_inputs,omitempty"`
+	FileInputs []*FileInput `protobuf:"bytes,13,rep,name=file_inputs,json=fileInputs,proto3" json:"file_inputs,omitempty"`
+	// Secrets this step needs, each bound to the environment variable it sees
+	// the value as (ADR 0027). A step declaring any must also declare
+	// CAPABILITY_SECRETS: that is what routes it to an engine able to redeem, and
+	// what policy sees.
+	//
+	// Nothing about the wire changes for an engine: the plane turns each
+	// declaration into a SecretRef in JobDispatch.secrets, which every engine
+	// already reads. A declared secret the plane does not hold refuses the step
+	// before it is dispatched — never a dispatch with the variable missing or
+	// empty. See docs/secrets.md.
+	Secrets       []*StepSecret `protobuf:"bytes,14,rep,name=secrets,proto3" json:"secrets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Step) Reset() {
 	*x = Step{}
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -506,7 +581,7 @@ func (x *Step) String() string {
 func (*Step) ProtoMessage() {}
 
 func (x *Step) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[6]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -519,7 +594,7 @@ func (x *Step) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Step.ProtoReflect.Descriptor instead.
 func (*Step) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{6}
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Step) GetId() string {
@@ -613,6 +688,13 @@ func (x *Step) GetFileInputs() []*FileInput {
 	return nil
 }
 
+func (x *Step) GetSecrets() []*StepSecret {
+	if x != nil {
+		return x.Secrets
+	}
+	return nil
+}
+
 // Edge connects one step's output port to another step's input port. The DAG
 // is these edges; there is no separately authored dependency list to drift
 // from them.
@@ -628,7 +710,7 @@ type Edge struct {
 
 func (x *Edge) Reset() {
 	*x = Edge{}
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[7]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -640,7 +722,7 @@ func (x *Edge) String() string {
 func (*Edge) ProtoMessage() {}
 
 func (x *Edge) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[7]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -653,7 +735,7 @@ func (x *Edge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Edge.ProtoReflect.Descriptor instead.
 func (*Edge) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{7}
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Edge) GetFromStep() string {
@@ -700,7 +782,7 @@ type Pipeline struct {
 
 func (x *Pipeline) Reset() {
 	*x = Pipeline{}
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[8]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -712,7 +794,7 @@ func (x *Pipeline) String() string {
 func (*Pipeline) ProtoMessage() {}
 
 func (x *Pipeline) ProtoReflect() protoreflect.Message {
-	mi := &file_dhole_v1_pipeline_proto_msgTypes[8]
+	mi := &file_dhole_v1_pipeline_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -725,7 +807,7 @@ func (x *Pipeline) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pipeline.ProtoReflect.Descriptor instead.
 func (*Pipeline) Descriptor() ([]byte, []int) {
-	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{8}
+	return file_dhole_v1_pipeline_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Pipeline) GetId() string {
@@ -793,7 +875,11 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"media_type\x18\x04 \x01(\tR\tmediaType\"3\n" +
 	"\tFileInput\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"\xcb\x04\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"2\n" +
+	"\n" +
+	"StepSecret\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03env\x18\x02 \x01(\tR\x03env\"\xfb\x04\n" +
 	"\x04Step\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -812,7 +898,8 @@ const file_dhole_v1_pipeline_proto_rawDesc = "" +
 	"engineType\x12'\n" +
 	"\x0ftimeout_seconds\x18\f \x01(\rR\x0etimeoutSeconds\x124\n" +
 	"\vfile_inputs\x18\r \x03(\v2\x13.dhole.v1.FileInputR\n" +
-	"fileInputs\x1a9\n" +
+	"fileInputs\x12.\n" +
+	"\asecrets\x18\x0e \x03(\v2\x14.dhole.v1.StepSecretR\asecrets\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +
@@ -841,7 +928,7 @@ func file_dhole_v1_pipeline_proto_rawDescGZIP() []byte {
 	return file_dhole_v1_pipeline_proto_rawDescData
 }
 
-var file_dhole_v1_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_dhole_v1_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_dhole_v1_pipeline_proto_goTypes = []any{
 	(*BlobType)(nil),   // 0: dhole.v1.BlobType
 	(*StructType)(nil), // 1: dhole.v1.StructType
@@ -849,37 +936,39 @@ var file_dhole_v1_pipeline_proto_goTypes = []any{
 	(*Port)(nil),       // 3: dhole.v1.Port
 	(*File)(nil),       // 4: dhole.v1.File
 	(*FileInput)(nil),  // 5: dhole.v1.FileInput
-	(*Step)(nil),       // 6: dhole.v1.Step
-	(*Edge)(nil),       // 7: dhole.v1.Edge
-	(*Pipeline)(nil),   // 8: dhole.v1.Pipeline
-	nil,                // 9: dhole.v1.Step.ConfigEntry
-	(*Digest)(nil),     // 10: dhole.v1.Digest
-	(EffectClass)(0),   // 11: dhole.v1.EffectClass
-	(Capability)(0),    // 12: dhole.v1.Capability
-	(LeaseScope)(0),    // 13: dhole.v1.LeaseScope
-	(*Tenant)(nil),     // 14: dhole.v1.Tenant
+	(*StepSecret)(nil), // 6: dhole.v1.StepSecret
+	(*Step)(nil),       // 7: dhole.v1.Step
+	(*Edge)(nil),       // 8: dhole.v1.Edge
+	(*Pipeline)(nil),   // 9: dhole.v1.Pipeline
+	nil,                // 10: dhole.v1.Step.ConfigEntry
+	(*Digest)(nil),     // 11: dhole.v1.Digest
+	(EffectClass)(0),   // 12: dhole.v1.EffectClass
+	(Capability)(0),    // 13: dhole.v1.Capability
+	(LeaseScope)(0),    // 14: dhole.v1.LeaseScope
+	(*Tenant)(nil),     // 15: dhole.v1.Tenant
 }
 var file_dhole_v1_pipeline_proto_depIdxs = []int32{
 	0,  // 0: dhole.v1.PortType.blob:type_name -> dhole.v1.BlobType
 	1,  // 1: dhole.v1.PortType.structured:type_name -> dhole.v1.StructType
 	2,  // 2: dhole.v1.Port.type:type_name -> dhole.v1.PortType
-	10, // 3: dhole.v1.File.digest:type_name -> dhole.v1.Digest
-	11, // 4: dhole.v1.Step.effect_class:type_name -> dhole.v1.EffectClass
+	11, // 3: dhole.v1.File.digest:type_name -> dhole.v1.Digest
+	12, // 4: dhole.v1.Step.effect_class:type_name -> dhole.v1.EffectClass
 	3,  // 5: dhole.v1.Step.inputs:type_name -> dhole.v1.Port
 	3,  // 6: dhole.v1.Step.outputs:type_name -> dhole.v1.Port
-	12, // 7: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
-	13, // 8: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
-	9,  // 9: dhole.v1.Step.config:type_name -> dhole.v1.Step.ConfigEntry
+	13, // 7: dhole.v1.Step.capabilities:type_name -> dhole.v1.Capability
+	14, // 8: dhole.v1.Step.lease_scope:type_name -> dhole.v1.LeaseScope
+	10, // 9: dhole.v1.Step.config:type_name -> dhole.v1.Step.ConfigEntry
 	5,  // 10: dhole.v1.Step.file_inputs:type_name -> dhole.v1.FileInput
-	14, // 11: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
-	6,  // 12: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
-	7,  // 13: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
-	4,  // 14: dhole.v1.Pipeline.files:type_name -> dhole.v1.File
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	6,  // 11: dhole.v1.Step.secrets:type_name -> dhole.v1.StepSecret
+	15, // 12: dhole.v1.Pipeline.tenant:type_name -> dhole.v1.Tenant
+	7,  // 13: dhole.v1.Pipeline.steps:type_name -> dhole.v1.Step
+	8,  // 14: dhole.v1.Pipeline.edges:type_name -> dhole.v1.Edge
+	4,  // 15: dhole.v1.Pipeline.files:type_name -> dhole.v1.File
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_dhole_v1_pipeline_proto_init() }
@@ -898,7 +987,7 @@ func file_dhole_v1_pipeline_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dhole_v1_pipeline_proto_rawDesc), len(file_dhole_v1_pipeline_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
