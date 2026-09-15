@@ -31,7 +31,7 @@ const (
 	// confirmed. It never started; give the delivery back.
 	stopping
 	// unconfirmed: an at-most-once step nobody answered for. It never started;
-	// give it back to the queue, after a delay, with its slot (ADR 0031).
+	// give it back to the queue, after a delay, with its slot (ADR 0033).
 	unconfirmed
 )
 
@@ -55,7 +55,7 @@ const (
 // discards, and does NOT start an at-most-once step: its effect cannot be
 // discarded afterwards, and it is the class required to hold its lease before
 // it executes (ADR 0002). That dispatch goes back to the queue with its slot
-// (unconfirmed, ADR 0031). It used to keep asking here, once a second, holding
+// (unconfirmed, ADR 0033). It used to keep asking here, once a second, holding
 // the slot and the engine's room to fetch for as long as nobody answered — a
 // plane restarting, partitioned, or replaced in an upgrade — and a one-slot
 // engine ran nothing at all meanwhile, pure work included.

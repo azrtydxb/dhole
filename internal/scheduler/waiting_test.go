@@ -11,7 +11,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/scheduler"
 )
 
-// A dispatch that engines can run and none has taken says why (ADR 0031).
+// A dispatch that engines can run and none has taken says why (ADR 0033).
 //
 // A step waiting in the queue is not late — that was the kw defect — and the
 // sweeper reported one only when NO engine matched it any more. The two other

@@ -14,7 +14,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/runstore"
 )
 
-// A step the plane hosts stops when its lease is taken away (ADR 0031).
+// A step the plane hosts stops when its lease is taken away (ADR 0033).
 //
 // The commit already refused the RESULT of a builtin step whose lease had been
 // swept: a plane partitioned past its TTL has had the step given to another

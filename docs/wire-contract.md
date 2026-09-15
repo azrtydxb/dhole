@@ -388,7 +388,7 @@ engine handed such a dispatch must ask before it starts it:
    The queue redelivers it after the delay — to you or to an engine that can
    reach a plane — and whoever fetches it asks again, holding a slot again. It
    starts only once a plane says CURRENT
-   ([ADR 0031](../.procoder/adr/0031-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
+   ([ADR 0033](../.procoder/adr/0033-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
    Keeping it and asking in a loop holds a slot for as long as nobody answers,
    and an engine with one slot then runs nothing at all — pure work included.
    Stop renewing BEFORE the delayed NAK: an in-progress acknowledgement that
@@ -405,7 +405,7 @@ stopped but for the same reason.
 
 Control planes serve `job.accept.>` in the queue group `dhole-plane-accept`, so
 each request is answered — and its lease renewed — by one plane however many run
-([ADR 0031](../.procoder/adr/0031-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
+([ADR 0033](../.procoder/adr/0033-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
 A plane from before that subscribes plainly and answers too while an upgrade is
 in progress; take the first reply, since every plane answers from the same lease.
 

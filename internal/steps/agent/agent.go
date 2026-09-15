@@ -302,7 +302,7 @@ func (s *Step) invoke(
 	}
 	// 0. The step is still running. The plane cancels a step whose lease it
 	// lost, because another plane may be running it now, and every action
-	// taken after that is taken twice (ADR 0031). The SDK runs a turn's tool
+	// taken after that is taken twice (ADR 0033). The SDK runs a turn's tool
 	// calls one after another without looking at the context, so a refusal
 	// anywhere but here lets the rest of the batch through. Refused before it
 	// is recorded: nothing was attempted.

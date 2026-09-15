@@ -305,7 +305,7 @@ func TestAgentIsTenantScoped(t *testing.T) {
 }
 
 // TestAnAgentWhoseContextEndsTakesNoFurtherAction is the agent half of a
-// plane-hosted step losing its lease mid-loop (ADR 0031). The plane cancels
+// plane-hosted step losing its lease mid-loop (ADR 0033). The plane cancels
 // the step's context the moment its lease is refused, because another plane may
 // already be running the step — and an agent acts through Dhole's own API, so
 // every action it takes after that is a run started, a gate decided or an

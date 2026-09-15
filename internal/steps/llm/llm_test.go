@@ -193,7 +193,7 @@ func TestMalformedObjectIsRetriedThenFailsWithProviderError(t *testing.T) {
 }
 
 // TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt is the llm half of a
-// plane-hosted step losing its lease mid-call (ADR 0031). The plane cancels the
+// plane-hosted step losing its lease mid-call (ADR 0033). The plane cancels the
 // step's context the moment its lease is refused, because another plane may
 // already be running the step: a retry asked after that is a second model
 // call for nobody, and a give-up recorded after it would fail a step somebody

@@ -427,7 +427,7 @@ func (b *builtins) attempt(
 	// given to another plane — used to stop renewing and let the body run on,
 	// with only its result refused at the commit: a model call made for nobody,
 	// or an agent's tool calls made a second time beside the plane that now
-	// holds the step (ADR 0031).
+	// holds the step (ADR 0033).
 	body, loseLease := context.WithCancelCause(ctx)
 	defer loseLease(nil)
 	stopRenewing := b.renew(ctx, token, loseLease)

@@ -20,7 +20,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/scheduler"
 )
 
-// One plane answers each acceptance request (ADR 0031).
+// One plane answers each acceptance request (ADR 0033).
 //
 // An engine asks on job.accept.<run>.<step> before it starts a dispatch, and
 // the answer is a lease Renew. Served with a plain subscription, every plane on

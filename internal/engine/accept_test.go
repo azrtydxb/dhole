@@ -232,7 +232,7 @@ func TestAnUnansweredConfirmationStartsAPureStep(t *testing.T) {
 // TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts: the one class that may
 // not start on no answer. Its effect cannot be discarded afterwards, and ADR
 // 0002 already requires it to hold its lease before it executes. It waits — in
-// the queue, given back after each unanswered ask (ADR 0031) — and starts as
+// the queue, given back after each unanswered ask (ADR 0033) — and starts as
 // soon as a plane confirms it.
 func TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -270,7 +270,7 @@ func TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts(t *testing.T) {
 }
 
 // TestAnUnconfirmedAtMostOnceStepGivesItsSlotBack is what that wait used to
-// cost (ADR 0031). An at-most-once dispatch nobody answered kept asking while
+// cost (ADR 0033). An at-most-once dispatch nobody answered kept asking while
 // it held a slot and the engine's room to fetch, so while its plane was away —
 // restarting, partitioned from this engine, replaced in an upgrade — a one-slot
 // engine ran NOTHING, including pure work ADR 0004 promises keeps running
@@ -332,7 +332,7 @@ func TestAnUnconfirmedAtMostOnceStepGivesItsSlotBack(t *testing.T) {
 }
 
 // TestARollingUpgradeBesideAPlaneThatDoesNotAnswerRunsAtMostOnceWorkOnceItsPlaneReturns
-// is the upgrade ADR 0031 calls safe by construction. An older plane — from
+// is the upgrade ADR 0033 calls safe by construction. An older plane — from
 // before ADR 0029 — dispatches without confirm_acceptance and serves nothing on
 // job.accept.*; a newer plane dispatches with it and is away (restarting into
 // the new version, say). The older plane's at-most-once work runs as it always

@@ -177,7 +177,7 @@ and agent orchestration are profiles over a shared core.
   `secret.redeem`, served while the plane accepts protocol version 3), and
   `job.accept.<run>.<step>` — the request/reply on which an engine confirms a dispatch's
   fence is still current before starting it (ADR 0029), served by the planes as one queue
-  group so each request is answered once (ADR 0031).
+  group so each request is answered once (ADR 0033).
 - Executor interface: `acquire`, `exec`, `put`/`get`, `signal`, `release`.
 
 ## Data
@@ -228,7 +228,7 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   exists, and an attempt superseded while running is cancelled within a heartbeat. With no
   plane to confirm against, an `at-most-once` step waits and every other class starts; the
   waiting `at-most-once` dispatch goes back to the queue rather than holding an engine slot
-  (ADR 0031), including through a rolling upgrade beside a plane that does not answer.
+  (ADR 0033), including through a rolling upgrade beside a plane that does not answer.
 - A `builtin:` step whose plane was partitioned past its lease TTL and whose lease was swept:
   its body is cancelled when renewal is refused or lapses, and it records nothing.
 - An engine registering with a protocol version the control plane no longer supports, or
@@ -246,7 +246,7 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
   lease; one that no remaining engine can take is reported unschedulable while it waits,
   and one that matching engines have not taken within the lease TTL records `STEP_WAITING`
   saying whether every matching slot is busy (`capacity`) or a matching engine has room and
-  nothing is consuming the queue (`unconsumed`) (ADR 0031).
+  nothing is consuming the queue (`unconsumed`) (ADR 0033).
 - A step producing an output larger than the object-storage part limit, or producing no
   output where one was declared.
 - A run whose definition revision was superseded, or whose approval was revoked, while it

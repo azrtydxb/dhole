@@ -1890,7 +1890,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       whose renewal is refused — its lease swept while it was partitioned — runs
       the step body to completion and only its RESULT is refused at the commit,
       so an llm or agent step can have its external effect twice across a
-      partition longer than the TTL. The fix (ADR 0031): `builtins.attempt` runs
+      partition longer than the TTL. The fix (ADR 0033): `builtins.attempt` runs
       the body under a context of its own that `renew` cancels when `Renew`
       answers `ErrFenced`, or when no renewal has succeeded for a whole TTL (the
       KV has expired the lease by then and a sweeper may have given the step
@@ -1950,7 +1950,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       starts a dispatch that was superseded while it waited": `serveAcceptance`
       subscribes to `job.accept.>` with a plain subscription, so with N planes
       each request is N lease renewals and N replies of which the engine reads
-      one. The fix (ADR 0031): the plane serves it in the queue group
+      one. The fix (ADR 0033): the plane serves it in the queue group
       `dhole-plane-accept` through a new `bus.NATS.RespondQueue`, so one member
       answers. A plane from before this change, subscribed plainly beside a new
       one, answers as well; the engine takes the first reply, and both are the
@@ -1978,7 +1978,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       with no answer on `job.accept.*` — a plane restarting, partitioned from the
       engine, or being replaced — an `at-most-once` dispatch keeps asking once a
       second while holding a slot and its room to fetch, so a one-slot engine runs
-      nothing at all, pure work included. The fix (ADR 0031): one unanswered ask
+      nothing at all, pure work included. The fix (ADR 0033): one unanswered ask
       and the engine stops renewing the delivery, NAKs it with a delay of
       `acceptRetry`, and frees the slot and the room; whoever fetches it next asks
       again, still holding a slot. Nothing but CURRENT starts it, and the ask is
@@ -2049,7 +2049,7 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       waiting dispatch; a matching engine that never fetches — a dead pump, a
       queue bound under the wrong name, an engine that cannot reach a plane to
       confirm — and a matching engine that is simply full are indistinguishable
-      in the run log from a step that is running. The fix (ADR 0031): a waiting
+      in the run log from a step that is running. The fix (ADR 0033): a waiting
       offer older than `offerGrace` whose step matches registered engines records
       `STEP_WAITING` with cause `capacity` when every matching engine's last
       heartbeat lists as many jobs as it has slots, and `unconsumed` — naming the

@@ -57,7 +57,7 @@ type Message interface {
 	// NakWithDelay returns the message for redelivery once delay has passed.
 	// The server keeps counting it against the consumer's max_ack_pending
 	// until then. It is how an engine gives back work it cannot start yet
-	// without being handed the same message straight back (ADR 0031).
+	// without being handed the same message straight back (ADR 0033).
 	NakWithDelay(delay time.Duration) error
 	// InProgress tells the server this delivery is still being worked on, so
 	// the ack wait starts again rather than handing the message to somebody

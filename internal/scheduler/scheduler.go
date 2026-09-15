@@ -65,7 +65,7 @@ import (
 const StepUnschedulable runstore.EventType = "STEP_UNSCHEDULABLE"
 
 // StepWaiting records why a dispatched step that engines CAN run has not been
-// taken by any of them within the heartbeat window (ADR 0031).
+// taken by any of them within the heartbeat window (ADR 0033).
 //
 // STEP_UNSCHEDULABLE covers a waiting dispatch nothing matches. This covers the
 // two cases it could not see, which look the same from the run and have
@@ -1287,7 +1287,7 @@ func (s *Scheduler) surfaceOne(ctx context.Context, w lease.Waiting, instances [
 		return s.recordUnschedulable(ctx, w.TenantID, w.RunID, w.StepID, Explain(req, instances), state)
 	}
 	// Engines can run it. Inside the heartbeat window one may be about to take
-	// it; past the window, the run says why nobody has (ADR 0031).
+	// it; past the window, the run says why nobody has (ADR 0033).
 	if !waitedAge {
 		return nil
 	}

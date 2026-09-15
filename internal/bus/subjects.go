@@ -83,7 +83,7 @@ func SubjectAcceptWildcard() string {
 
 // AcceptQueue is the queue group control planes serve SubjectAcceptWildcard
 // in, so each acceptance request is answered — and its lease renewed — by one
-// plane rather than by every plane on the bus (ADR 0031).
+// plane rather than by every plane on the bus (ADR 0033).
 const AcceptQueue = "dhole-plane-accept"
 
 // SubjectLogs carries live LogChunks to whoever is watching. Ephemeral and

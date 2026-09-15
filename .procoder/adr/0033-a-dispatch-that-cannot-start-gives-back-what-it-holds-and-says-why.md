@@ -1,4 +1,4 @@
-# 0031 — A dispatch that cannot start gives back what it holds, and says why
+# 0033 — A dispatch that cannot start gives back what it holds, and says why
 
 Status: accepted
 Date: 2026-09-15

@@ -291,7 +291,7 @@ func (s *Step) Run(ctx context.Context, runID, stepID, prompt string) (json.RawM
 			// Stopped, not failed: the plane cancels a step whose lease it
 			// lost, and another plane may be running this step now. Another
 			// attempt is a model call for nobody, and a give-up written here
-			// would fail a step somebody else holds (ADR 0031).
+			// would fail a step somebody else holds (ADR 0033).
 			return nil, fmt.Errorf("llm: %s/%s stopped after attempt %d: %w", runID, stepID, attempt, ctxErr)
 		}
 		if !retryable(err) {

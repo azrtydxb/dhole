@@ -27,7 +27,7 @@ type acceptFunc func(ctx context.Context, st *dholev1.JobStatus) (dholev1.Accept
 // In the queue group bus.AcceptQueue, so each request reaches ONE plane. An
 // answer is a lease Renew; served by a plain subscription, every plane on the
 // bus renewed the lease and replied for every question an engine asked, and
-// the engine read one of the replies (ADR 0031). A plane from before this, still
+// the engine read one of the replies (ADR 0033). A plane from before this, still
 // subscribed plainly, answers as well during an upgrade — the engine takes the
 // first reply, and both are the same compare against the same lease.
 //
