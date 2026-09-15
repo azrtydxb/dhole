@@ -71,7 +71,7 @@ var defaultDocument []byte
 
 // DefaultDocument is the built-in dispatch policy exactly as the binary ships
 // it, comments included: what `dhole policy default` prints and what an
-// operator copies to tighten (ADR 0031).
+// operator copies to tighten (ADR 0032).
 func DefaultDocument() []byte {
 	return append([]byte(nil), defaultDocument...)
 }

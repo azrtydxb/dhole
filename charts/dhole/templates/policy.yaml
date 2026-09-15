@@ -1,4 +1,4 @@
-{{- /* The dispatch policy written inline in the values (ADR 0031). An existing
+{{- /* The dispatch policy written inline in the values (ADR 0032). An existing
        ConfigMap is the operator's own and is not rendered here. */}}
 {{- with .Values.controlPlane.policy }}
 {{- if and .rules .existingConfigMap }}

@@ -19,7 +19,7 @@ import (
 // TestServeRefusesToStartOnAnInvalidPolicy: a policy file that cannot work
 // stops `dhole serve` before a plane exists, naming the file and the rule. The
 // alternative — a plane that starts and refuses every step — is the outage a
-// typo in a rule would otherwise be (ADR 0031).
+// typo in a rule would otherwise be (ADR 0032).
 func TestServeRefusesToStartOnAnInvalidPolicy(t *testing.T) {
 	for name, c := range map[string]struct{ file, names string }{
 		"a rule that does not compile": {

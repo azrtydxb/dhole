@@ -12,7 +12,7 @@ import (
 )
 
 // TestTheDefaultDocumentPermitsEverythingAndIsValid is the owner's decision
-// held to what it says (ADR 0031): the plane ships a real, readable document
+// held to what it says (ADR 0032): the plane ships a real, readable document
 // that allows every step and every secret, and it is evaluated, not skipped.
 // A default that compiled to "no rules" would deny everything instead, and one
 // that was not parseable by the same reader as an operator's file would be a
@@ -75,7 +75,7 @@ func TestADocumentThatCannotWorkIsRefusedWhereItIsRead(t *testing.T) {
 	require.ErrorContains(t, err, `"broken"`, "the refusal does not name the rule")
 }
 
-// TestTheFloorIsEvaluatedFirstAndOnlyNarrows (ADR 0031): a floor is composed
+// TestTheFloorIsEvaluatedFirstAndOnlyNarrows (ADR 0032): a floor is composed
 // onto a tier that has rules, is decided before them, cannot be answered by
 // them, and a tier with NO rules stays a denial.
 func TestTheFloorIsEvaluatedFirstAndOnlyNarrows(t *testing.T) {

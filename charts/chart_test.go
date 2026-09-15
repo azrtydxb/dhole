@@ -444,7 +444,7 @@ func TestTheDefaultEngineRequestsRealCPU(t *testing.T) {
 }
 
 // An operator's dispatch policy, written inline in the values, is rendered into
-// a ConfigMap, mounted as a DIRECTORY and named on the command line (ADR 0031).
+// a ConfigMap, mounted as a DIRECTORY and named on the command line (ADR 0032).
 // A directory and not a subPath: Kubernetes rewrites a mounted ConfigMap in
 // place only when it is mounted whole, and the plane re-reads the file.
 func TestAnInlinePolicyIsRenderedIntoAConfigMapAndNamedOnTheCommandLine(t *testing.T) {

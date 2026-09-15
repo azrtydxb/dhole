@@ -80,7 +80,7 @@ rules:
 }
 
 // TestPolicyTestExercisesASecretRule: a rule on input.secret_name is the one an
-// operator tightening the default writes first (ADR 0031), so `dhole policy
+// operator tightening the default writes first (ADR 0032), so `dhole policy
 // test` has to be able to ask about a secret as well as a step.
 func TestPolicyTestExercisesASecretRule(t *testing.T) {
 	const file = `revision: rev-1

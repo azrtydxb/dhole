@@ -25,7 +25,7 @@ func policyCmd(o *options) *cobra.Command {
 }
 
 // policyDefaultCmd prints the dispatch policy `dhole serve` runs when it is
-// given none (ADR 0031), exactly as the binary embeds it. It is the document an
+// given none (ADR 0032), exactly as the binary embeds it. It is the document an
 // operator copies, tightens, tests with `dhole policy test` and hands back to
 // `dhole serve --policy`.
 func policyDefaultCmd(o *options) *cobra.Command {

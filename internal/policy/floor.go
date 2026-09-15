@@ -6,7 +6,7 @@ import "context"
 // cannot reach privileged engines, unsigned plugins, or at-most-once steps.
 const UntrustedTier = "untrusted"
 
-// UntrustedTierRules are that constraint as rules (ADR 0031). Each says
+// UntrustedTierRules are that constraint as rules (ADR 0032). Each says
 // nothing about any other tier, so composing them onto every tier's decision
 // costs a short-circuit and changes no other tier's answer.
 //
@@ -36,7 +36,7 @@ func UntrustedTierRules() []Rule {
 
 // WithFloor composes floor beneath every tier policy inner holds: the floor's
 // rules are evaluated first, and no rule of the tier's can answer a question
-// the floor refuses (ADR 0031).
+// the floor refuses (ADR 0032).
 //
 // It only ever narrows. A tier inner has no rules for stays without a policy —
 // and so denied — rather than being permitted by a floor whose rules all hold:

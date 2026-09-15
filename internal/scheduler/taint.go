@@ -12,7 +12,7 @@ import (
 )
 
 // THE FACTS A DISPATCH DECISION IS MADE ON THAT ONLY THE RUN AND THE FLEET KNOW
-// (ADR 0031).
+// (ADR 0032).
 //
 // ADR 0015's rules read `input.tainted`, `input.taint_sources` and
 // `input.engine_capabilities`. None was set at dispatch, so the rules held there

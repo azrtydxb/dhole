@@ -70,7 +70,7 @@ controlPlane:
   #   key: password                 # the key within it (required)
   secrets: []
   # The dispatch policy every step, and every secret a step declares, is
-  # decided by before it runs (ADR 0012, 0030, 0031; docs/policy.md). Every
+  # decided by before it runs (ADR 0012, 0030, 0032; docs/policy.md). Every
   # decision, allows included, is recorded in the policy_audit table.
   #
   # Leave both unset and the plane runs the built-in default, which permits

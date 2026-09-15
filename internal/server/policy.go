@@ -10,7 +10,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/taint"
 )
 
-// THE DISPATCH POLICY THIS PLANE RUNS (ADR 0031).
+// THE DISPATCH POLICY THIS PLANE RUNS (ADR 0032).
 //
 // The scheduler has put every ready step, and each secret it declares, to a
 // tier policy since ADR 0012 and ADR 0030 — when it is given one. `dhole serve`
@@ -64,7 +64,7 @@ func (s *Server) dispatchPolicy(in *infra) (policy.Engine, scheduler.Provenances
 	return engine, provenance, source, nil
 }
 
-// SetPolicy replaces the dispatch policy of a running plane (ADR 0031). The
+// SetPolicy replaces the dispatch policy of a running plane (ADR 0032). The
 // next decision is made under it; a decision already made is not revisited.
 //
 // A policy that cannot work is refused and the one in force stays: a reload

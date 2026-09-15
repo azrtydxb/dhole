@@ -1828,7 +1828,7 @@ func (s *Scheduler) permit(
 		}, signed, upstream)
 	}
 
-	// The facts only the run and the fleet know (ADR 0031). A fleet that
+	// The facts only the run and the fleet know (ADR 0032). A fleet that
 	// cannot be listed is an error rather than a denial, as it is for the
 	// dispatch that follows: the run is not refused for an outage, it is
 	// advanced again when the fleet answers.

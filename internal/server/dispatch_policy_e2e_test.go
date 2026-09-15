@@ -19,7 +19,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/taint"
 )
 
-// THE DISPATCH POLICY THE SINGLE BINARY RUNS (ADR 0031).
+// THE DISPATCH POLICY THE SINGLE BINARY RUNS (ADR 0032).
 //
 // Every assertion here is made through the embedded plane: a real scheduler, a
 // real engine over the loopback bus, and the audit trail read back out of the

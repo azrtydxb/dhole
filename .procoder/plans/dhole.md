@@ -1237,7 +1237,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       (`input.tainted`) is still never set; it is ADR 0015's propagation work, not a secrets item.
 - [x] **`dhole serve` evaluates no dispatch policy, and dispatch never sets the taint keys.**
       Left open by the item above; decided by the owner (.procoder/ask/decisions.md, "Which
-      dispatch policy `dhole serve` runs") and by ADR 0031. The plane passes no
+      dispatch policy `dhole serve` runs") and by ADR 0032. The plane passes no
       `scheduler.Config.Policy`, so no step and no secret is put to a rule and `policy_audit`
       stays empty; `permit` never sets `input.tainted`, `input.taint_sources` or
       `input.engine_capabilities`, so ADR 0015's rules could not hold at dispatch even if one
@@ -1288,7 +1288,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `dhole policy test` gained `--secret-name`. Chart: `controlPlane.policy.rules` renders
       `<fullname>-policy`, or `existingConfigMap`+`key`; both is a render failure; mounted whole at
       `/etc/dhole/policy`. The run id was NOT added to `policy_audit` (SQLite has no idempotent
-      ADD COLUMN; ADR 0031). Red first: compile (`undefined: policy.DefaultDocument`,
+      ADD COLUMN; ADR 0032). Red first: compile (`undefined: policy.DefaultDocument`,
       `taint.DispatchFloor`, `cfg.Policy`, `loadPolicyFile`); then behavioural: "the permissive
       default let through what the floor refuses" (stub floor), "a step bound to a value a git
       trigger admitted reached policy clean", "no decision was asked about step:on-process" /

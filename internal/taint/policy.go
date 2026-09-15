@@ -201,7 +201,7 @@ func describe(d policy.Decision, subject string, sources []string) policy.Decisi
 
 // DispatchFloor is the rule set every dispatch-time decision is evaluated
 // against before the tier's own policy, and that no configuration removes
-// (ADR 0031): ADR 0015's taint rules, under the ids a run log and an agent's
+// (ADR 0032): ADR 0015's taint rules, under the ids a run log and an agent's
 // refusal already name, and the spec's untrusted-tier constraint.
 func DispatchFloor() policy.TierPolicy {
 	builtin := BuiltinPolicy()

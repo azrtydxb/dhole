@@ -518,7 +518,7 @@ Refusing it in the operation would make undoing the edit that added the capabili
 
 ## A git-triggered pipeline's effectful steps are refused at dispatch, and nothing can clear the taint (2026-09-15)
 
-ADR 0031 wires the permissive default policy the owner chose, beneath a floor that holds ADR
+ADR 0032 wires the permissive default policy the owner chose, beneath a floor that holds ADR
 0015 and the spec's security constraint: tainted data may not reach a non-`PURE` step or a
 privileged engine. It also makes dispatch set `input.tainted` from the run's log, which it
 never did. Together they mean a pipeline whose non-`PURE` step reads a value a `git` trigger

@@ -1,4 +1,4 @@
-# The dispatch policy `dhole serve` runs when no --policy is given (ADR 0031).
+# The dispatch policy `dhole serve` runs when no --policy is given (ADR 0032).
 #
 # It permits every step and every secret a step declares, ON PURPOSE: a fresh
 # install runs what it ran before, and every decision is still evaluated and

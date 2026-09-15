@@ -39,7 +39,7 @@ func serveCmd(o *options) *cobra.Command {
 		Short: "run the control plane",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// The dispatch policy is read first of all (ADR 0031). A file that
+			// The dispatch policy is read first of all (ADR 0032). A file that
 			// cannot work refuses start-up before anything is opened: the
 			// alternative is a plane that starts and refuses every step, or
 			// one that half-starts and leaves a database behind for nothing.

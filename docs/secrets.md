@@ -162,7 +162,7 @@ decided on its own, with the step's facts plus `input.secret_name`
 secret, and every decision — allows included — is a row in `policy_audit`.
 
 `dhole serve` always evaluates a dispatch policy
-([ADR 0031](../.procoder/adr/0031-the-plane-always-evaluates-a-dispatch-policy-over-a-floor.md)).
+([ADR 0032](../.procoder/adr/0032-the-plane-always-evaluates-a-dispatch-policy-over-a-floor.md)).
 Unconfigured, it is the built-in default, which permits every secret; replace it
 with `dhole serve --policy FILE` or `controlPlane.policy` to restrict one:
 

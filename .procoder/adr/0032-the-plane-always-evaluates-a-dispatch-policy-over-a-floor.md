@@ -1,4 +1,4 @@
-# 0031 — The plane always evaluates a dispatch policy, over a floor it cannot be configured out of
+# 0032 — The plane always evaluates a dispatch policy, over a floor it cannot be configured out of
 
 Status: accepted
 Date: 2026-09-15

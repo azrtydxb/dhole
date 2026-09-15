@@ -24,7 +24,7 @@ func flooredDefault(t *testing.T, tier string) *policy.CELEngine {
 }
 
 // TestTheFloorHoldsUnderAPermissivePolicy is the constraint the owner's
-// "every step allowed" must not undo (ADR 0031): tainted data does not reach an
+// "every step allowed" must not undo (ADR 0032): tainted data does not reach an
 // effectful step or a privileged engine, and untrusted-tier work does not run
 // unsigned, privileged or at-most-once — however permissive the document on
 // top. Each case is paired with the clean or trusted twin the default DOES

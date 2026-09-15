@@ -15,7 +15,7 @@ Turing-complete, so evaluation always terminates.
 `dhole serve` always evaluates a dispatch policy: every ready step, and then each
 secret it declares, is decided before the cache or an engine sees it, and every
 decision — allows included — is a row in the `policy_audit` table of the run
-database ([ADR 0031](../.procoder/adr/0031-the-plane-always-evaluates-a-dispatch-policy-over-a-floor.md)).
+database ([ADR 0032](../.procoder/adr/0032-the-plane-always-evaluates-a-dispatch-policy-over-a-floor.md)).
 There is no setting that skips evaluation.
 
 With no configuration it is the **built-in default**, which permits every step

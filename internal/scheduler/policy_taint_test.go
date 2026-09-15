@@ -18,7 +18,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/taint"
 )
 
-// THE GAP THESE TESTS CLOSE (ADR 0031).
+// THE GAP THESE TESTS CLOSE (ADR 0032).
 //
 // ADR 0015's rules read `input.tainted`, `input.taint_sources` and
 // `input.engine_capabilities`, and the dispatch path set none of them: every

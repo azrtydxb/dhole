@@ -242,7 +242,7 @@ type Config struct {
 	// operator says it is. Nil means the plane holds none, and a step
 	// declaring one is refused, naming it, before it is dispatched.
 	StepSecrets secrets.Source
-	// Policy is the dispatch policy for this plane's tier (ADR 0031). Nil is
+	// Policy is the dispatch policy for this plane's tier (ADR 0032). Nil is
 	// the built-in default, policy.Default(), which permits every step and
 	// every secret — and is still evaluated, and every decision still
 	// recorded. There is no value that turns evaluation off. Whatever is set
@@ -514,7 +514,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	// The dispatch policy, always (ADR 0031): the operator's or the built-in
+	// The dispatch policy, always (ADR 0032): the operator's or the built-in
 	// default, over the floor, with every decision on the audit trail.
 	pol, provenance, policySource, err := s.dispatchPolicy(in)
 	if err != nil {
@@ -560,7 +560,7 @@ func (s *Server) Start(ctx context.Context) error {
 		// running thing (ADR 0024, 0027).
 		Secrets: secrets.NewStepIssuer(s.broker, s.cfg.StepSecrets),
 		// Policy before the cache and before any engine, for every step and
-		// each secret it declares (ADR 0012, 0030, 0031).
+		// each secret it declares (ADR 0012, 0030, 0032).
 		Policy:     pol,
 		Provenance: provenance,
 	})

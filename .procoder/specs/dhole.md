@@ -76,7 +76,7 @@ and agent orchestration are profiles over a shared core.
   (`dhole policy default`) that an operator replaces with `--policy FILE` or
   `controlPlane.policy`, beneath a floor of rules no configuration removes — ADR 0015's taint
   rules and the untrusted-tier constraint — with `input.tainted`, `input.taint_sources` and
-  `input.engine_capabilities` supplied at dispatch from the run's log and the fleet (ADR 0031).
+  `input.engine_capabilities` supplied at dispatch from the run's log and the fleet (ADR 0032).
 - [S-13] One protobuf/ConnectRPC API contract serving GUI, CLI and agents, with
   operation-level editing, `validate`, and `plan`.
 - [S-14] React + React Flow visual editor driving that API: full drag-and-drop authoring,
