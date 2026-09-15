@@ -73,7 +73,9 @@ func (t *processTree) adopt(c *exec.Cmd) error {
 	if _, err := windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
+		// The Win32 call takes the struct as an untyped pointer and its size;
+		// there is no typed binding for it in x/sys/windows to use instead.
+		uintptr(unsafe.Pointer(&info)), //nolint:gosec // G103: SetInformationJobObject's signature requires it
 		uint32(unsafe.Sizeof(info)),
 	); err != nil {
 		_ = windows.CloseHandle(job)

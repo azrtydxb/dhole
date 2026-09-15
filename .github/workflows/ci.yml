@@ -16,7 +16,9 @@ jobs:
   gate:
     name: gate (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # 40, not 20: lint now runs once per GOOS (about six minutes cold), and the
+    # gate had never before reached test, test-race and conformance in CI.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -31,8 +33,42 @@ jobs:
           check-latest: true
       - name: install golangci-lint
         # CI runs the same `make check` a developer runs, so the linter is
-        # installed rather than invoked through a separate action.
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+        # installed rather than invoked through a separate action — at the
+        # version the Makefile pins, so the two cannot drift apart again.
+        run: go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(make -s golangci-lint-version)"
+      - name: install buf
+        # `make check` runs buf lint and buf breaking; neither is on a runner.
+        run: go install "github.com/bufbuild/buf/cmd/buf@$(make -s buf-version)"
+      - name: install helm 4
+        # The chart tests render NOTES.txt with a client-side dry-run install,
+        # which only helm 4 does without a cluster; the runner image carries
+        # helm 3, which asks the API server first and fails. The test FAILS
+        # rather than skips on helm 3 when CI is set, so this cannot quietly
+        # stop mattering.
+        env:
+          HELM_VERSION: v4.1.1
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) arch=amd64; sum=5d4c7623283e6dfb1971957f4b755468ab64917066a8567dd50464af298f4031 ;;
+            aarch64) arch=arm64; sum=02a5fb7742469d2d132e24cb7c3f52885894043576588c6788b6813297629edd ;;
+            *) echo "::error::no pinned helm checksum for $(uname -m)"; exit 1 ;;
+          esac
+          curl -sSLo /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz"
+          echo "${sum}  /tmp/helm.tgz" | sha256sum -c -
+          tar -xzf /tmp/helm.tgz -C /tmp
+          sudo install -m 0755 "/tmp/linux-${arch}/helm" /usr/local/bin/helm
+          helm version --short
+      - name: fetch main for buf breaking
+        # buf breaking compares against the local `main` branch. A pull
+        # request's checkout has no such branch, and the Makefile reads a
+        # missing one as "main has no proto tree yet" and skips the check —
+        # a skip that would pass every breaking change a PR could make. On a
+        # push to main the branch is the checkout itself and is already here.
+        run: |
+          if ! git rev-parse --verify -q refs/heads/main >/dev/null; then
+            git fetch --no-tags --depth=1 origin main:main
+          fi
       - name: check
         run: make check
       - name: test

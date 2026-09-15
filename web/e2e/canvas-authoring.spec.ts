@@ -104,6 +104,7 @@ async function dragPort(page: Page, from: string, to: string): Promise<void> {
   const target = page.getByTestId(to);
   await expect(source).toBeVisible();
   await expect(target).toBeVisible();
+  await bringIntoReach(page, [from, to]);
 
   const a = await source.boundingBox();
   const b = await target.boundingBox();
@@ -122,6 +123,43 @@ async function dragPort(page: Page, from: string, to: string): Promise<void> {
   }
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
   await page.mouse.up();
+}
+
+/** bringIntoReach makes sure a pointer at the centre of each handle lands ON
+ * that handle, zooming the canvas out with its own control until it does.
+ *
+ * "Visible" is not enough. A step added below the last one can be drawn under
+ * the canvas's hint bar or the diagnostics drawer, where the handle is in the
+ * DOM and partly on screen but a drop at its centre lands on the overlay —
+ * which React Flow reads as a drop on nothing, so no connection is attempted
+ * and the refusal under test is never produced. Whether it is covered depends
+ * on a few pixels of font metrics, so the suite failed on some machines and
+ * not others. A person would zoom out; so does this. */
+async function bringIntoReach(page: Page, testIds: string[]): Promise<void> {
+  const reachable = () =>
+    page.evaluate((ids: string[]) => {
+      return ids.every((id) => {
+        const handle = document.querySelector(`[data-testid="${id}"]`);
+        if (handle === null) {
+          return false;
+        }
+        const box = handle.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        );
+        return hit !== null && handle.contains(hit);
+      });
+    }, testIds);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (await reachable()) {
+      return;
+    }
+    await page.getByRole("button", { name: "zoom out" }).click();
+  }
+  expect(await reachable(), `${testIds.join(", ")} never came into reach`).toBe(
+    true,
+  );
 }
 
 /** setProperty sets one scalar property of one step through the canvas. */

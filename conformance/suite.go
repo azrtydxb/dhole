@@ -356,17 +356,19 @@ func startHarness(ctx context.Context, cfg Config, root string) (*harness, error
 // engine starts. A registration published into an empty room is lost, and the
 // suite would blame the engine for it.
 func (h *harness) subscribe(ctx context.Context) error {
-	statuses, err := h.plane.SubscribeEphemeral(ctx, "job.status.>", h.onStatus)
+	// Statuses and logs on ONE subscription, because the order between them
+	// is something cases assert on: an engine publishes a step's chunks and
+	// then its terminal status, and a case that reads the live log when the
+	// status arrives is asking what the engine sent before it. The client
+	// delivers each subscription on its own goroutine, so with two of them a
+	// status could be handled ahead of a chunk published earlier — and on a
+	// fast Linux runner dispatch-and-success failed a correct engine with "no
+	// LogChunk arrived" every night.
+	jobs, err := h.plane.SubscribeEphemeralOnSubjects(ctx, "job.>", h.onJob)
 	if err != nil {
-		return fmt.Errorf("conformance: subscribing to job.status.>: %w", err)
+		return fmt.Errorf("conformance: subscribing to job.>: %w", err)
 	}
-	h.stop = append(h.stop, statuses)
-
-	logs, err := h.plane.SubscribeEphemeral(ctx, "job.logs.>", h.onLog)
-	if err != nil {
-		return fmt.Errorf("conformance: subscribing to job.logs.>: %w", err)
-	}
-	h.stop = append(h.stop, logs)
+	h.stop = append(h.stop, jobs)
 
 	regs, err := h.plane.SubscribeEphemeral(ctx, bus.SubjectEngineRegistration(), h.onRegistration)
 	if err != nil {
@@ -474,6 +476,18 @@ func (h *harness) queuedDispatches(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	return info.State.Msgs, nil
+}
+
+// onJob routes the engine-to-plane job subjects, in the order they arrived.
+// Everything else under job. — the suite's own dispatches echoed back, and
+// acceptance requests, which have a subscriber of their own — is not for it.
+func (h *harness) onJob(subject string, data []byte) {
+	switch {
+	case strings.HasPrefix(subject, "job.status."):
+		h.onStatus(data)
+	case strings.HasPrefix(subject, "job.logs."):
+		h.onLog(data)
+	}
 }
 
 func (h *harness) onStatus(data []byte) {

@@ -635,14 +635,28 @@ func (c *identityCache) of(rootfs string) (string, error) {
 // /dev/kvm inside the guest, find nothing, and fail in a way that reads as its
 // own bug.
 func nestedVirtAvailable() bool {
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		return false
-	}
-	for _, param := range []string{
+	return nestedVirtAvailableAt("/dev/kvm", []string{
 		"/sys/module/kvm_intel/parameters/nested",
 		"/sys/module/kvm_amd/parameters/nested",
 		"/sys/module/kvm/parameters/nested",
-	} {
+	})
+}
+
+// nestedVirtAvailableAt is nestedVirtAvailable with the device and the module
+// parameters named, so both refusals can be tested on a host without KVM.
+//
+// The device is OPENED, read-write as a hypervisor opens it, rather than
+// stat'ed. A /dev/kvm that exists but that this process may not open — root's,
+// with no group access, as on a stock GitHub runner — is no hypervisor for
+// this engine, and advertising nesting on it promised a guest what the host
+// could not even give the engine.
+func nestedVirtAvailableAt(kvm string, params []string) bool {
+	dev, err := os.OpenFile(filepath.Clean(kvm), os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	_ = dev.Close()
+	for _, param := range params {
 		b, err := os.ReadFile(filepath.Clean(param))
 		if err != nil {
 			continue

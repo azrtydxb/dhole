@@ -2430,6 +2430,24 @@ Interfaces: produces `dynamic.Generator` step type emitting a `*dholev1.Pipeline
 - [x] Implement `generator.go` and `Splice`, recording the realised fragment in the event log so replay is deterministic, and `GeneratorNode.tsx`.
 - [x] Fold the record in the SCHEDULER, which is where determinism is observable: `runState` collects every realised fragment and `Advance` splices them into the pinned definition before building the DAG. Without it a restarted plane derived the authored graph, saw the generator already succeeded, and COMPLETED the run while the steps it realised had never run — green and wrong. A fragment that no longer splices is an error, never a fall back to the authored graph.
 - [x] Run `go test ./internal/dynamic && npx playwright test` — expect PASS. Commit.
+- [ ] **A pipeline can carry a `builtin:generator` step that `dhole serve` cannot
+      run.** Found 2026-09-15 reading the e2e web server's log, which says
+      `no step type is registered for "builtin:generator"` for the step
+      `fan-out` of `generator-run-1`. The generator run the e2e seeder
+      writes holds RUN_CREATED and a realised fragment but no verdict for the
+      generator step itself, so the plane's scheduler dispatches that step,
+      `builtins.execute` has no case for `dynamic.PluginRef`, and the step is
+      failed in the log — loudly, which is the right failure. The suite still
+      passes because the run view draws the realised fragment either way. It
+      is not an e2e wiring gap: the served binary has no generator step type,
+      and the seeder and `generator-node.spec.ts` both say so ("no generator
+      step is dispatched by the plane yet"). What is undecided is where a
+      generator's fragment comes FROM when it runs on the plane — `dynamic.Options.Emit`
+      is a Go function, and nothing in the contract names a plugin or engine
+      that produces one — so this needs a decision before code. Until then,
+      saving a pipeline with a `builtin:generator` step should at least be
+      refused or flagged by validation rather than accepted and failed at run
+      time.
 
 ## Task 56: Multiplayer editing
 
