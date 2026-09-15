@@ -877,6 +877,15 @@ take it; the control plane checks for that on every sweep and records
 `STEP_UNSCHEDULABLE` with the reason, leaving the dispatch queued so an engine
 that returns runs it as the same attempt.
 
+A dispatch that engines CAN run and none has accepted within the lease TTL is
+recorded too, as `STEP_WAITING`, with a cause read from the engines' heartbeats:
+`capacity` when every matching engine lists as many jobs as it has slots, and
+`unconsumed` — naming the dispatch subject — when one of them has a free slot
+and has not taken it: its consumer is not fetching, it bound the queue under
+another name, or it cannot reach a plane to confirm the dispatch. An engine
+that lists in `in_flight` exactly what it is running is what makes the two
+tell apart.
+
 An engine that finds itself holding a job whose fence is no longer valid must
 stop that job. It has been superseded, and its output would be discarded anyway.
 

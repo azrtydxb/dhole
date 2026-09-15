@@ -64,6 +64,28 @@ import (
 // one — and this one belongs to the same log as runstore's own.
 const StepUnschedulable runstore.EventType = "STEP_UNSCHEDULABLE"
 
+// StepWaiting records why a dispatched step that engines CAN run has not been
+// taken by any of them within the heartbeat window (ADR 0031).
+//
+// STEP_UNSCHEDULABLE covers a waiting dispatch nothing matches. This covers the
+// two cases it could not see, which look the same from the run and have
+// opposite remedies: every matching engine is busy (WaitingForCapacity — add
+// slots, or wait), or a matching engine has room and is not taking it
+// (WaitingUnconsumed — its consumer is not fetching, or it cannot reach a plane
+// to confirm the dispatch). It records and changes nothing: the dispatch stays
+// queued as the same attempt. Stored values are a persistence contract.
+const StepWaiting runstore.EventType = "STEP_WAITING"
+
+// The causes a STEP_WAITING names.
+const (
+	// WaitingForCapacity: every engine able to run the step is using every
+	// slot it has.
+	WaitingForCapacity = "capacity"
+	// WaitingUnconsumed: an engine able to run the step has a free slot and
+	// has not taken the dispatch.
+	WaitingUnconsumed = "unconsumed"
+)
+
 // StepPolicyDenied records that policy refused to let a step run, and which
 // rule refused it.
 //
@@ -1209,6 +1231,9 @@ func (s *Scheduler) surfaceOne(ctx context.Context, w lease.Waiting, instances [
 	// read must have started from an offer older than the grace window, and
 	// dispatch refuses to begin one past half of it.
 	abandonedAge := s.now().Sub(w.OfferedAt) > s.offerGrace()
+	// The same window decides when a dispatch engines can run has waited long
+	// enough to say why none has taken it.
+	waitedAge := abandonedAge
 	state, err := s.load(ctx, w.TenantID, w.RunID)
 	if err != nil {
 		return err
@@ -1257,10 +1282,72 @@ func (s *Scheduler) surfaceOne(ctx context.Context, w lease.Waiting, instances [
 		return nil
 	}
 	req := s.requirements(step)
-	if len(Match(req, instances)) > 0 {
-		return nil // waiting for a slot, which is what a queue is for
+	matched := Match(req, instances)
+	if len(matched) == 0 {
+		return s.recordUnschedulable(ctx, w.TenantID, w.RunID, w.StepID, Explain(req, instances), state)
 	}
-	return s.recordUnschedulable(ctx, w.TenantID, w.RunID, w.StepID, Explain(req, instances), state)
+	// Engines can run it. Inside the heartbeat window one may be about to take
+	// it; past the window, the run says why nobody has (ADR 0031).
+	if !waitedAge {
+		return nil
+	}
+	return s.recordWaiting(ctx, w.TenantID, w.RunID, step, matched, state)
+}
+
+// recordWaiting writes, once per cause, why a dispatch engines can run has not
+// been taken by any of them.
+//
+// The split is read off the engines' last heartbeats, which list the jobs each
+// has confirmed. Every slot of every matching engine busy is a queue doing its
+// job. A free slot on any of them, a whole heartbeat window after the dispatch
+// went out, is an engine that is not taking work it could run: its consumer is
+// not fetching, it bound its queue under another name, or it cannot reach a
+// plane to confirm the dispatch. An engine holding a dispatch for the length of
+// one confirmation round trip does not list it yet, which is why this waits a
+// window rather than a moment.
+func (s *Scheduler) recordWaiting(
+	ctx context.Context, tenantID, runID string, step *dholev1.Step,
+	matched []registry.Instance, state *runState,
+) error {
+	slots, busy := 0, 0
+	for _, e := range matched {
+		n := max(e.Slots, 1)
+		slots += n
+		busy += min(len(e.InFlight), n)
+	}
+	cause := WaitingForCapacity
+	reason := fmt.Sprintf("%d engine(s) can run this step and %d of %d slot(s) are busy; "+
+		"the dispatch waits in the queue for one to free", len(matched), busy, slots)
+	if busy < slots {
+		cause = WaitingUnconsumed
+		reason = fmt.Sprintf("%d engine(s) can run this step with %d free slot(s), and none has taken the "+
+			"dispatch in %s: nothing is consuming %s, or the engines that fetch it cannot reach a control "+
+			"plane to confirm it", len(matched), slots-busy, s.offerGrace(), dispatchSubject(s.tier, step))
+	}
+	if state.waiting[step.GetId()] == cause {
+		return nil
+	}
+	payload, err := MarshalWaitingReason(WaitingReason{Cause: cause, Reason: reason})
+	if err != nil {
+		return err
+	}
+	return s.append(ctx, tenantID, runstore.Event{
+		RunID:   runID,
+		StepID:  step.GetId(),
+		Attempt: state.attempts[step.GetId()],
+		Type:    StepWaiting,
+		Payload: payload,
+	})
+}
+
+// dispatchSubject is the work-queue subject a step is dispatched on: the
+// tier's capability subject, narrowed to the engine kind the step names.
+func dispatchSubject(tier string, step *dholev1.Step) string {
+	capsHash := engine.CapsHash(step.GetCapabilities())
+	if kind := step.GetEngineType(); kind != "" {
+		return bus.SubjectDispatchKind(tier, capsHash, kind)
+	}
+	return bus.SubjectDispatch(tier, capsHash)
 }
 
 // withdrawAbandoned removes an offer whose dispatch never committed and
@@ -1521,6 +1608,9 @@ type runState struct {
 	terminal      map[string]runstore.EventType
 	outputs       map[string][]*dholev1.OutputRef
 	unschedulable map[string]string
+	// waiting is the cause of each step's latest STEP_WAITING since its latest
+	// dispatch, so a sweep does not repeat it.
+	waiting map[string]string
 	// failedAt is when a step's latest attempt failed, which is what a
 	// backoff is measured from. It comes off the event, not the clock,
 	// because a control plane that restarts mid-backoff must resume the wait
@@ -1561,6 +1651,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		terminal:      map[string]runstore.EventType{},
 		outputs:       map[string][]*dholev1.OutputRef{},
 		unschedulable: map[string]string{},
+		waiting:       map[string]string{},
 		failedAt:      map[string]time.Time{},
 		awaiting:      map[string]bool{},
 		cacheHit:      map[string]bool{},
@@ -1605,6 +1696,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			// is now genuinely stuck would be the one the log says nothing
 			// about.
 			delete(state.unschedulable, e.StepID)
+			delete(state.waiting, e.StepID)
 		case runstore.StepSucceeded:
 			state.terminal[e.StepID] = e.Type
 			status := &dholev1.JobStatus{}
@@ -1660,6 +1752,12 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 				return nil, fmt.Errorf("scheduler: run %q step %q: %w", runID, e.StepID, err)
 			}
 			state.unschedulable[e.StepID] = reason.Reason
+		case StepWaiting:
+			waiting, err := UnmarshalWaitingReason(e.Payload)
+			if err != nil {
+				return nil, fmt.Errorf("scheduler: run %q step %q: %w", runID, e.StepID, err)
+			}
+			state.waiting[e.StepID] = waiting.Cause
 		case runstore.StepReady:
 		}
 	}
@@ -2128,11 +2226,7 @@ func (s *Scheduler) dispatch(
 	// pulled the same job.dispatch.<tier>.<caps> queue. A step naming no kind
 	// keeps that subject byte for byte — it is what every engine subscribes
 	// to, including one built before this token existed.
-	capsHash := engine.CapsHash(step.GetCapabilities())
-	subject := bus.SubjectDispatch(s.tier, capsHash)
-	if kind := step.GetEngineType(); kind != "" {
-		subject = bus.SubjectDispatchKind(s.tier, capsHash, kind)
-	}
+	subject := dispatchSubject(s.tier, step)
 
 	err = s.store.WithTx(ctx, func(tx runstore.Tx) error {
 		// A dispatch this slow is abandoned rather than committed. The sweeper
@@ -2604,6 +2698,22 @@ type Dispatched struct {
 // was ready could not be placed on any engine.
 type Unschedulable struct {
 	Reason string `json:"reason"`
+}
+
+// WaitingReason is the payload of a STEP_WAITING event.
+type WaitingReason struct {
+	// Cause is WaitingForCapacity or WaitingUnconsumed.
+	Cause string `json:"cause"`
+	// Reason is the sentence a person reads.
+	Reason string `json:"reason"`
+}
+
+// MarshalWaitingReason encodes the STEP_WAITING payload.
+func MarshalWaitingReason(w WaitingReason) ([]byte, error) { return marshalPayload(w) }
+
+// UnmarshalWaitingReason decodes the STEP_WAITING payload.
+func UnmarshalWaitingReason(b []byte) (WaitingReason, error) {
+	return unmarshalPayload[WaitingReason](b, string(StepWaiting))
 }
 
 // PolicyDenied is the payload of a STEP_POLICY_DENIED event: which rule

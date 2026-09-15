@@ -2041,6 +2041,44 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       (`TestTheSweeperWithdrawsNoOfferThatWasDispatchedOrIsStillYoung`), and both
       are true of a plane from before ADR 0029. `docs/wire-contract.md` has a
       "Rolling upgrades" paragraph.
+- [x] **A dispatch nobody fetches waits without a reason.** Left open by "Work
+      queued behind a busy engine is declared lost before anyone could start it"
+      ("a capable engine whose consumer never fetches leaves a dispatch waiting
+      without a reason, which is the next item's territory"), and not taken up by
+      the item after it. `surfaceStranded` speaks only when NO engine matches a
+      waiting dispatch; a matching engine that never fetches — a dead pump, a
+      queue bound under the wrong name, an engine that cannot reach a plane to
+      confirm — and a matching engine that is simply full are indistinguishable
+      in the run log from a step that is running. The fix (ADR 0031): a waiting
+      offer older than `offerGrace` whose step matches registered engines records
+      `STEP_WAITING` with cause `capacity` when every matching engine's last
+      heartbeat lists as many jobs as it has slots, and `unconsumed` — naming the
+      dispatch subject — when one has a free slot. Recorded once per cause,
+      cleared by STEP_DISPATCHED; the dispatch stays queued. Files:
+      `internal/scheduler/scheduler.go`, `internal/scheduler/waiting_test.go`,
+      `docs/wire-contract.md`. Interfaces: produces `scheduler.StepWaiting`,
+      `scheduler.WaitingReason{Cause, Reason}`, `scheduler.WaitingForCapacity`,
+      `scheduler.WaitingUnconsumed`, `scheduler.MarshalWaitingReason` and
+      `scheduler.UnmarshalWaitingReason`; consumes `lease.Manager.Unaccepted`,
+      `scheduler.Fleet.Instances` and `registry.Instance.InFlight`. Tests:
+      `TestADispatchMatchingEnginesHaveNotTakenSaysNothingIsConsumingItsQueue`
+      (expect FAIL "a dispatch that matching engines with free slots never took
+      said nothing about why it waits") and
+      `TestADispatchWaitingForBusyEnginesSaysItWaitsForCapacity`.
+      CLOSED 2026-09-15 as above. `surfaceOne` calls `recordWaiting` for an
+      offer older than `offerGrace` whose step matches; slots are
+      `max(Slots, 1)` per engine and busy is `min(len(InFlight), slots)`; the fold
+      keeps `state.waiting[step]` (the cause) and STEP_DISPATCHED clears it;
+      `dispatchSubject` is shared with `dispatch`. Red first: "a dispatch that
+      matching engines with free slots never took said nothing about why it
+      waits" and "a dispatch waiting behind busy engines said nothing about
+      why". The tests move the scheduler clock across the window. Mutations,
+      each red: no record; no age window ("a dispatch still inside the heartbeat
+      window was reported waiting"); always unconsumed; always capacity; no
+      dedup; dedup ignoring the cause ("a wait whose cause changed was not
+      recorded again"); the cause not folded. Not killed: dropping the clear on
+      STEP_DISPATCHED, which only a second dispatch of the same step after a
+      recorded wait exercises. `docs/wire-contract.md` describes the event.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
