@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,12 +53,16 @@ func main() {
 	if err := os.Setenv("PATH", guestPath); err != nil {
 		fatal(fmt.Errorf("set the guest PATH: %w", err))
 	}
-	if err := os.MkdirAll(vmwire.SandboxRoot, 0o755); err != nil {
+	// The sandbox is created 0750 and its files 0600, the modes the process
+	// executor uses on a host. Nothing wider is needed: the agent is PID 1 and
+	// root, every command it runs inherits that uid, and no other user exists
+	// in the guest to share a file with.
+	if err := os.MkdirAll(vmwire.SandboxRoot, 0o750); err != nil {
 		fatal(fmt.Errorf("create the sandbox root: %w", err))
 	}
-	if err := serve(); err != nil {
-		fatal(err)
-	}
+	// serve returns only when it cannot go on, so what it returns is always
+	// an error worth reporting.
+	fatal(serve())
 }
 
 // fatal reports and then parks rather than exiting. A PID 1 that exits panics
@@ -81,7 +86,11 @@ func mountGuestFilesystems() {
 		{"devtmpfs", "/dev", "devtmpfs"},
 		{"tmpfs", "/tmp", "tmpfs"},
 	} {
-		if err := os.MkdirAll(m.target, 0o755); err != nil {
+		// A mount point's own mode is hidden by the root of whatever is
+		// mounted on it (proc and sysfs 0555, devtmpfs 0755, tmpfs 1777), so
+		// the tightest mode is the right one: it is only ever visible if the
+		// mount failed.
+		if err := os.MkdirAll(m.target, 0o750); err != nil {
 			fmt.Fprintf(os.Stderr, "dhole-vm-agent: mkdir %s: %v\n", m.target, err)
 			continue
 		}
@@ -197,6 +206,7 @@ func (a *agent) execute(c *vmwire.Conn, req vmwire.Request) error {
 	if err != nil {
 		return err
 	}
+	// nosemgrep: dangerous-exec-command
 	cmd := exec.Command(req.Args[0], req.Args[1:]...) // #nosec G204 -- running the caller's command IS the job
 	cmd.Dir = dir
 	cmd.Env = environ(req.Env)
@@ -318,10 +328,10 @@ func (a *agent) put(c *vmwire.Conn, req vmwire.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create the parents of %q: %w", req.Name, err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644) // #nosec G304 -- resolve() confined it to the sandbox root
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- resolve() confined it to the sandbox root
 	if err != nil {
 		return err
 	}
@@ -374,7 +384,7 @@ func (a *agent) mkdir(req vmwire.Request) error {
 	if err != nil {
 		return err
 	}
-	return os.MkdirAll(path, 0o755)
+	return os.MkdirAll(path, 0o750)
 }
 
 func (a *agent) signalAll(name string) error {
@@ -448,9 +458,12 @@ func exitCode(state *os.ProcessState, waitErr error) int32 {
 		return int32(128 + status.Signal()) // #nosec G115 -- signal numbers are below 64
 	}
 	code := state.ExitCode()
-	if code < 0 {
+	if code < 0 || code > math.MaxInt32 {
 		// Never negative on the wire: a negative int32 sign-extends to ten
-		// bytes as a varint and hangs the decoder on the far side.
+		// bytes as a varint and hangs the decoder on the far side. Nor above
+		// an int32, which a Linux exit status (0-255) never is, so a value
+		// out there is not an exit code and is reported as a failure rather
+		// than truncated into some other number.
 		return 1
 	}
 	return int32(code)
