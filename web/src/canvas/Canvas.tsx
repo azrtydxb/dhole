@@ -563,7 +563,13 @@ export function Canvas({
         />
       )}
 
-      {refusal !== null && (
+      {/* Standalone only. Embedded, the refusal is drawn once, over the
+          canvas, below: rendering it here as well put two role="alert"
+          regions with the same sentence on screen for one refusal, so a
+          screen reader announced it twice and a sighted user saw it twice —
+          once where they dropped the wire and once at the bottom of a rail
+          they may have scrolled away from. */}
+      {variant === "standalone" && refusal !== null && (
         <p data-testid="edge-error" role="alert" style={{ color: "#c53030" }}>
           {refusal}
         </p>
@@ -598,9 +604,11 @@ export function Canvas({
         {/* The authoring controls belong in the left rail, which this
             component does not own. A portal puts them there without lifting
             the whole edit state out of this file: the controls and the
-            mutations they drive stay together, which is what keeps a refused
-            operation reported next to the button that caused it. */}
+            mutations they drive stay together. */}
         {authoringHost !== null && createPortal(authoring, authoringHost)}
+        {/* The ONE place an embedded canvas reports a refusal: over the graph,
+            where a drag was just dropped, and whether or not the rail is
+            mounted or scrolled into view. The authoring block leaves it out. */}
         {refusal !== null && (
           <p
             data-testid="edge-error"
