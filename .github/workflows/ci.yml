@@ -16,7 +16,9 @@ jobs:
   gate:
     name: gate (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # 40, not 20: lint now runs once per GOOS (about six minutes cold), and the
+    # gate had never before reached test, test-race and conformance in CI.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +36,19 @@ jobs:
         # installed rather than invoked through a separate action — at the
         # version the Makefile pins, so the two cannot drift apart again.
         run: go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(make -s golangci-lint-version)"
+      - name: install buf
+        # `make check` runs buf lint and buf breaking; neither is on a runner.
+        run: go install "github.com/bufbuild/buf/cmd/buf@$(make -s buf-version)"
+      - name: fetch main for buf breaking
+        # buf breaking compares against the local `main` branch. A pull
+        # request's checkout has no such branch, and the Makefile reads a
+        # missing one as "main has no proto tree yet" and skips the check —
+        # a skip that would pass every breaking change a PR could make. On a
+        # push to main the branch is the checkout itself and is already here.
+        run: |
+          if ! git rev-parse --verify -q refs/heads/main >/dev/null; then
+            git fetch --no-tags --depth=1 origin main:main
+          fi
       - name: check
         run: make check
       - name: test

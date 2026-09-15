@@ -39,8 +39,12 @@ GOLANGCI_LINT_VERSION := v2.13.2
 # on the machine nobody was sitting at. Each pass cross-typechecks; nothing is
 # compiled or executed for the target, so all three run on any host.
 LINT_GOOS   ?= linux darwin windows
+# The buf CI installs for `buf lint` and `buf breaking`. The gate had never
+# reached its buf steps in CI, because lint failed first; when it did, buf was
+# not installed at all.
+BUF_VERSION := v1.72.0
 
-.PHONY: check lint golangci-lint-version web-check web-build web-e2e test test-race test-integration conformance build clean
+.PHONY: check lint golangci-lint-version buf-version web-check web-build web-e2e test test-race test-integration conformance build clean
 .PHONY: acceptance acceptance-ci acceptance-automation acceptance-agent
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
@@ -82,6 +86,10 @@ lint:
 ## golangci-lint-version: the pinned linter version, for CI to install.
 golangci-lint-version:
 	@echo $(GOLANGCI_LINT_VERSION)
+
+## buf-version: the pinned buf version, for CI to install.
+buf-version:
+	@echo $(BUF_VERSION)
 
 ## web-check: the web app's half of the gate — typecheck, lint, unit tests.
 ## It SKIPS when web/node_modules is absent rather than failing: `make check`
