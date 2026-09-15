@@ -80,12 +80,12 @@ func (m *MapSource) Value(_ context.Context, tenantID, name string) (string, err
 // the SAME way an engine's: mint a handle, redeem it over the endpoint this
 // process serves, hold the value for the duration of one call.
 //
-// The round trip looks redundant — this process has the value in its hand
-// before it issues the handle — and it is the point of ADR 0024. The
-// alternative is a second path by which a credential reaches running code,
-// exempt from the single-use rule, the expiry the issuer enforces, and the
-// refusal that names neither handle nor value. One path is worth one local
-// request against an in-memory broker.
+// The round trip looks redundant — this process could read the value out of
+// its own source — and it is the point of ADR 0024. The alternative is a
+// second path by which a credential reaches running code, exempt from the
+// single-use rule, the expiry the issuer enforces, and the refusal that names
+// neither handle nor value. One path is worth one request, answered by
+// whichever plane takes it (ADR 0031).
 //
 // Nothing here caches. A provider's key rotates without restarting the plane,
 // and a run that takes an hour does not hold a value for an hour.
@@ -101,7 +101,11 @@ type PlaneResolver struct {
 // the base the broker is served under: the resolver redeems on the step's
 // tenant's subject beneath it (ADR 0030), and one pointed elsewhere redeems
 // nothing, which is a start-up fault and reads as one.
+//
+// src is lent to b as the source the plane's own handles resolve from, apart
+// from the step source (ADR 0027): a handle of one kind never reads the other.
 func NewPlaneResolver(b *Broker, src Source, req Requester, subject string) *PlaneResolver {
+	b.lend(SourcePlane, src)
 	return &PlaneResolver{broker: b, source: src, req: req, subject: subject, ttl: planeHandleTTL}
 }
 
@@ -124,15 +128,25 @@ func (p *PlaneResolver) Resolve(ctx context.Context, tenantID, name string) (str
 		return "", errors.New("secrets: a name is required to resolve a secret")
 	}
 
-	value, err := p.source.Value(ctx, tenantID, name)
-	if err != nil {
-		return "", fmt.Errorf("secrets: the secret named %q: %w", name, err)
-	}
 	// Issued to the STEP's tenant, so the broker's own scoping is the same
-	// scoping the source was asked under.
-	ref, err := p.broker.Issue(tenantID, name, value, p.ttl)
+	// scoping the source is asked under when the handle is redeemed — by
+	// whichever plane answers (ADR 0031).
+	ref, err := p.broker.Issue(ctx, Scope{TenantID: tenantID}, Reference{
+		Source: SourcePlane, Secret: name, Binding: name,
+	}, p.ttl)
 	if err != nil {
 		return "", fmt.Errorf("secrets: issuing a handle for the secret named %q: %w", name, err)
 	}
-	return NewBusRedeemer(p.req, p.subject).Redeem(ctx, tenantID, ref)
+	value, err := NewBusRedeemer(p.req, p.subject).Redeem(ctx, tenantID, ref)
+	if err == nil {
+		return value, nil
+	}
+	// A refusal names nothing, by design. Whether the secret is simply not
+	// configured is a question this plane can answer about itself, and the
+	// answer is the named reason ADR 0024 asks for. Asked only on failure, so
+	// a successful call reads the source once.
+	if _, srcErr := p.source.Value(ctx, tenantID, name); srcErr != nil {
+		return "", fmt.Errorf("secrets: the secret named %q: %w", name, srcErr)
+	}
+	return "", err
 }

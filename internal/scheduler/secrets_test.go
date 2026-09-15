@@ -14,8 +14,10 @@ import (
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
+	"github.com/azrtydxb/dhole/internal/effects"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/outbox"
+	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
@@ -64,6 +66,9 @@ type secretHarnessOptions struct {
 	leases   func(lease.Manager) lease.Manager
 	builtins scheduler.BuiltinSteps
 	gate     scheduler.Gate
+	now      func() time.Time
+	// policy, when set, is the tier policy the step is judged under.
+	policy *policy.TierPolicy
 }
 
 func newSecretHarnessWith(
@@ -92,12 +97,20 @@ func newSecretHarnessWith(
 	ob := outbox.New(store, recorder, "test-plane")
 	fleet := staticFleet{instances: []registry.Instance{redeemingEngine("e1")}}
 	defs := staticDefs{pipeline: pipeline}
-	sched, err := scheduler.New(scheduler.Config{
+	cfg := scheduler.Config{
 		Store: store, Outbox: ob, Leases: manager, Fleet: fleet, Definitions: defs,
 		Tier: testTier, OS: "linux", Arch: "amd64",
 		Secrets: issuer, LeaseTTL: opts.ttl,
-		Builtins: opts.builtins, Gate: opts.gate,
-	})
+		Builtins: opts.builtins, Gate: opts.gate, Now: opts.now,
+	}
+	if opts.policy != nil {
+		engine, err := policy.New(tenantSource{tenantID: testTenant, p: *opts.policy}, &recordingAudit{})
+		require.NoError(t, err)
+		cfg.Policy = engine
+		cfg.Provenance = &staticProvenance{}
+		cfg.Revisions = staticRevisions{lockfile: map[string]string{}}
+	}
+	sched, err := scheduler.New(cfg)
 	require.NoError(t, err)
 
 	h := &harness{
@@ -161,7 +174,7 @@ func TestTheStoredDispatchCarriesHandlesAndNeverTheValue(t *testing.T) {
 		"a handle outlives the bound it is issued under")
 	require.Greater(t, ref.GetExpiresAt(), before.Unix())
 
-	value, err := broker.Redeem(ref.GetHandle())
+	value, err := broker.Redeem(ctx, ref.GetHandle())
 	require.NoError(t, err)
 	require.Equal(t, registryPassword, value, "the handle on the dispatch is not the one the broker issued")
 
@@ -275,7 +288,7 @@ func TestAnEndedAttemptsUnspentHandlesAreRevoked(t *testing.T) {
 
 			end.end(ctx, t, h, d)
 
-			_, err := broker.Redeem(d.GetSecrets()[0].GetHandle())
+			_, err := broker.Redeem(ctx, d.GetSecrets()[0].GetHandle())
 			require.Error(t, err, "the handle of an attempt that %s is still redeemable", end.name)
 		})
 	}
@@ -333,7 +346,7 @@ func TestHandlesIssuedForADispatchThatDidNotCommitAreRevoked(t *testing.T) {
 	issuer.mu.Lock()
 	defer issuer.mu.Unlock()
 	require.Len(t, issuer.issued, 1, "the dispatch never got as far as issuing, so this proves nothing")
-	_, err := broker.Redeem(issuer.issued[0].GetHandle())
+	_, err := broker.Redeem(ctx, issuer.issued[0].GetHandle())
 	require.Error(t, err, "a handle minted for a dispatch that never committed is still redeemable")
 }
 
@@ -398,4 +411,124 @@ func TestABuiltinStepDeclaringASecretIsRefused(t *testing.T) {
 			require.Empty(t, gate.armed, "a gate declaring secrets was armed as if they had been given")
 		})
 	}
+}
+
+// TestEveryRunTerminalPathRevokesTheRunsHandles: a run the scheduler closes on
+// its own may still have a sibling's dispatch sitting in a work queue with the
+// handles it was issued, and no status will ever come back for it to revoke
+// them by. Only an attempt's end and a cancel used to revoke anything, so the
+// credential stayed live until its expiry (ADR 0031). The handle issued here
+// for step "sibling" stands for exactly that dispatch.
+func TestEveryRunTerminalPathRevokesTheRunsHandles(t *testing.T) {
+	type path struct {
+		name  string
+		setup func(src *secrets.MapSource, p *dholev1.Pipeline, opts *secretHarnessOptions)
+		drive func(ctx context.Context, t *testing.T, h *harness)
+		ends  runstore.EventType
+	}
+	advance := func(ctx context.Context, t *testing.T, h *harness) {
+		t.Helper()
+		require.NoError(t, h.sched.Advance(ctx, testTenant, testRun))
+	}
+	clock := newClock()
+	for _, p := range []path{
+		{
+			name: "failed with its attempts exhausted",
+			setup: func(_ *secrets.MapSource, _ *dholev1.Pipeline, opts *secretHarnessOptions) {
+				opts.now = clock.now
+			},
+			drive: func(ctx context.Context, t *testing.T, h *harness) {
+				for range effects.RetryPolicy(pushPipeline().GetSteps()[0]).MaxAttempts {
+					advance(ctx, t, h)
+					h.drain(ctx, t)
+					h.failStep(ctx, t, "push")
+					clock.advance(effects.MaxBackoff + time.Minute)
+				}
+				advance(ctx, t, h)
+			},
+			ends: scheduler.RunFailed,
+		},
+		{
+			name: "failed by a policy denial",
+			setup: func(_ *secrets.MapSource, _ *dholev1.Pipeline, opts *secretHarnessOptions) {
+				opts.policy = &policy.TierPolicy{Revision: "secrets/1", Rules: []policy.Rule{{
+					ID: "no-harbor", Expression: `input.secret_name != "harbor-robot"`, Reason: "not this tier",
+				}}}
+			},
+			drive: advance,
+			ends:  scheduler.RunFailed,
+		},
+		{
+			name:  "failed for a secret it cannot be given",
+			setup: func(*secrets.MapSource, *dholev1.Pipeline, *secretHarnessOptions) {},
+			drive: advance,
+			ends:  scheduler.RunFailed,
+		},
+		{
+			name: "failed for a builtin step declaring a secret",
+			setup: func(_ *secrets.MapSource, p *dholev1.Pipeline, opts *secretHarnessOptions) {
+				p.GetSteps()[0].PluginRef = "builtin:llm"
+				opts.builtins = &takingBuiltins{}
+			},
+			drive: advance,
+			ends:  scheduler.RunFailed,
+		},
+		{
+			name:  "completed",
+			setup: func(*secrets.MapSource, *dholev1.Pipeline, *secretHarnessOptions) {},
+			drive: func(ctx context.Context, t *testing.T, h *harness) {
+				advance(ctx, t, h)
+				require.Equal(t, []string{"push"}, h.drain(ctx, t))
+				d := h.latestDispatch(t, "push")
+				h.report(ctx, t, h.sched, d, dholev1.Phase_PHASE_ACCEPTED)
+				h.report(ctx, t, h.sched, d, dholev1.Phase_PHASE_SUCCEEDED)
+				advance(ctx, t, h)
+			},
+			ends: runstore.RunCompleted,
+		},
+	} {
+		t.Run(p.name, func(t *testing.T) {
+			ctx := testContext(t)
+			src := secrets.NewMapSource()
+			src.Set(testTenant, "sibling-secret", registryPassword)
+			if p.name != "failed for a secret it cannot be given" {
+				src.Set(testTenant, "harbor-robot", registryPassword)
+			}
+			pipeline := pushPipeline()
+			opts := secretHarnessOptions{}
+			p.setup(src, pipeline, &opts)
+			broker := secrets.NewBroker()
+			h := newSecretHarnessWith(ctx, t, pipeline, secrets.NewStepIssuer(broker, src), opts)
+
+			sibling := secrets.Reference{Source: secrets.SourceStep, Secret: "sibling-secret", Binding: "SIBLING"}
+			queued, err := broker.Issue(ctx,
+				secrets.Scope{TenantID: testTenant, RunID: testRun, StepID: "sibling", Attempt: 1}, sibling, time.Minute)
+			require.NoError(t, err)
+			elsewhere, err := broker.Issue(ctx,
+				secrets.Scope{TenantID: testTenant, RunID: "run-2", StepID: "sibling", Attempt: 1}, sibling, time.Minute)
+			require.NoError(t, err)
+
+			p.drive(ctx, t, h)
+			events, err := h.store.Replay(ctx, testTenant, testRun)
+			require.NoError(t, err)
+			var ended bool
+			for _, e := range events {
+				ended = ended || e.Type == p.ends
+			}
+			require.True(t, ended, "the run never reached %s, so this proves nothing: %v", p.ends, eventTypes(events))
+
+			_, err = broker.RedeemFor(ctx, testTenant, queued.GetHandle())
+			require.Error(t, err, "a queued sibling's handle outlived a run that %s", p.name)
+			_, err = broker.RedeemFor(ctx, testTenant, elsewhere.GetHandle())
+			require.NoError(t, err, "closing one run revoked another run's handle")
+		})
+	}
+}
+
+func eventTypes(events []runstore.Event) []runstore.EventType {
+	out := make([]runstore.EventType, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.Type)
+	}
+	return out
 }

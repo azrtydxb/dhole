@@ -65,3 +65,35 @@ func TestNoStepSecretsMeansStepsCanBeGivenNone(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, source)
 }
+
+// TestASecretAccountIsNamedForATenantAndItsCredentialIsRead: the plane serves
+// a tenant's redemptions inside that tenant's own NATS account, and needs the
+// account's credential to. The credential is a URL carrying a password, so it
+// is read from an environment variable and never taken as an argument
+// (ADR 0031).
+func TestASecretAccountIsNamedForATenantAndItsCredentialIsRead(t *testing.T) {
+	t.Setenv("ACME_NATS_URL", "nats://tenant-acme:hunter2@nats:4222")
+
+	accounts, err := loadSecretAccounts([]string{"acme=ACME_NATS_URL"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"acme": "nats://tenant-acme:hunter2@nats:4222"}, accounts)
+
+	none, err := loadSecretAccounts(nil)
+	require.NoError(t, err)
+	require.Empty(t, none)
+
+	for _, spec := range []string{
+		"ACME_NATS_URL",         // no tenant
+		"=ACME_NATS_URL",        // empty tenant
+		"Not.A=ACME_NATS_URL",   // invalid tenant
+		"acme=",                 // no variable
+		"acme=NOT_SET_ANYWHERE", // unset variable
+	} {
+		_, err := loadSecretAccounts([]string{spec})
+		require.Error(t, err, "spec %q was accepted", spec)
+		require.Contains(t, err.Error(), "--secret-account")
+		require.NotContains(t, err.Error(), "hunter2", "a refusal repeated the credential")
+	}
+	_, err = loadSecretAccounts([]string{"acme=ACME_NATS_URL", "acme=ACME_NATS_URL"})
+	require.Error(t, err, "a tenant given two accounts")
+}

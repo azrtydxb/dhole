@@ -131,6 +131,7 @@ func TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	src := secrets.NewMapSource()
 	src.Set(tenantID, "harbor-robot", stepSecretValue)
+	src.Set("globex", "harbor-robot", "globex-value")
 	srv := startSecretPlane(ctx, t, dir, src)
 
 	// Observers on both subjects, answering nothing: the plane is the only
@@ -160,7 +161,8 @@ func TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd(t *testing.T) {
 	t.Cleanup(conn.Close)
 	redeemer := secrets.NewBusRedeemer(conn, bus.SubjectSecretRedeem())
 
-	mine, err := srv.Secrets().Issue(tenantID, "REGISTRY_PASSWORD", stepSecretValue, time.Minute)
+	harbor := secrets.Reference{Source: secrets.SourceStep, Secret: "harbor-robot", Binding: "REGISTRY_PASSWORD"}
+	mine, err := srv.Secrets().Issue(ctx, secrets.Scope{TenantID: tenantID}, harbor, time.Minute)
 	require.NoError(t, err)
 	_, err = redeemer.Redeem(ctx, "globex", mine)
 	require.Error(t, err, "tenant globex redeemed a handle the plane issued for tenant %s", tenantID)
@@ -168,7 +170,7 @@ func TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd(t *testing.T) {
 	_, err = redeemer.Redeem(ctx, tenantID, mine)
 	require.Error(t, err, "a handle presented on another tenant's subject stayed redeemable")
 
-	theirs, err := srv.Secrets().Issue("globex", "REGISTRY_PASSWORD", "globex-value", time.Minute)
+	theirs, err := srv.Secrets().Issue(ctx, secrets.Scope{TenantID: "globex"}, harbor, time.Minute)
 	require.NoError(t, err)
 	_, err = redeemer.Redeem(ctx, tenantID, theirs)
 	require.Error(t, err, "tenant %s redeemed a handle the plane issued for tenant globex", tenantID)

@@ -2471,11 +2471,16 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 	// A span left open is never exported, and the run would be missing from
 	// the trace precisely because it failed.
 	defer obs.EndRun(tenantID, runID)
-	return s.append(ctx, tenantID, runstore.Event{
+	if err := s.append(ctx, tenantID, runstore.Event{
 		RunID:   runID,
 		Type:    RunFailed,
 		Payload: payload,
-	})
+	}); err != nil {
+		return err
+	}
+	// A failed run's queued siblings still carry handles (ADR 0031).
+	s.revokeRunSecrets(ctx, tenantID, runID)
+	return nil
 }
 
 // complete closes a run that has nothing ready and nothing in flight.
@@ -2497,10 +2502,14 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 // is over either way.
 func (s *Scheduler) complete(ctx context.Context, tenantID, runID string) error {
 	defer obs.EndRun(tenantID, runID)
-	return s.append(ctx, tenantID, runstore.Event{
+	if err := s.append(ctx, tenantID, runstore.Event{
 		RunID: runID,
 		Type:  runstore.RunCompleted,
-	})
+	}); err != nil {
+		return err
+	}
+	s.revokeRunSecrets(ctx, tenantID, runID)
+	return nil
 }
 
 // append stamps an event with the current time and writes it. Events written

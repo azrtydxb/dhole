@@ -1235,7 +1235,7 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       .procoder/ask/decisions.md: `dhole serve` wires no dispatch policy, so none of this is
       evaluated on the single binary or the chart until one is chosen. Dispatch-time taint
       (`input.tainted`) is still never set; it is ADR 0015's propagation work, not a secrets item.
-- [ ] **A secret handle lives in the memory of the plane that issued it.** Left open by the
+- [x] **A secret handle lives in the memory of the plane that issued it.** Left open by the
       revocation item above; decided by ADR 0031. With `controlPlane.replicas` above one, a
       redemption answered by another replica is refused and spends nothing, and an attempt's
       end, or a cancel, processed by another replica revokes nothing. Files:
@@ -1255,12 +1255,41 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `TestAHandleIsSpentOnceWhicheverPlanesPresentItConcurrently` (`-count=20`),
       `TestAHandleRevokedOnOnePlaneIsRefusedOnAnother`, `TestAnExpiredSharedHandleIsRefused`,
       `TestTheHandleBucketHoldsNoSecretValue` (secrets, two brokers over one embedded bus).
-- [ ] **Every plane answers a redemption, and the engine takes whichever reply is first.**
+      CLOSED 2026-09-15. `secrets.Broker` records a handle through `secrets.Handles`; the
+      plane gives it `NewKVHandles` over bucket `dhole-secret-handles` (history 1, max age
+      `HandleRetention`, 30 minutes — an expiry beyond it is refused at issue). A record is
+      `{tenant_id, run_id, step_id, attempt, source, name, expires_at_unix_nano}` under key
+      `<tenant>.<sha256(run)[:16] or "plane">.<sha256(handle)>`: no value, no handle. Spend is a
+      delete at the read revision, so single use holds across planes; revocation deletes from any
+      plane; the value is read from the answering plane's lent source at redemption, and a value
+      beginning `ERR ` is refused there as well as at issue. Responders redeem under a context of
+      their own, not the start-up one (`TestARedemptionIsAnsweredAfterTheContextItWasServedUnderEnds`).
+      `Broker.Issue` now takes `(ctx, scope, Reference, ttl)`; the value-carrying `Issue`/`IssueFor`
+      are gone, and every test using them issues by reference. Also
+      `TestTwoPlanesShareTheirSecretHandles` (server, two distributed planes over one bus). Red
+      first: compile, "undefined: secrets.Reference"; behaviourally, with the broker's store
+      forced back to process memory: "a handle issued on plane A was refused by plane B", "plane A
+      revoked none of the attempt's handles plane B issued", "round 1: 0 planes redeemed one
+      single-use handle presented concurrently", and the server's "plane B refused a handle plane
+      A issued". Mutations, each red then restored and `cmp`-verified: store in memory (above);
+      spend without the revision (`-count=20`: "round 0: 2/5/8 planes redeemed one single-use
+      handle"); expiry check dropped ("a handle past its expiry was redeemed on another plane");
+      tenant check dropped ("tenant globex redeemed on plane B a handle plane A issued for acme");
+      the digest replaced by the raw handle ("the handle bucket holds a redeemable HANDLE"); the
+      step issuer recording the value as the name ("the handle bucket holds a secret VALUE");
+      revocation by attempt ignoring the attempt; revocation ignoring the tenant in the key
+      filter; the responder redeeming under the start-up context.
+- [x] **Every plane answers a redemption, and the engine takes whichever reply is first.**
       Decided by ADR 0031. Files: `internal/bus/nats.go`, `internal/secrets/secrets.go`.
       Interfaces: produces `(*bus.NATS).RespondRawSubjectQueue(ctx, subject, queue, fn)` and
       `secrets.RedeemQueue`; `secrets.SubjectResponder` requires it.
       Tests, red first: `TestExactlyOnePlaneAnswersARedemption` (secrets).
-- [ ] **A run the scheduler fails on its own leaves its queued siblings' handles live.** Left
+      CLOSED 2026-09-15. `ServeTenants`, `Serve` and `ServeAccount` join queue group
+      `dhole-secret-redeem` through `RespondRawSubjectQueue`; the plain `RespondRawSubject` stays
+      for its other callers. Red: mutation to a plain `Subscribe` fails
+      `TestExactlyOnePlaneAnswersARedemption` ("10 redemptions were answered 20 times across two
+      planes"); restored and `cmp`-verified.
+- [x] **A run the scheduler fails on its own leaves its queued siblings' handles live.** Left
       open by the revocation item above; decided by ADR 0031. Run-terminal paths: `RUN_FAILED`
       from attempts exhausted (a step that failed or timed out), a policy denial, a secret
       refusal or a `builtin:` secret refusal, all through `Scheduler.fail`; `RUN_COMPLETED`
@@ -1275,7 +1304,18 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       Tests, red first: `TestEveryRunTerminalPathRevokesTheRunsHandles` (scheduler: exhausted,
       policy denial, secret refusal, builtin secret refusal, completed),
       `TestAHandleOfARunClosedOutsideTheSchedulerIsRevokedBySweep` (secrets).
-- [ ] **A plane serves redemption only in its own NATS account.** Left open by the redemption
+      CLOSED 2026-09-15. `Scheduler.fail` and `Scheduler.complete` revoke the run after their
+      append; the plane's `sweepLoop` calls `Broker.RevokeClosedRuns(ctx, store.OpenRuns)` every
+      orphan-sweep tick, listing handles BEFORE the index. Also
+      `TestAPlaneSweepsTheHandlesOfARunNoLongerOpen` (server). Red, by hand-reverting: both calls
+      removed, every subtest "a queued sibling's handle outlived a run that <path>"; only
+      `fail`'s removed, the four failure subtests; only `complete`'s, "completed"; the sweep
+      call removed from `sweepLoop`, "a handle of a run that is no longer open survived the
+      plane's sweep"; the sweep ignoring the index ("revoked 3 handles"); the sweep re-reading
+      handles after the index ("revoked 2 handles" — the run created mid-sweep). Each restored
+      and `cmp`-verified. An approval denial and a halting `builtin:llm` step are revoked by the
+      sweep, within one tick, not at once.
+- [x] **A plane serves redemption only in its own NATS account.** Left open by the redemption
       subject item above; decided by ADR 0031. A tenant whose engines hold credentials for its
       own account (ADR 0014) requests where nothing answers. Files:
       `internal/secrets/secrets.go`, `internal/server/server.go`, `cmd/dhole/cli/serve.go`,
@@ -1285,6 +1325,16 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       `dhole serve --secret-account TENANT=ENVVAR`.
       Tests, red first: `TestATenantInItsOwnAccountRedeemsThroughTheEmbeddedServer` (server,
       a tenant account and tier user provisioned on the embedded server).
+      CLOSED 2026-09-15. `server.Config.SecretAccounts` opens one connection per tenant account
+      and serves `ServeAccount` there, the tenant pinned to the account whatever the subject
+      token, legacy subject included; `dhole serve --secret-account TENANT=ENVVAR` reads the URL
+      from the variable and never repeats it (`TestASecretAccountIsNamedForATenantAndItsCredentialIsRead`).
+      Red: with the call removed, "secrets: redeeming the reference bound to "REGISTRY_PASSWORD":
+      bus: request "secret.redeem": nats: no responders available for request"; with the account
+      responder redeeming by handle alone, "an engine in acme's account redeemed a handle issued
+      for globex". Restored and `cmp`-verified. LEFT OPEN: the chart has no value for
+      `--secret-account`, and dispatch into a tenant's own account is not wired either — the plane
+      still dials one bus URL — so this makes redemption reachable there, not the whole path.
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

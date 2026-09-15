@@ -27,6 +27,11 @@ func TestTheControlPlaneAnswersASecretRedemptionOnTheContractsSubject(t *testing
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
+		StepSecrets: func() secrets.Source {
+			src := secrets.NewMapSource()
+			src.Set("t1", "DHOLE_TEST_SECRET", "correcthorsebatterystaple")
+			return src
+		}(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, srv.Start(ctx))
@@ -36,7 +41,9 @@ func TestTheControlPlaneAnswersASecretRedemptionOnTheContractsSubject(t *testing
 		require.NoError(t, srv.Stop(stopCtx))
 	})
 
-	ref, err := srv.Secrets().Issue("t1", "DHOLE_TEST_SECRET", "correcthorsebatterystaple", time.Minute)
+	ref, err := srv.Secrets().Issue(ctx, secrets.Scope{TenantID: "t1"}, secrets.Reference{
+		Source: secrets.SourceStep, Secret: "DHOLE_TEST_SECRET", Binding: "DHOLE_TEST_SECRET",
+	}, time.Minute)
 	require.NoError(t, err)
 
 	// Redeemed the way an engine does it: over the bus, on the subject the
@@ -69,6 +76,11 @@ func TestTheLegacyRedemptionSubjectStillServesAnOlderEngine(t *testing.T) {
 		Mode:     server.ModeEmbedded,
 		StoreDSN: filepath.Join(dir, "dhole.db"),
 		BlobRoot: filepath.Join(dir, "state"),
+		StepSecrets: func() secrets.Source {
+			src := secrets.NewMapSource()
+			src.Set("t1", "DHOLE_TEST_SECRET", "correcthorsebatterystaple")
+			return src
+		}(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, srv.Start(ctx))
@@ -78,7 +90,9 @@ func TestTheLegacyRedemptionSubjectStillServesAnOlderEngine(t *testing.T) {
 		require.NoError(t, srv.Stop(stopCtx))
 	})
 
-	ref, err := srv.Secrets().Issue("t1", "DHOLE_TEST_SECRET", "correcthorsebatterystaple", time.Minute)
+	ref, err := srv.Secrets().Issue(ctx, secrets.Scope{TenantID: "t1"}, secrets.Reference{
+		Source: secrets.SourceStep, Secret: "DHOLE_TEST_SECRET", Binding: "DHOLE_TEST_SECRET",
+	}, time.Minute)
 	require.NoError(t, err)
 
 	conn, err := bus.Connect(ctx, srv.BusURL())

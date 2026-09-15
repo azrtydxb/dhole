@@ -45,6 +45,9 @@ type StepSecrets interface {
 	// Revoke forgets the unspent handles of exactly one attempt, when that
 	// attempt ends (ADR 0030).
 	Revoke(ctx context.Context, scope secrets.Scope)
+	// RevokeRun forgets the unspent handles of every attempt of one run, when
+	// the run ends (ADR 0031).
+	RevokeRun(ctx context.Context, tenantID, runID string)
 	// Discard forgets handles issued for a dispatch that never committed.
 	Discard(ctx context.Context, refs []*dholev1.SecretRef)
 }
@@ -156,9 +159,9 @@ func (s *Scheduler) secretRefs(
 }
 
 // revokeSecrets forgets the unspent handles of one attempt that has ended —
-// succeeded, failed, cancelled, or lost with its engine (ADR 0030). Handles
-// live in the memory of the plane that issued them, so on any other plane this
-// revokes nothing and the handle's expiry remains the backstop.
+// succeeded, failed, cancelled, or lost with its engine (ADR 0030). Handles are
+// shared by every plane, so whichever plane processes the end revokes them
+// (ADR 0031).
 func (s *Scheduler) revokeSecrets(ctx context.Context, tenantID, runID, stepID string, attempt uint32) {
 	if s.secrets == nil {
 		return
@@ -174,4 +177,17 @@ func (s *Scheduler) discardSecrets(ctx context.Context, refs []*dholev1.SecretRe
 		return
 	}
 	s.secrets.Discard(ctx, refs)
+}
+
+// revokeRunSecrets forgets the unspent handles of every attempt of a run the
+// scheduler has just closed — failed for exhausted attempts, a policy denial or
+// a secret refusal, or completed (ADR 0031). A run failed with a sibling's
+// dispatch still queued otherwise left that dispatch's credential live until
+// its expiry. A run closed by anything other than the scheduler is left to the
+// plane's sweep.
+func (s *Scheduler) revokeRunSecrets(ctx context.Context, tenantID, runID string) {
+	if s.secrets == nil {
+		return
+	}
+	s.secrets.RevokeRun(ctx, tenantID, runID)
 }

@@ -115,11 +115,41 @@ key is not readable by pipeline steps unless it is also configured here.
    every handle of the run, including those of a dispatch still waiting in a
    queue ([ADR 0030](../.procoder/adr/0030-a-secret-is-redeemed-on-its-tenants-subject-and-issued-under-policy.md)).
 
+5. When the run ends — failed, completed or cancelled, whatever ended it — every
+   handle of the run still unspent is revoked, including a sibling step's
+   dispatch still waiting in a queue. A run the scheduler or a cancel ends is
+   revoked at once; one ended by anything else, such as a denied approval, is
+   caught by the plane's sweep within seconds
+   ([ADR 0031](../.procoder/adr/0031-a-secret-handle-is-a-shared-reference-any-plane-redeems.md)).
+
 A retry gets new handles. A dispatch that waits longer than the handle's expiry
 has its redemption refused, fails, and is retried under its effect class.
-Handles live in the memory of the plane that issued them; on a deployment of
-several planes, one that did not issue a handle cannot revoke it, and the expiry
-is what bounds it.
+
+## Several control-plane replicas
+
+With `controlPlane.replicas` above one, any replica issues, redeems and revokes
+any handle. A handle is recorded in the JetStream KV bucket
+`dhole-secret-handles` as a reference — the tenant, run, step and attempt it was
+issued for, which source it resolves from, the secret's name and its expiry —
+under a key made of digests, so the bucket holds neither a value nor a handle an
+engine could present. The value is read from the answering replica's own
+source at the moment of redemption, which is why **every replica must be given
+the same `--secret` and `--model-secret` configuration**; the chart does this.
+Single use holds across replicas, and exactly one replica answers each
+redemption. A record is kept at most thirty minutes.
+
+## A tenant in its own NATS account
+
+A tenant whose engines connect in the tenant's own NATS account redeem inside
+that account. Give the plane the account's client URL, read from an
+environment variable because it carries the account's password:
+
+```sh
+ACME_NATS_URL=nats://... dhole serve --secret-account acme=ACME_NATS_URL
+```
+
+The plane then answers `secret.redeem.acme` in that account, from the same
+shared handles, and redeems every request there as tenant `acme`.
 
 ## Steps the plane runs itself
 

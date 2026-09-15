@@ -32,7 +32,8 @@ import (
 // part of the wire contract: a reply beginning with these bytes is an error
 // whose text follows, and any other reply is the value itself.
 //
-// The prefix is the whole reason Issue refuses a value that starts with it.
+// The prefix is the whole reason the step issuer refuses a value that starts
+// with it, and a redemption refuses one that does.
 // The alternative — a framed reply with a status field — would put the value
 // inside a message with other fields, and every one of those is a place the
 // value gets copied to. This shape keeps the value alone on the wire, and
@@ -52,56 +53,100 @@ var ErrNoRedeemer = errors.New("secrets: this engine has no redemption endpoint"
 
 // Broker issues single-use handles and redeems them.
 //
-// It holds handles in memory and nothing else. Persisting them would defeat
-// the point: a handle is a bearer credential for its TTL, and a table of live
-// handles in the run database is the secret-at-rest this whole design exists
-// to avoid. A plane restart invalidates every outstanding handle, which is
-// correct — the dispatches that carry them are re-issued under a new attempt.
+// It holds no value, in memory or anywhere else (ADR 0031). A handle is
+// recorded as a REFERENCE — the tenant, run, step and attempt it was issued
+// for, which source it resolves from and the secret's name there — in a
+// Handles store every plane shares, and the value is read from the source at
+// the moment of redemption, by whichever plane answers. A table of live values
+// would be the secret at rest that SecretRef exists to avoid; a table of
+// references is not, and it is what lets any replica redeem, spend and revoke.
 type Broker struct {
-	mu      sync.Mutex
-	handles map[string]entry
+	handles Handles
+	now     func() time.Time
+	// onError hears a revocation that failed. The callers that revoke have
+	// nothing to do about one — the expiry, and the sweep, are the backstop —
+	// but an operator has to be able to see that it happened.
+	onError func(error)
+
+	mu      sync.RWMutex
+	sources map[Kind]Source
 }
 
-type entry struct {
-	tenantID string
-	name     string
-	value    string
-	expires  time.Time
-	// scope is the attempt a step's handle was issued for, and zero for one
-	// the plane issued for itself. It is what revocation matches on.
-	scope Scope
+// BrokerOption configures a Broker.
+type BrokerOption func(*Broker)
+
+// WithHandles gives the broker the store its records live in. A deployment of
+// more than one plane must give every plane the same one — NewKVHandles over
+// the shared bus. Without it the broker keeps records in its own memory, which
+// is correct for exactly one plane.
+func WithHandles(h Handles) BrokerOption {
+	return func(b *Broker) {
+		if h != nil {
+			b.handles = h
+		}
+	}
 }
 
-// NewBroker returns an empty broker.
-func NewBroker() *Broker {
-	return &Broker{handles: map[string]entry{}}
+// WithErrorHandler gives the broker somewhere to report a revocation that
+// failed on a path that cannot return it.
+func WithErrorHandler(fn func(error)) BrokerOption {
+	return func(b *Broker) { b.onError = fn }
 }
 
-// Issue mints a handle for value, valid for ttl, and returns the SecretRef a
-// dispatch carries. The value never leaves this process except as the reply to
-// a redemption of this handle.
-func (b *Broker) Issue(tenantID, name, value string, ttl time.Duration) (*dholev1.SecretRef, error) {
-	return b.IssueFor(Scope{TenantID: tenantID}, name, value, ttl)
+func (b *Broker) report(err error) {
+	if err != nil && b.onError != nil {
+		b.onError(err)
+	}
 }
 
-// IssueFor is Issue for one attempt of a step: the handle remembers the scope
-// it was minted for, so the attempt's end can revoke it (ADR 0030). A scope
-// carrying only a tenant is a handle no attempt owns, which is what the plane's
-// own resolutions are.
-func (b *Broker) IssueFor(scope Scope, name, value string, ttl time.Duration) (*dholev1.SecretRef, error) {
-	tenantID := scope.TenantID
+// NewBroker returns a broker with no records.
+func NewBroker(opts ...BrokerOption) *Broker {
+	b := &Broker{handles: NewMemoryHandles(), now: time.Now, sources: map[Kind]Source{}}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
+}
+
+// lend records the source handles of kind resolve from. The step issuer and
+// the plane resolver lend theirs, so the broker resolves exactly what they
+// were built with; a nil source lends nothing, so a caller that only revokes
+// does not unset the one a caller that issues gave.
+func (b *Broker) lend(kind Kind, src Source) {
+	if b == nil || src == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sources[kind] = src
+}
+
+func (b *Broker) source(kind Kind) Source {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.sources[kind]
+}
+
+// Issue mints a handle for ref, for scope, valid for ttl, and returns the
+// SecretRef a dispatch carries. Nothing it records is the value.
+//
+// A scope carrying only a tenant is a handle no attempt owns, which is what
+// the plane's own resolutions are.
+func (b *Broker) Issue(ctx context.Context, scope Scope, ref Reference, ttl time.Duration) (*dholev1.SecretRef, error) {
 	switch {
-	case tenantID == "":
+	case scope.TenantID == "":
 		// No unscoped record, even while only one tenant exists.
 		return nil, errors.New("secrets: a tenant is required to issue a handle")
-	case name == "":
+	case ref.Binding == "":
 		return nil, errors.New("secrets: a binding name is required to issue a handle")
-	case strings.HasPrefix(value, RefusalPrefix):
-		// The refusal names neither the value nor the binding's contents: this
-		// error is itself the closest thing to a leak in the package.
-		return nil, fmt.Errorf("secrets: a value beginning %q cannot be issued: "+
-			"a redemption reply with that prefix is a refusal, so the value would be read as an error",
-			RefusalPrefix)
+	case ref.Secret == "":
+		return nil, errors.New("secrets: a secret name is required to issue a handle")
+	case ref.Source != SourceStep && ref.Source != SourcePlane:
+		return nil, fmt.Errorf("secrets: a handle cannot resolve from source %q", ref.Source)
+	case ttl <= 0:
+		return nil, errors.New("secrets: a handle needs a positive expiry")
+	case ttl > HandleRetention:
+		return nil, fmt.Errorf("secrets: a handle cannot outlive the %s its record is kept for", HandleRetention)
 	}
 
 	raw := make([]byte, 32)
@@ -109,104 +154,34 @@ func (b *Broker) IssueFor(scope Scope, name, value string, ttl time.Duration) (*
 		return nil, fmt.Errorf("secrets: generating a handle: %w", err)
 	}
 	handle := hex.EncodeToString(raw)
-	expires := time.Now().Add(ttl)
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	// Forget what can no longer be honoured. Only a redemption used to delete a
-	// handle, and every step dispatch now mints some: a dispatch cancelled,
-	// lost or refused before its engine redeemed would otherwise keep its value
-	// in this process for as long as the plane runs.
-	now := time.Now()
-	for h, e := range b.handles {
-		if now.After(e.expires) {
-			delete(b.handles, h)
-		}
+	expires := b.now().Add(ttl)
+	if err := b.handles.Put(ctx, Digest(handle), Record{
+		TenantID:  scope.TenantID,
+		RunID:     scope.RunID,
+		StepID:    scope.StepID,
+		Attempt:   scope.Attempt,
+		Source:    ref.Source,
+		Name:      ref.Secret,
+		ExpiresAt: expires.UnixNano(),
+	}); err != nil {
+		return nil, err
 	}
-	b.handles[handle] = entry{tenantID: tenantID, name: name, value: value, expires: expires, scope: scope}
 	return &dholev1.SecretRef{
-		Name:      name,
+		Name:      ref.Binding,
 		Handle:    handle,
 		ExpiresAt: expires.Unix(),
 	}, nil
 }
 
-// Redeem exchanges a handle for its value, once.
+// Redeem exchanges a handle for its value, once, for whichever tenant it was
+// issued to. It is the DEPRECATED unscoped path (ADR 0030).
 //
 // Every refusal is the same three words regardless of which rule was broken —
 // unknown, spent, expired — because the caller is on the other side of a bus
 // and the difference tells an attacker which handles exist. The reason an
 // operator needs is on the issuing side, in the plane's own log.
-func (b *Broker) Redeem(handle string) (string, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	e, ok := b.handles[handle]
-	if !ok {
-		return "", errRefused
-	}
-	// Taken whatever happens next: single-use means the handle is spent by
-	// being presented, not by being answered.
-	delete(b.handles, handle)
-	if time.Now().After(e.expires) {
-		return "", errRefused
-	}
-	return e.value, nil
-}
-
-// RevokeAttempt forgets every unspent handle issued for exactly this attempt,
-// and reports how many. It is called when the attempt ends — whatever way it
-// ends — so a handle its engine never redeemed stops being a live credential
-// then rather than at its expiry (ADR 0030).
-//
-// Exact, and only exact: a scope missing any field matches nothing. Matching
-// by step would reach the retry of the same step, which may already have been
-// issued its own handles by the time the previous attempt's end is processed.
-func (b *Broker) RevokeAttempt(scope Scope) int {
-	if scope.TenantID == "" || scope.RunID == "" || scope.StepID == "" || scope.Attempt == 0 {
-		return 0
-	}
-	return b.revoke(func(e entry) bool { return e.scope == scope })
-}
-
-// RevokeRun forgets every unspent handle issued for any attempt of one run. A
-// cancelled run may still have a dispatch in a work queue that no engine holds
-// and no Cancel can reach; revoking here is what stops the engine that later
-// takes it from being handed the credential.
-func (b *Broker) RevokeRun(tenantID, runID string) int {
-	if tenantID == "" || runID == "" {
-		return 0
-	}
-	return b.revoke(func(e entry) bool { return e.scope.TenantID == tenantID && e.scope.RunID == runID })
-}
-
-// RevokeHandles forgets the named handles if they are still unspent. It is for
-// a dispatch that minted handles and then never committed: the attempt number
-// it built them under may belong to another pass's dispatch that did, so
-// revoking by scope there would take a live attempt's credential.
-func (b *Broker) RevokeHandles(handles ...string) int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := 0
-	for _, h := range handles {
-		if _, ok := b.handles[h]; ok {
-			delete(b.handles, h)
-			n++
-		}
-	}
-	return n
-}
-
-func (b *Broker) revoke(match func(entry) bool) int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := 0
-	for h, e := range b.handles {
-		if match(e) {
-			delete(b.handles, h)
-			n++
-		}
-	}
-	return n
+func (b *Broker) Redeem(ctx context.Context, handle string) (string, error) {
+	return b.redeem(ctx, "", handle)
 }
 
 // RedeemFor exchanges a handle for its value, once, on behalf of tenantID —
@@ -217,21 +192,131 @@ func (b *Broker) revoke(match func(entry) bool) int {
 // spent, because single-use means spent by being PRESENTED. A handle that has
 // reached another tenant has leaked, and leaving it redeemable would leave the
 // leak live for the rest of its expiry.
-func (b *Broker) RedeemFor(tenantID, handle string) (string, error) {
+func (b *Broker) RedeemFor(ctx context.Context, tenantID, handle string) (string, error) {
 	if tenantID == "" {
 		return "", errRefused
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	e, ok := b.handles[handle]
-	if !ok {
+	return b.redeem(ctx, tenantID, handle)
+}
+
+func (b *Broker) redeem(ctx context.Context, tenantID, handle string) (string, error) {
+	if handle == "" {
 		return "", errRefused
 	}
-	delete(b.handles, handle)
-	if e.tenantID != tenantID || time.Now().After(e.expires) {
+	// Taken whatever happens next: single-use means the handle is spent by
+	// being presented, not by being answered. The store's compare-and-set is
+	// what makes that hold across planes (ADR 0031).
+	r, ok, err := b.handles.Spend(ctx, Digest(handle))
+	if err != nil || !ok {
 		return "", errRefused
 	}
-	return e.value, nil
+	if (tenantID != "" && r.TenantID != tenantID) || b.now().UnixNano() > r.ExpiresAt {
+		return "", errRefused
+	}
+	src := b.source(r.Source)
+	if src == nil {
+		return "", errRefused
+	}
+	value, err := src.Value(ctx, r.TenantID, r.Name)
+	if err != nil || strings.HasPrefix(value, RefusalPrefix) {
+		// A value that reads as a refusal cannot be carried by this reply
+		// shape; the issuer refuses it where somebody can see why.
+		return "", errRefused
+	}
+	return value, nil
+}
+
+// RevokeAttempt forgets every unspent handle issued for exactly this attempt,
+// and reports how many. It is called when the attempt ends — whatever way it
+// ends — so a handle its engine never redeemed stops being a live credential
+// then rather than at its expiry (ADR 0030). Any plane may call it (ADR 0031).
+//
+// Exact, and only exact: a scope missing any field matches nothing. Matching
+// by step would reach the retry of the same step, which may already have been
+// issued its own handles by the time the previous attempt's end is processed.
+func (b *Broker) RevokeAttempt(ctx context.Context, scope Scope) (int, error) {
+	if scope.TenantID == "" || scope.RunID == "" || scope.StepID == "" || scope.Attempt == 0 {
+		return 0, nil
+	}
+	return b.handles.Drop(ctx, Filter{
+		TenantID: scope.TenantID, RunID: scope.RunID, StepID: scope.StepID, Attempt: scope.Attempt,
+	})
+}
+
+// RevokeRun forgets every unspent handle issued for any attempt of one run: a
+// run that ended, however it ended, and a cancelled one whose dispatch may
+// still sit in a work queue that no engine holds and no Cancel can reach.
+func (b *Broker) RevokeRun(ctx context.Context, tenantID, runID string) (int, error) {
+	if tenantID == "" || runID == "" {
+		return 0, nil
+	}
+	return b.handles.Drop(ctx, Filter{TenantID: tenantID, RunID: runID})
+}
+
+// RevokeHandles forgets the named handles if they are still unspent. It is for
+// a dispatch that minted handles and then never committed: the attempt number
+// it built them under may belong to another pass's dispatch that did, so
+// revoking by scope there would take a live attempt's credential.
+func (b *Broker) RevokeHandles(ctx context.Context, handles ...string) (int, error) {
+	n := 0
+	for _, h := range handles {
+		if h == "" {
+			continue
+		}
+		dropped, err := b.handles.Drop(ctx, Filter{Digest: Digest(h)})
+		n += dropped
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// OpenRuns lists one tenant's runs that have not ended.
+type OpenRuns func(ctx context.Context, tenantID string) ([]string, error)
+
+// RevokeClosedRuns forgets every unspent handle whose run is no longer open,
+// and reports how many (ADR 0031). It is the sweep beneath the revocations
+// the scheduler and the API make when they end a run: a run closed by any
+// other writer — an approval denied, a halting model step — is caught here.
+//
+// The handles are read BEFORE the index. A handle listed exists, so its run
+// was created before the index is read; if that run is open, the index says
+// so. Reading the index first would let a run created in between look closed.
+// The plane's own handles belong to no run and are left to their expiry.
+func (b *Broker) RevokeClosedRuns(ctx context.Context, open OpenRuns) (int, error) {
+	records, err := b.handles.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	runs := map[string]map[string]bool{}
+	for _, r := range records {
+		if r.RunID == "" {
+			continue
+		}
+		if runs[r.TenantID] == nil {
+			runs[r.TenantID] = map[string]bool{}
+		}
+		runs[r.TenantID][r.RunID] = true
+	}
+	n := 0
+	for tenantID, candidates := range runs {
+		ids, err := open(ctx, tenantID)
+		if err != nil {
+			return n, fmt.Errorf("secrets: reading tenant %q's open runs: %w", tenantID, err)
+		}
+		for _, id := range ids {
+			delete(candidates, id)
+		}
+		for runID := range candidates {
+			dropped, err := b.RevokeRun(ctx, tenantID, runID)
+			n += dropped
+			if err != nil {
+				return n, err
+			}
+		}
+	}
+	return n, nil
 }
 
 // errRefused is the one refusal. It names neither the handle nor the value: an
@@ -244,15 +329,33 @@ type Requester interface {
 	RequestRaw(ctx context.Context, subject string, body []byte) ([]byte, error)
 }
 
-// Responder is the plane's half.
-type Responder interface {
-	RespondRaw(ctx context.Context, subject string, fn func([]byte) []byte) (func(), error)
+// RedeemQueue is the queue group every plane's redemption responder joins, so
+// that exactly one plane answers each request (ADR 0031). Without it every
+// replica answered and the engine took whichever reply came first.
+const RedeemQueue = "dhole-secret-redeem"
+
+// SubjectResponder is the plane's half: a queue-group responder on a subject
+// that may be a wildcard, told which subject each request arrived on.
+type SubjectResponder interface {
+	RespondRawSubjectQueue(
+		ctx context.Context, subject, queue string, fn func(subject string, body []byte) []byte,
+	) (func(), error)
 }
 
-// SubjectResponder is the plane's half for a wildcard subject: the handler is
-// told which subject each request arrived on.
-type SubjectResponder interface {
-	RespondRawSubject(ctx context.Context, subject string, fn func(subject string, body []byte) []byte) (func(), error)
+func refusal() []byte { return []byte(RefusalPrefix + errRefused.Error()) }
+
+// answering bounds one redemption's work on the plane. It is NOT the context a
+// responder was started under: that one bounds start-up, and a handler holding
+// it would refuse every redemption once the plane had finished starting.
+func answering(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), redeemTimeout)
+}
+
+func reply(value string, err error) []byte {
+	if err != nil {
+		return []byte(RefusalPrefix + err.Error())
+	}
+	return []byte(value)
 }
 
 // ServeTenants answers redemptions from b on every tenant's subject under base
@@ -262,16 +365,14 @@ type SubjectResponder interface {
 // (ADR 0030).
 func ServeTenants(ctx context.Context, r SubjectResponder, b *Broker, base string) (func(), error) {
 	prefix := base + "."
-	return r.RespondRawSubject(ctx, prefix+"*", func(subject string, req []byte) []byte {
+	return r.RespondRawSubjectQueue(ctx, prefix+"*", RedeemQueue, func(subject string, req []byte) []byte {
 		tenantID, ok := strings.CutPrefix(subject, prefix)
 		if !ok || tenantID == "" || strings.Contains(tenantID, ".") {
-			return []byte(RefusalPrefix + errRefused.Error())
+			return refusal()
 		}
-		value, err := b.RedeemFor(tenantID, string(req))
-		if err != nil {
-			return []byte(RefusalPrefix + err.Error())
-		}
-		return []byte(value)
+		rctx, cancel := answering(ctx)
+		defer cancel()
+		return reply(b.RedeemFor(rctx, tenantID, string(req)))
 	})
 }
 
@@ -282,14 +383,42 @@ func ServeTenants(ctx context.Context, r SubjectResponder, b *Broker, base strin
 // redemption subject named its tenant requests on bare secret.redeem, and the
 // plane keeps answering it while it accepts that engine's protocol version.
 // The tenant is the handle's own, which is what it always was.
-func Serve(ctx context.Context, r Responder, b *Broker, subject string) (func(), error) {
-	return r.RespondRaw(ctx, subject, func(req []byte) []byte {
-		value, err := b.Redeem(string(req))
-		if err != nil {
-			return []byte(RefusalPrefix + err.Error())
-		}
-		return []byte(value)
+func Serve(ctx context.Context, r SubjectResponder, b *Broker, subject string) (func(), error) {
+	return r.RespondRawSubjectQueue(ctx, subject, RedeemQueue, func(_ string, req []byte) []byte {
+		rctx, cancel := answering(ctx)
+		defer cancel()
+		return reply(b.Redeem(rctx, string(req)))
 	})
+}
+
+// ServeAccount answers one tenant's redemptions inside that tenant's own NATS
+// account, over r — a connection holding the account's credential — until the
+// returned function is called (ADR 0031).
+//
+// Inside an account the account IS the tenant (ADR 0014), so the tenant here
+// is tenantID and never the token a request carries: a request on
+// `<base>.<other>` in this account redeems as tenantID and a handle of <other>
+// is refused. The legacy base is answered the same way, scoped by the account
+// as ADR 0030 promised it would be.
+func ServeAccount(ctx context.Context, r SubjectResponder, b *Broker, tenantID, base string) (func(), error) {
+	if tenantID == "" {
+		return nil, errors.New("secrets: serving an account's redemptions needs the tenant it belongs to")
+	}
+	answer := func(_ string, req []byte) []byte {
+		rctx, cancel := answering(ctx)
+		defer cancel()
+		return reply(b.RedeemFor(rctx, tenantID, string(req)))
+	}
+	stopScoped, err := r.RespondRawSubjectQueue(ctx, base+".*", RedeemQueue, answer)
+	if err != nil {
+		return nil, err
+	}
+	stopLegacy, err := r.RespondRawSubjectQueue(ctx, base, RedeemQueue, answer)
+	if err != nil {
+		stopScoped()
+		return nil, err
+	}
+	return func() { stopScoped(); stopLegacy() }, nil
 }
 
 // Redeemer exchanges a SecretRef for the value behind it.
