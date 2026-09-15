@@ -146,6 +146,10 @@ type Step struct {
 
 const defaultAttempts = 3
 
+// recordTimeout bounds recording one call once the step's own context may
+// already have ended.
+const recordTimeout = 10 * time.Second
+
 // New validates the configuration and builds a Step.
 //
 // It deliberately does NOT require a store or a recorder. EffectClass has to
@@ -267,13 +271,29 @@ func (s *Step) Run(ctx context.Context, runID, stepID, prompt string) (json.RawM
 		return nil, errors.New("llm: a call recorder is required; an unrecorded model call is an unauditable one")
 	}
 
+	// Numbered after every call this step has already made in this run. A step
+	// is run again whenever it is retried or its plane is replaced mid-call,
+	// and a record is unique per (run, step, attempt): numbering each run from
+	// one made the retry's first call unrecordable, and the step failed on its
+	// own bookkeeping every time it was tried again.
+	before, err := s.callsMade(ctx, runID, stepID)
+	if err != nil {
+		return nil, err
+	}
 	var lastErr error
 	for attempt := 1; attempt <= s.attempts; attempt++ {
-		obj, err := s.attemptOnce(ctx, runID, stepID, uint32(attempt), prompt) //nolint:gosec // attempt is bounded by s.attempts
+		obj, err := s.attemptOnce(ctx, runID, stepID, before+uint32(attempt), prompt) //nolint:gosec // attempt is bounded by s.attempts
 		if err == nil {
 			return obj, nil
 		}
 		lastErr = err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Stopped, not failed: the plane cancels a step whose lease it
+			// lost, and another plane may be running this step now. Another
+			// attempt is a model call for nobody, and a give-up written here
+			// would fail a step somebody else holds (ADR 0031).
+			return nil, fmt.Errorf("llm: %s/%s stopped after attempt %d: %w", runID, stepID, attempt, ctxErr)
+		}
 		if !retryable(err) {
 			break
 		}
@@ -287,6 +307,21 @@ func (s *Step) Run(ctx context.Context, runID, stepID, prompt string) (json.RawM
 		return nil, errors.Join(lastErr, err)
 	}
 	return nil, lastErr
+}
+
+// callsMade is the highest attempt number already recorded for this step.
+func (s *Step) callsMade(ctx context.Context, runID, stepID string) (uint32, error) {
+	calls, err := s.calls.Calls(ctx, s.tenantID, runID)
+	if err != nil {
+		return 0, err
+	}
+	var highest uint32
+	for _, c := range calls {
+		if c.StepID == stepID && c.Attempt > highest {
+			highest = c.Attempt
+		}
+	}
+	return highest, nil
 }
 
 // retryable says whether asking the same model the same question again could
@@ -344,7 +379,12 @@ func (s *Step) attemptOnce(
 	// Recorded BEFORE the outcome is judged. A call that has been made has
 	// cost money and has shown somebody's data to a third party, and that is
 	// true whether or not its answer turned out to be usable.
-	recErr := s.calls.Record(ctx, s.tenantID, call)
+	//
+	// And recorded on a context of its own: a step stopped while its call was
+	// out — its lease lost — has still made the call.
+	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	recErr := s.calls.Record(recordCtx, s.tenantID, call)
+	cancelRecord()
 	s.logCall(call, genErr)
 	if recErr != nil {
 		return nil, recErr

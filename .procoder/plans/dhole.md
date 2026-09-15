@@ -1885,6 +1885,67 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       cancelled 4.8s after its lease was. No protocol version bump: the flag
       is what tells an engine somebody answers (ADR 0029). `buf breaking`
       against main is clean after the merge.
+- [x] **A step the plane hosts runs its body to the end after its lease is taken
+      away.** Left open by "A step the plane hosts runs once per plane": a plane
+      whose renewal is refused — its lease swept while it was partitioned — runs
+      the step body to completion and only its RESULT is refused at the commit,
+      so an llm or agent step can have its external effect twice across a
+      partition longer than the TTL. The fix (ADR 0031): `builtins.attempt` runs
+      the body under a context of its own that `renew` cancels when `Renew`
+      answers `ErrFenced`, or when no renewal has succeeded for a whole TTL (the
+      KV has expired the lease by then and a sweeper may have given the step
+      away); a body that ended that way records nothing. `llm.Step.Run` asks no
+      further attempt and records no give-up once its context has ended, and the
+      agent step takes no further action — a later tool call in the same batch is
+      refused before it is recorded or invoked. Files: `internal/server/builtins.go`,
+      `internal/server/builtin_claim_test.go`, `internal/steps/llm/llm.go`,
+      `internal/steps/llm/llm_test.go`, `internal/steps/agent/agent.go`,
+      `internal/steps/agent/agent_test.go`. Interfaces: consumes
+      `lease.Manager.Renew` and `lease.ErrFenced`; produces nothing new. Tests:
+      `TestAHostedStepWhoseRenewalIsRefusedStopsItsBody` (expect FAIL "a plane
+      whose renewal was refused ran the step body on"),
+      `TestAHostedStepWhoseRenewalLapsesForATTLStopsItsBody`,
+      `TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt` and
+      `TestAnAgentWhoseContextEndsTakesNoFurtherAction`.
+      CLOSED 2026-09-15 as above. `builtins.attempt` runs the body under
+      `context.WithCancelCause`; `renew` cancels it with `errLeaseLost` on
+      `ErrFenced` or once `time.Since(last successful renewal) >= ttl`, and a
+      body whose cause is `errLeaseLost` returns no token and no error, so `run`
+      records nothing. `llm.Step.Run` returns `ctx.Err()` before another attempt
+      or a give-up, and records the call it made on a detached, bounded context
+      (`recordTimeout`) — a call made while the step was being stopped used to
+      go unrecorded, since the recorder used the cancelled context.
+      `agent.Step.invoke` refuses an action once its context has ended, before
+      the grant, the record or the invoker: the SDK executes a turn's tool calls
+      in order without looking at the context. Red first:
+      `TestAHostedStepWhoseRenewalIsRefusedStopsItsBody` ("a plane whose renewal
+      was refused ran the step body on: its model call or agent tool calls
+      happen beside the plane that holds the step now"),
+      `TestAHostedStepWhoseRenewalLapsesForATTLStopsItsBody` ("a plane that
+      could not renew its lease for a whole TTL ran the step body on"),
+      `TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt` ("a model call made as
+      its step was stopped went unrecorded": the recorder had failed on the
+      cancelled context, which is also the only reason the loop had stopped),
+      `TestAnAgentWhoseContextEndsTakesNoFurtherAction` ("an agent whose step was
+      stopped took the next action in its batch anyway": actual `[format fetch]`).
+      Written with them and shown by mutation: the lapse test's "one failed
+      renewal inside the TTL is not a lost lease" half. Mutations, each restored
+      with cp and checked with cmp, each red: a fenced renewal not cancelling;
+      no lapse rule; a lapse on any failed renewal ("a step whose lease was still
+      renewed had its body stopped"); the body run under the worker's context;
+      a stopped body reported as an error; the llm loop retrying after
+      cancellation (two records); the call recorded on the cancelled context;
+      the agent's action check removed. No wire change.
+      Found by the server suite on the way: recording the call on a detached
+      context made `TestABuiltinStepInFlightWhenThePlaneDiesIsRecoveredByANewPlane`
+      fail — the dead plane's call was now recorded, and the replacement plane's
+      first call collided with it on `llm_calls (tenant, run, step, attempt)`
+      ("UNIQUE constraint failed"), failing the step on every retry. The
+      recorder's failure on a cancelled context had been hiding that every re-run
+      of an llm step numbered its calls from one. `llm.Step.Run` now numbers
+      after the calls already recorded for the step
+      (`TestAnLLMStepRunAgainRecordsItsCallsAfterTheOnesBefore`, red with the
+      constraint error; numbering from one again is red).
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
