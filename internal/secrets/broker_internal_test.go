@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -10,18 +11,21 @@ import (
 // TestAnExpiredHandleNobodyRedeemedIsForgotten: a step issues a handle on every
 // dispatch, and a dispatch that is cancelled, lost or refused never redeems
 // it. Only redemption used to delete one, so a long-lived plane kept every
-// such value in memory for the rest of its life — long after the handle could
-// be honoured.
+// such record in memory for the rest of its life — long after the handle
+// could be honoured. (The shared bucket forgets by its retention.)
 func TestAnExpiredHandleNobodyRedeemedIsForgotten(t *testing.T) {
-	b := NewBroker()
-	_, err := b.Issue("acme", "REGISTRY_PASSWORD", "stale", time.Nanosecond)
+	ctx := context.Background()
+	handles := NewMemoryHandles()
+	b := NewBroker(WithHandles(handles))
+	ref := Reference{Source: SourceStep, Secret: "harbor-robot", Binding: "REGISTRY_PASSWORD"}
+	_, err := b.Issue(ctx, Scope{TenantID: "acme"}, ref, time.Nanosecond)
 	require.NoError(t, err)
 	time.Sleep(2 * time.Millisecond)
 
-	_, err = b.Issue("acme", "REGISTRY_PASSWORD", "fresh", time.Minute)
+	_, err = b.Issue(ctx, Scope{TenantID: "acme"}, ref, time.Minute)
 	require.NoError(t, err)
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	require.Len(t, b.handles, 1, "an expired, unredeemed handle is still held")
+	live, err := handles.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, live, 1, "an expired, unredeemed handle is still held")
 }

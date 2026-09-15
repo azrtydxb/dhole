@@ -56,6 +56,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/outbox"
+	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
@@ -241,6 +242,19 @@ type Config struct {
 	// operator says it is. Nil means the plane holds none, and a step
 	// declaring one is refused, naming it, before it is dispatched.
 	StepSecrets secrets.Source
+	// SecretAccounts are tenants whose engines sit in the tenant's OWN NATS
+	// account (ADR 0014), keyed by tenant, each mapped to the client URL
+	// carrying that account's credential. The plane serves the tenant's
+	// redemptions inside that account, where its engines ask, redeeming from
+	// the same shared handles as every other responder (ADR 0031). Empty
+	// means every engine redeems in the plane's own account.
+	SecretAccounts map[string]string
+	// Policy is the dispatch policy for this plane's tier (ADR 0032). Nil is
+	// the built-in default, policy.Default(), which permits every step and
+	// every secret — and is still evaluated, and every decision still
+	// recorded. There is no value that turns evaluation off. Whatever is set
+	// here sits above a floor it cannot relax: taint.DispatchFloor.
+	Policy *policy.TierPolicy
 	// LeaseTTL is how long a step's lease lives before its holder is presumed
 	// dead and the step is swept back. Zero means scheduler.DefaultLeaseTTL.
 	//
@@ -295,6 +309,9 @@ type Server struct {
 	// In memory, and deliberately: a table of live handles in the run database
 	// would be the secret at rest that SecretRef exists to avoid.
 	broker *secrets.Broker
+	// policySource holds the dispatch policy the scheduler evaluates, so a
+	// running plane's policy can be replaced (SetPolicy). Guarded by mu.
+	policySource *policy.StaticSource
 	// partitions is this process's share of the run-id ring. Nil means the
 	// plane owns every run — see ownsRun.
 	partitions *planePartitions
@@ -351,6 +368,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Mode == ModeDistributed && cfg.BusURL == "" {
 		return nil, errors.New("server: distributed mode needs a bus URL")
+	}
+	if err := validPolicy(cfg.Policy); err != nil {
+		return nil, err
 	}
 	if cfg.DeploymentID == "" {
 		cfg.DeploymentID = derivedDeploymentID(cfg.BlobRoot)
@@ -437,10 +457,18 @@ func (s *Server) Start(ctx context.Context) error {
 	out := outbox.New(in.store, in.plane, s.cfg.DeploymentID, outbox.WithErrorHandler(func(err error) {
 		s.log.Error("outbox drain failed", "error", err)
 	}))
-	// The broker BEFORE the step types that redeem through it. It holds
-	// handles in memory and nothing else — a table of live handles in the run
-	// database would be the secret at rest that SecretRef exists to avoid.
-	s.broker = secrets.NewBroker()
+	// The broker BEFORE the step types that redeem through it. Its handles
+	// are references in a bucket every plane on this bus shares, so any
+	// replica redeems, spends and revokes them; the values stay in the
+	// sources and are read at redemption (ADR 0031).
+	handles, err := secrets.NewKVHandles(ctx, in.conn)
+	if err != nil {
+		in.close()
+		return err
+	}
+	s.broker = secrets.NewBroker(secrets.WithHandles(handles), secrets.WithErrorHandler(func(err error) {
+		s.log.Warn("revoking secret handles failed; their expiry and the sweep still bound them", "error", err)
+	}))
 	// And the plane's own way to a value: mint a handle, redeem it over the
 	// endpoint this process serves, hold the value for one call. The round
 	// trip is the point (ADR 0024) — it makes the plane's credentials subject
@@ -501,6 +529,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
+	// The dispatch policy, always (ADR 0032): the operator's or the built-in
+	// default, over the floor, with every decision on the audit trail.
+	pol, provenance, policySource, err := s.dispatchPolicy(in)
+	if err != nil {
+		in.close()
+		return err
+	}
+
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       in.store,
 		Outbox:      out,
@@ -538,6 +574,10 @@ func (s *Server) Start(ctx context.Context) error {
 		// plane's own credentials go through: one way a credential reaches a
 		// running thing (ADR 0024, 0027).
 		Secrets: secrets.NewStepIssuer(s.broker, s.cfg.StepSecrets),
+		// Policy before the cache and before any engine, for every step and
+		// each secret it declares (ADR 0012, 0030, 0032).
+		Policy:     pol,
+		Provenance: provenance,
 	})
 	if err != nil {
 		in.close()
@@ -567,6 +607,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.setTriggerStore(trigger.NewStore(in.db, in.dialect))
 
 	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
+	s.policySource = policySource
 	s.builtins, s.timers = built, wait.NewTimers(in.store)
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -615,6 +656,11 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 		return err
 	}
 	s.stopSub = append(s.stopSub, stopLegacySecrets)
+	// And inside every tenant account this plane was given the credential
+	// for, where that tenant's engines ask (ADR 0031).
+	if err := s.serveSecretAccounts(startCtx); err != nil {
+		return err
+	}
 	s.started("secret redemption")
 
 	// Before the advance loop for the same reason: every dispatch this plane
@@ -645,7 +691,7 @@ func (s *Server) serve(startCtx, runCtx context.Context) error {
 	// is supposed to notice.
 	s.spawn(func() { s.advanceLoop(runCtx, s.infra.store, s.sched) })
 	s.started("advancing runs")
-	s.spawn(func() { s.sweepLoop(runCtx, s.sched) })
+	s.spawn(func() { s.sweepLoop(runCtx, s.sched, s.broker, s.infra.store) })
 	s.spawn(func() { s.renewLoop(runCtx) })
 	s.spawn(func() { s.timerLoop(runCtx, s.timers, s.sched) })
 
@@ -689,6 +735,27 @@ func (s *Server) spawn(fn func()) {
 		defer s.wg.Done()
 		fn()
 	}()
+}
+
+// serveSecretAccounts answers each configured tenant's redemptions inside the
+// tenant's own account, on a connection holding that account's credential.
+// The connection is the plane's, closed with the rest of its infrastructure.
+func (s *Server) serveSecretAccounts(ctx context.Context) error {
+	for tenantID, url := range s.cfg.SecretAccounts {
+		conn, err := bus.Connect(ctx, url)
+		if err != nil {
+			// The URL carries a credential, so it is not repeated here.
+			return fmt.Errorf("server: connecting to tenant %q's account to serve its secret redemptions: %w",
+				tenantID, err)
+		}
+		s.infra.onClose(conn.Close)
+		stop, err := secrets.ServeAccount(ctx, conn, s.broker, tenantID, bus.SubjectSecretRedeem())
+		if err != nil {
+			return fmt.Errorf("server: serving tenant %q's secret redemptions in its account: %w", tenantID, err)
+		}
+		s.stopSub = append(s.stopSub, stop)
+	}
+	return nil
 }
 
 // startEngine runs the hosted engine. It is a normal engine.Agent with a
@@ -1057,7 +1124,14 @@ func (s *Server) tenants() []string {
 // different question: advanceLoop asks what a run can do next, and this asks
 // which engines stopped answering. Running them together would tie how quickly
 // a dead engine is noticed to how often runs are re-examined.
-func (s *Server) sweepLoop(ctx context.Context, sched *scheduler.Scheduler) {
+//
+// It also sweeps secret handles: every handle whose run is no longer open is
+// revoked (ADR 0031). The scheduler and the API revoke a run's handles when
+// they end it, and this catches a run anything else ended — an approval
+// denied, a halting model step — within one tick.
+func (s *Server) sweepLoop(
+	ctx context.Context, sched *scheduler.Scheduler, broker *secrets.Broker, store runstore.Store,
+) {
 	ticker := time.NewTicker(orphanSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -1065,6 +1139,14 @@ func (s *Server) sweepLoop(ctx context.Context, sched *scheduler.Scheduler) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+		if revoked, err := broker.RevokeClosedRuns(ctx, store.OpenRuns); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.log.Error("sweeping the secret handles of closed runs", "error", err)
+		} else if revoked > 0 {
+			s.log.Info("revoked the unspent secret handles of runs that have ended", "handles", revoked)
 		}
 		lost, err := sched.SweepOrphans(ctx)
 		if err != nil {
@@ -1138,6 +1220,7 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	s.infra.close()
 	s.infra = nil
+	s.policySource = nil
 	s.builtins, s.timers = nil, nil
 	s.stopAllTriggers()
 	return nil

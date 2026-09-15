@@ -69,6 +69,35 @@ controlPlane:
   #   existingSecret: harbor-robot  # the Secret holding the value
   #   key: password                 # the key within it (required)
   secrets: []
+  # The dispatch policy every step, and every secret a step declares, is
+  # decided by before it runs (ADR 0012, 0030, 0032; docs/policy.md). Every
+  # decision, allows included, is recorded in the policy_audit table.
+  #
+  # Leave both unset and the plane runs the built-in default, which permits
+  # every step and every secret: `dhole policy default` prints it. Set ONE of
+  # them to replace it whole — write the rules inline, or name a ConfigMap you
+  # manage. Test a policy with `dhole policy test --policy FILE` first.
+  #
+  # Whichever is in force sits above a floor no policy relaxes: tainted data
+  # does not reach a non-PURE step or a PRIVILEGED engine, and the `untrusted`
+  # tier runs nothing unsigned, privileged or at-most-once.
+  #
+  # The plane re-reads the file every 10s, so an edited ConfigMap takes effect
+  # without a restart once Kubernetes has updated the mount. A change that
+  # does not compile is logged and the policy in force stays; at start-up, an
+  # invalid policy stops the plane.
+  policy:
+    # rules: |
+    #   revision: ops/1
+    #   rules:
+    #     - id: signing-key-for-releases-only
+    #       expression: 'input.secret_name != "release-signing-key" || input.tier == "release"'
+    #       reason: only the release tier may read the signing key
+    rules: ""
+    # existingConfigMap: platform-dispatch-policy
+    existingConfigMap: ""
+    # The key within the ConfigMap that holds the policy document.
+    key: policy.yaml
   nodeSelector: {}
   tolerations: []
   affinity: {}

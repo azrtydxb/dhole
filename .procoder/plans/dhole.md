@@ -1235,6 +1235,178 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       .procoder/ask/decisions.md: `dhole serve` wires no dispatch policy, so none of this is
       evaluated on the single binary or the chart until one is chosen. Dispatch-time taint
       (`input.tainted`) is still never set; it is ADR 0015's propagation work, not a secrets item.
+- [x] **A secret handle lives in the memory of the plane that issued it.** Left open by the
+      revocation item above; decided by ADR 0031. With `controlPlane.replicas` above one, a
+      redemption answered by another replica is refused and spends nothing, and an attempt's
+      end, or a cancel, processed by another replica revokes nothing. Files:
+      `internal/secrets/handles.go` (new), `internal/secrets/secrets.go`,
+      `internal/secrets/step.go`, `internal/secrets/plane.go`, `internal/server/server.go`,
+      `internal/server/api.go`, `docs/secrets.md`, `docs/wire-contract.md`.
+      Interfaces: produces `secrets.Handles` (`Put`, `Spend`, `Drop`, `List`) with
+      `secrets.NewMemoryHandles()` and `secrets.NewKVHandles(ctx, *nats.Conn)` over bucket
+      `secrets.HandleBucket`; `secrets.Reference{Source, Secret, Binding}` with `secrets.SourceStep`
+      and `secrets.SourcePlane`; `secrets.NewBroker(...secrets.BrokerOption)` and
+      `secrets.WithHandles`; `(*secrets.Broker).Issue(ctx, scope, ref, ttl)`,
+      `.Redeem(ctx, handle)`, `.RedeemFor(ctx, tenantID, handle)`,
+      `.RevokeAttempt(ctx, scope) (int, error)`, `.RevokeRun(ctx, tenantID, runID) (int, error)`,
+      `.RevokeHandles(ctx, handles...) (int, error)`. The step issuer and the plane resolver
+      lend the broker the source their handles resolve from.
+      Tests, red first: `TestAHandleIssuedOnOnePlaneIsRedeemedOnAnother`,
+      `TestAHandleIsSpentOnceWhicheverPlanesPresentItConcurrently` (`-count=20`),
+      `TestAHandleRevokedOnOnePlaneIsRefusedOnAnother`, `TestAnExpiredSharedHandleIsRefused`,
+      `TestTheHandleBucketHoldsNoSecretValue` (secrets, two brokers over one embedded bus).
+      CLOSED 2026-09-15. `secrets.Broker` records a handle through `secrets.Handles`; the
+      plane gives it `NewKVHandles` over bucket `dhole-secret-handles` (history 1, max age
+      `HandleRetention`, 30 minutes — an expiry beyond it is refused at issue). A record is
+      `{tenant_id, run_id, step_id, attempt, source, name, expires_at_unix_nano}` under key
+      `<tenant>.<sha256(run)[:16] or "plane">.<sha256(handle)>`: no value, no handle. Spend is a
+      delete at the read revision, so single use holds across planes; revocation deletes from any
+      plane; the value is read from the answering plane's lent source at redemption, and a value
+      beginning `ERR ` is refused there as well as at issue. Responders redeem under a context of
+      their own, not the start-up one (`TestARedemptionIsAnsweredAfterTheContextItWasServedUnderEnds`).
+      `Broker.Issue` now takes `(ctx, scope, Reference, ttl)`; the value-carrying `Issue`/`IssueFor`
+      are gone, and every test using them issues by reference. Also
+      `TestTwoPlanesShareTheirSecretHandles` (server, two distributed planes over one bus). Red
+      first: compile, "undefined: secrets.Reference"; behaviourally, with the broker's store
+      forced back to process memory: "a handle issued on plane A was refused by plane B", "plane A
+      revoked none of the attempt's handles plane B issued", "round 1: 0 planes redeemed one
+      single-use handle presented concurrently", and the server's "plane B refused a handle plane
+      A issued". Mutations, each red then restored and `cmp`-verified: store in memory (above);
+      spend without the revision (`-count=20`: "round 0: 2/5/8 planes redeemed one single-use
+      handle"); expiry check dropped ("a handle past its expiry was redeemed on another plane");
+      tenant check dropped ("tenant globex redeemed on plane B a handle plane A issued for acme");
+      the digest replaced by the raw handle ("the handle bucket holds a redeemable HANDLE"); the
+      step issuer recording the value as the name ("the handle bucket holds a secret VALUE");
+      revocation by attempt ignoring the attempt; revocation ignoring the tenant in the key
+      filter; the responder redeeming under the start-up context.
+- [x] **Every plane answers a redemption, and the engine takes whichever reply is first.**
+      Decided by ADR 0031. Files: `internal/bus/nats.go`, `internal/secrets/secrets.go`.
+      Interfaces: produces `(*bus.NATS).RespondRawSubjectQueue(ctx, subject, queue, fn)` and
+      `secrets.RedeemQueue`; `secrets.SubjectResponder` requires it.
+      Tests, red first: `TestExactlyOnePlaneAnswersARedemption` (secrets).
+      CLOSED 2026-09-15. `ServeTenants`, `Serve` and `ServeAccount` join queue group
+      `dhole-secret-redeem` through `RespondRawSubjectQueue`; the plain `RespondRawSubject` stays
+      for its other callers. Red: mutation to a plain `Subscribe` fails
+      `TestExactlyOnePlaneAnswersARedemption` ("10 redemptions were answered 20 times across two
+      planes"); restored and `cmp`-verified.
+- [x] **A run the scheduler fails on its own leaves its queued siblings' handles live.** Left
+      open by the revocation item above; decided by ADR 0031. Run-terminal paths: `RUN_FAILED`
+      from attempts exhausted (a step that failed or timed out), a policy denial, a secret
+      refusal or a `builtin:` secret refusal, all through `Scheduler.fail`; `RUN_COMPLETED`
+      through `Scheduler.complete`; `RUN_CANCELLED` through `api.CancelRun`, already revoking;
+      `RUN_FAILED` written outside the scheduler by an approval denied
+      (`internal/steps/approval`) and a halting `builtin:llm` step (`internal/steps/llm`).
+      Unschedulable does not end a run. Files: `internal/scheduler/secrets.go`,
+      `internal/scheduler/scheduler.go` (`fail`, `complete`), `internal/secrets/secrets.go`,
+      `internal/server/server.go` (`sweepLoop`).
+      Interfaces: `scheduler.StepSecrets` gains `RevokeRun(ctx, tenantID, runID)`;
+      produces `(*secrets.Broker).RevokeClosedRuns(ctx, open secrets.OpenRuns) (int, error)`.
+      Tests, red first: `TestEveryRunTerminalPathRevokesTheRunsHandles` (scheduler: exhausted,
+      policy denial, secret refusal, builtin secret refusal, completed),
+      `TestAHandleOfARunClosedOutsideTheSchedulerIsRevokedBySweep` (secrets).
+      CLOSED 2026-09-15. `Scheduler.fail` and `Scheduler.complete` revoke the run after their
+      append; the plane's `sweepLoop` calls `Broker.RevokeClosedRuns(ctx, store.OpenRuns)` every
+      orphan-sweep tick, listing handles BEFORE the index. Also
+      `TestAPlaneSweepsTheHandlesOfARunNoLongerOpen` (server). Red, by hand-reverting: both calls
+      removed, every subtest "a queued sibling's handle outlived a run that <path>"; only
+      `fail`'s removed, the four failure subtests; only `complete`'s, "completed"; the sweep
+      call removed from `sweepLoop`, "a handle of a run that is no longer open survived the
+      plane's sweep"; the sweep ignoring the index ("revoked 3 handles"); the sweep re-reading
+      handles after the index ("revoked 2 handles" — the run created mid-sweep). Each restored
+      and `cmp`-verified. An approval denial and a halting `builtin:llm` step are revoked by the
+      sweep, within one tick, not at once.
+- [x] **A plane serves redemption only in its own NATS account.** Left open by the redemption
+      subject item above; decided by ADR 0031. A tenant whose engines hold credentials for its
+      own account (ADR 0014) requests where nothing answers. Files:
+      `internal/secrets/secrets.go`, `internal/server/server.go`, `cmd/dhole/cli/serve.go`,
+      `docs/secrets.md`.
+      Interfaces: produces `secrets.ServeAccount(ctx, r, broker, tenantID, base) (func(), error)`,
+      `server.Config.SecretAccounts map[string]string` (tenant to account credential URL) and
+      `dhole serve --secret-account TENANT=ENVVAR`.
+      Tests, red first: `TestATenantInItsOwnAccountRedeemsThroughTheEmbeddedServer` (server,
+      a tenant account and tier user provisioned on the embedded server).
+      CLOSED 2026-09-15. `server.Config.SecretAccounts` opens one connection per tenant account
+      and serves `ServeAccount` there, the tenant pinned to the account whatever the subject
+      token, legacy subject included; `dhole serve --secret-account TENANT=ENVVAR` reads the URL
+      from the variable and never repeats it (`TestASecretAccountIsNamedForATenantAndItsCredentialIsRead`).
+      Red: with the call removed, "secrets: redeeming the reference bound to "REGISTRY_PASSWORD":
+      bus: request "secret.redeem": nats: no responders available for request"; with the account
+      responder redeeming by handle alone, "an engine in acme's account redeemed a handle issued
+      for globex". Restored and `cmp`-verified. LEFT OPEN: the chart has no value for
+      `--secret-account`, and dispatch into a tenant's own account is not wired either — the plane
+      still dials one bus URL — so this makes redemption reachable there, not the whole path.
+- [x] **`dhole serve` evaluates no dispatch policy, and dispatch never sets the taint keys.**
+      Left open by the item above; decided by the owner (.procoder/ask/decisions.md, "Which
+      dispatch policy `dhole serve` runs") and by ADR 0032. The plane passes no
+      `scheduler.Config.Policy`, so no step and no secret is put to a rule and `policy_audit`
+      stays empty; `permit` never sets `input.tainted`, `input.taint_sources` or
+      `input.engine_capabilities`, so ADR 0015's rules could not hold at dispatch even if one
+      were wired.
+      Files: `internal/policy/default.yaml`, `internal/policy/document.go` (the policy file
+      format, moved out of the CLI), `internal/policy/floor.go`, `internal/policy/cel.go`
+      (the allow reason naming the revision), `internal/taint/policy.go`
+      (`DispatchFloor`), `internal/scheduler/taint.go` and `internal/scheduler/scheduler.go`
+      (`permit`, and `RUN_CREATED` inputs and `TAINT_SANITISED` folded into `runState`),
+      `internal/server/server.go` and `internal/server/policy.go` (`Config.Policy`,
+      `(*Server).SetPolicy`), `cmd/dhole/cli/serve.go` (`--policy`, `DHOLE_POLICY`, re-reading the
+      file), `cmd/dhole/cli/policy.go` (`dhole policy default`), `charts/dhole`
+      (`controlPlane.policy`), `docs/policy.md`, `docs/secrets.md`.
+      Interfaces: produces `policy.Document`, `policy.ParseDocument(raw []byte) (Document, error)`,
+      `(Document).TierPolicy() (TierPolicy, error)`, `policy.DefaultDocument() []byte`,
+      `policy.Default() TierPolicy`, `policy.WithFloor(inner Source, floor TierPolicy) Source`,
+      `policy.UntrustedTierRules() []Rule`, `taint.DispatchFloor() policy.TierPolicy`,
+      `server.Config.Policy *policy.TierPolicy` (nil is the built-in default),
+      `(*server.Server).SetPolicy(policy.TierPolicy) error`; consumes `scheduler.Config.Policy`
+      and `.Provenance`, `plugins.NewProvenance`, `taint.Sources`, `scheduler.Match`.
+      Tests, red first: `TestTheDefaultPolicyIsEvaluatedAndRecordedForAStepAndItsSecret`,
+      `TestAnOperatorPolicyRefusingASecretFailsTheRun`,
+      `TestATaintedInputReachesTheRuleAsInputTainted` (server e2e through the embedded plane);
+      `TestTheDispatchDecisionCarriesTheTaintOfTheStepsInputs`,
+      `TestTheDispatchDecisionCarriesTheCapabilitiesOfTheEnginesAStepCanReach` (scheduler);
+      `TestTheFloorHoldsUnderAPermissivePolicy`, `TestTheFloorDoesNotTurnAMissingPolicyIntoAPermit`,
+      `TestTheFlooredDefaultStaysWithinThePolicyBudget` (taint); `TestTheServerRefusesAPolicyThatCannotWork`
+      (server); `TestPolicyTestExercisesASecretRule` (cli); `TestTheDefaultDocumentPermitsEverythingAndIsValid`,
+      `TestADocumentThatCannotWorkIsRefusedWhereItIsRead`,
+      `TestTheFloorIsEvaluatedFirstAndOnlyNarrows` (policy);
+      `TestServeRefusesToStartOnAnInvalidPolicy`, `TestPolicyDefaultPrintsTheBuiltInDocument`,
+      `TestAChangedPolicyFileIsInstalledAndAnInvalidOneIsNot` (cli);
+      `TestAnInlinePolicyIsRenderedIntoAConfigMapAndNamedOnTheCommandLine`,
+      `TestAnExistingPolicyConfigMapIsMountedAndNamedOnTheCommandLine`,
+      `TestNoPolicyValuesRenderNoPolicyFlag` (charts).
+      CLOSED 2026-09-15. `server.Start` always builds a CEL engine over
+      `policy.WithFloor(StaticSource, taint.DispatchFloor())`, audited by `SQLAudit` in the run
+      database, with `plugins.Provenance`
+      over the run database's signatures and upstreams; `Config.Policy` nil is `policy.Default()`.
+      `default.yaml` is one rule, `default.permit` = `true`, printed by `dhole policy default`. The
+      floor is `taint.privileged-engine`, `taint.effectful-step` and three `tier.untrusted-*` rules;
+      it is composed only onto a tier that has rules. `permit` sets `Tainted`/`TaintSources` from
+      `RUN_CREATED` inputs on free ports plus edge-fed upstream taint, less `TAINT_SANITISED`
+      sources, and `EngineCapabilities` as the union over `Match` (none for `builtin:`). An allow's
+      reason names the composed revision. `dhole serve --policy` / `DHOLE_POLICY` loads
+      `policy.ParseDocument` (strict YAML; no rules refused) before anything opens and re-reads it
+      every 10s under `<revision>@<sha256[:12]>`, keeping the policy in force on a bad reload.
+      `dhole policy test` gained `--secret-name`. Chart: `controlPlane.policy.rules` renders
+      `<fullname>-policy`, or `existingConfigMap`+`key`; both is a render failure; mounted whole at
+      `/etc/dhole/policy`. The run id was NOT added to `policy_audit` (SQLite has no idempotent
+      ADD COLUMN; ADR 0032). Red first: compile (`undefined: policy.DefaultDocument`,
+      `taint.DispatchFloor`, `cfg.Policy`, `loadPolicyFile`); then behavioural: "the permissive
+      default let through what the floor refuses" (stub floor), "a step bound to a value a git
+      trigger admitted reached policy clean", "no decision was asked about step:on-process" /
+      capabilities nil, "the plane recorded no policy decision about step:push: map[]", "run never
+      recorded RUN_FAILED" (operator secret rule, tainted rule, floor), "a policy that cannot work
+      was accepted", and every chart assertion. Mutations, 30 each red then restored and
+      `cmp`-verified: revision dropped from the allow reason; floor onto an empty tier; floor
+      revision omitted; empty document accepted; non-strict YAML; floor without taint rules /
+      without untrusted rules / admitting at-most-once; run inputs unread; edges not followed;
+      sanitisation ignored; sources unsorted; `Tainted` and `EngineCapabilities` unset; every
+      engine instead of matched; builtin judged against engines; server wiring no policy, ignoring
+      `Config.Policy`, omitting the floor, discarding audit, not validating; serve reading the
+      policy after start; reload revision without the hash; reload installing a broken file;
+      `policy default` printing nothing; `--secret-name` dropped; chart flag, subPath mount,
+      `existingConfigMap` ignored, both-set accepted. LEFT OPEN: a non-`PURE` step reading
+      untrusted-trigger data is now refused and no sanitisation gate step type is wired (question
+      in .procoder/ask/decisions.md); a tainted step is refused if ANY reachable engine is
+      privileged; no API reads `policy_audit`; the definition-save guard is still unwired in serve.
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So

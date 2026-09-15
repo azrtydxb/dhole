@@ -463,3 +463,61 @@ func TestTheDefaultEngineRequestsRealCPU(t *testing.T) {
 	require.NotNil(t, m, "the default engine container has no CPU request:\n%s", engine)
 	require.Equal(t, "500m", m[1], "the default engine's CPU request changed; revisit the sizing rule in values.yaml")
 }
+
+// An operator's dispatch policy, written inline in the values, is rendered into
+// a ConfigMap, mounted as a DIRECTORY and named on the command line (ADR 0032).
+// A directory and not a subPath: Kubernetes rewrites a mounted ConfigMap in
+// place only when it is mounted whole, and the plane re-reads the file.
+func TestAnInlinePolicyIsRenderedIntoAConfigMapAndNamedOnTheCommandLine(t *testing.T) {
+	out := render(t, "--set-string",
+		"controlPlane.policy.rules=revision: ops/1\nrules:\n  - id: no-signing-key\n    expression: 'input.secret_name != \"release-signing-key\"'\n")
+
+	if !strings.Contains(out, "--policy=/etc/dhole/policy/policy.yaml") {
+		t.Errorf("the plane was not told where its policy is:\n%s", out)
+	}
+	if !regexp.MustCompile(`kind: ConfigMap\nmetadata:\n\s+name: dhole-policy`).MatchString(out) {
+		t.Errorf("no ConfigMap holds the inline policy:\n%s", out)
+	}
+	if !strings.Contains(out, "id: no-signing-key") {
+		t.Errorf("the ConfigMap does not carry the rules the values wrote:\n%s", out)
+	}
+	if !regexp.MustCompile(`mountPath: /etc/dhole/policy\n`).MatchString(out) ||
+		!regexp.MustCompile(`configMap:\n\s+name: dhole-policy`).MatchString(out) {
+		t.Errorf("the policy ConfigMap is not mounted whole where the flag points:\n%s", out)
+	}
+	if strings.Contains(out, "subPath: policy.yaml") {
+		t.Errorf("the policy is mounted by subPath, which Kubernetes never updates:\n%s", out)
+	}
+}
+
+// A ConfigMap the operator manages is mounted and named, under the key it
+// says, and the chart renders no ConfigMap of its own.
+func TestAnExistingPolicyConfigMapIsMountedAndNamedOnTheCommandLine(t *testing.T) {
+	out := render(t,
+		"--set", "controlPlane.policy.existingConfigMap=platform-policy",
+		"--set", "controlPlane.policy.key=dispatch.yaml")
+
+	if !strings.Contains(out, "--policy=/etc/dhole/policy/dispatch.yaml") {
+		t.Errorf("the plane was not told which key holds its policy:\n%s", out)
+	}
+	if !regexp.MustCompile(`configMap:\n\s+name: platform-policy`).MatchString(out) {
+		t.Errorf("the operator's ConfigMap is not mounted:\n%s", out)
+	}
+	if regexp.MustCompile(`kind: ConfigMap\nmetadata:\n\s+name: dhole-policy`).MatchString(out) {
+		t.Errorf("the chart rendered its own policy ConfigMap beside the operator's:\n%s", out)
+	}
+	if _, err := renderErr(t,
+		"--set", "controlPlane.policy.existingConfigMap=platform-policy",
+		"--set-string", "controlPlane.policy.rules=revision: r\n"); err == nil {
+		t.Error("the chart rendered two policies, and one of them would silently win")
+	}
+}
+
+// With no policy values the plane runs the built-in default, and the chart
+// says nothing about a policy at all.
+func TestNoPolicyValuesRenderNoPolicyFlag(t *testing.T) {
+	out := render(t)
+	if strings.Contains(out, "--policy") || strings.Contains(out, "/etc/dhole/policy") {
+		t.Errorf("a policy was rendered that nobody configured:\n%s", out)
+	}
+}

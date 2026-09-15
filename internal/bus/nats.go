@@ -281,6 +281,29 @@ func (n *NATS) RespondRawSubject(
 	return func() { _ = sub.Unsubscribe() }, nil
 }
 
+// RespondRawSubjectQueue is RespondRawSubject in a queue group: of every
+// responder on the subject in the same group, the server hands each request
+// to exactly one. Secret redemption needs it — every control-plane replica
+// serves secret.redeem.*, and without a group each of them answered and the
+// requester took whichever reply came first (ADR 0031).
+func (n *NATS) RespondRawSubjectQueue(
+	ctx context.Context, subject, queue string, fn func(subject string, body []byte) []byte,
+) (func(), error) {
+	if queue == "" {
+		return nil, fmt.Errorf("bus: respond on %q: a queue group needs a name", subject)
+	}
+	sub, err := n.conn.QueueSubscribe(subject, queue, func(m *nats.Msg) {
+		_ = m.Respond(fn(m.Subject, m.Data))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bus: respond on %q: %w", subject, err)
+	}
+	if err := n.confirmSubscribed(ctx, sub, subject); err != nil {
+		return nil, err
+	}
+	return func() { _ = sub.Unsubscribe() }, nil
+}
+
 // Respond serves requests on subject until the returned function is called.
 // This is the receiving half of Request — how an engine answers EngineControl
 // over the connection it dialled.

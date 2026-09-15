@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
@@ -41,7 +42,12 @@ type StepIssuer struct {
 
 // NewStepIssuer returns an issuer minting through b from src. A nil src is a
 // plane that holds no step secrets: a step declaring one is refused naming it.
+//
+// src is also lent to b as the source its step handles resolve from: the value
+// is read at redemption, by whichever plane answers, and never recorded with
+// the handle (ADR 0031).
 func NewStepIssuer(b *Broker, src Source) *StepIssuer {
+	b.lend(SourceStep, src)
 	return &StepIssuer{broker: b, source: src}
 }
 
@@ -93,12 +99,27 @@ func (i *StepIssuer) Issue(
 	}
 	refs := make([]*dholev1.SecretRef, 0, len(step.GetSecrets()))
 	for _, decl := range step.GetSecrets() {
+		// Read to be sure it can be redeemed, and then dropped: the handle
+		// records the secret's NAME, and the value is read again when it is
+		// redeemed (ADR 0031).
 		value, err := i.value(ctx, scope.TenantID, decl.GetName())
 		if err != nil {
+			i.Discard(ctx, refs)
 			return nil, err
 		}
-		ref, err := i.broker.IssueFor(scope, decl.GetEnv(), value, ttl)
+		if strings.HasPrefix(value, RefusalPrefix) {
+			i.Discard(ctx, refs)
+			// The refusal names neither the value nor its contents: this
+			// error is itself the closest thing to a leak in the package.
+			return nil, fmt.Errorf("secrets: the secret named %q begins %q and cannot be issued: "+
+				"a redemption reply with that prefix is a refusal, so the value would be read as an error",
+				decl.GetName(), RefusalPrefix)
+		}
+		ref, err := i.broker.Issue(ctx, scope, Reference{
+			Source: SourceStep, Secret: decl.GetName(), Binding: decl.GetEnv(),
+		}, ttl)
 		if err != nil {
+			i.Discard(ctx, refs)
 			return nil, fmt.Errorf("secrets: issuing a handle for the secret named %q: %w", decl.GetName(), err)
 		}
 		refs = append(refs, ref)
@@ -108,23 +129,26 @@ func (i *StepIssuer) Issue(
 
 // Revoke forgets the unspent handles issued for one attempt, when it ends
 // (ADR 0030).
-func (i *StepIssuer) Revoke(_ context.Context, scope Scope) {
+func (i *StepIssuer) Revoke(ctx context.Context, scope Scope) {
 	if i == nil || i.broker == nil {
 		return
 	}
-	i.broker.RevokeAttempt(scope)
+	_, err := i.broker.RevokeAttempt(ctx, scope)
+	i.broker.report(err)
 }
 
-// RevokeRun forgets the unspent handles of every attempt of one run.
-func (i *StepIssuer) RevokeRun(_ context.Context, tenantID, runID string) {
+// RevokeRun forgets the unspent handles of every attempt of one run, when the
+// run ends however it ends (ADR 0031).
+func (i *StepIssuer) RevokeRun(ctx context.Context, tenantID, runID string) {
 	if i == nil || i.broker == nil {
 		return
 	}
-	i.broker.RevokeRun(tenantID, runID)
+	_, err := i.broker.RevokeRun(ctx, tenantID, runID)
+	i.broker.report(err)
 }
 
 // Discard forgets handles issued for a dispatch that never committed.
-func (i *StepIssuer) Discard(_ context.Context, refs []*dholev1.SecretRef) {
+func (i *StepIssuer) Discard(ctx context.Context, refs []*dholev1.SecretRef) {
 	if i == nil || i.broker == nil || len(refs) == 0 {
 		return
 	}
@@ -132,7 +156,8 @@ func (i *StepIssuer) Discard(_ context.Context, refs []*dholev1.SecretRef) {
 	for _, ref := range refs {
 		handles = append(handles, ref.GetHandle())
 	}
-	i.broker.RevokeHandles(handles...)
+	_, err := i.broker.RevokeHandles(ctx, handles...)
+	i.broker.report(err)
 }
 
 // value reads one secret, naming it in every failure.

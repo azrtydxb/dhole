@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/bus"
 	"github.com/azrtydxb/dhole/internal/secrets"
 )
@@ -19,26 +20,26 @@ import (
 // replayed after a lost ack, and the replay must not be able to read the value
 // the first attempt already took.
 func TestAHandleIsRefusedTheSecondTimeItIsRedeemed(t *testing.T) {
-	b := secrets.NewBroker()
-	ref, err := b.Issue("t1", "TOKEN", "correcthorsebatterystaple", time.Minute)
-	require.NoError(t, err)
+	ctx := context.Background()
+	b := stepBroker("t1", "TOKEN", "correcthorsebatterystaple")
+	ref := issue(t, b, secrets.Scope{TenantID: "t1"}, "TOKEN", time.Minute)
 
-	value, err := b.Redeem(ref.GetHandle())
+	value, err := b.Redeem(ctx, ref.GetHandle())
 	require.NoError(t, err)
 	require.Equal(t, "correcthorsebatterystaple", value)
 
-	_, err = b.Redeem(ref.GetHandle())
+	_, err = b.Redeem(ctx, ref.GetHandle())
 	require.Error(t, err, "a handle is single-use")
 }
 
 // TestAnExpiredHandleIsRefused holds SecretRef.expires_at: the issuer enforces
 // the TTL, because it is the only party that knows when it issued.
 func TestAnExpiredHandleIsRefused(t *testing.T) {
-	b := secrets.NewBroker()
-	ref, err := b.Issue("t1", "TOKEN", "value", -time.Second)
-	require.NoError(t, err)
+	b := stepBroker("t1", "TOKEN", "value")
+	ref := issue(t, b, secrets.Scope{TenantID: "t1"}, "TOKEN", time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
-	_, err = b.Redeem(ref.GetHandle())
+	_, err := b.Redeem(context.Background(), ref.GetHandle())
 	require.Error(t, err, "a handle past expires_at is refused")
 }
 
@@ -47,13 +48,13 @@ func TestAnExpiredHandleIsRefused(t *testing.T) {
 // JobStatus error, which is durable and archived: a handle or a value in one
 // is a credential at rest in the run history.
 func TestARefusalNamesNeitherTheHandleNorTheValue(t *testing.T) {
-	b := secrets.NewBroker()
-	ref, err := b.Issue("t1", "TOKEN", "correcthorsebatterystaple", time.Minute)
-	require.NoError(t, err)
-	_, err = b.Redeem(ref.GetHandle())
+	ctx := context.Background()
+	b := stepBroker("t1", "TOKEN", "correcthorsebatterystaple")
+	ref := issue(t, b, secrets.Scope{TenantID: "t1"}, "TOKEN", time.Minute)
+	_, err := b.Redeem(ctx, ref.GetHandle())
 	require.NoError(t, err)
 
-	_, err = b.Redeem(ref.GetHandle())
+	_, err = b.Redeem(ctx, ref.GetHandle())
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), ref.GetHandle())
 	require.NotContains(t, err.Error(), "correcthorsebatterystaple")
@@ -65,11 +66,21 @@ func TestARefusalNamesNeitherTheHandleNorTheValue(t *testing.T) {
 // be seen — at the moment somebody stores such a secret — rather than at
 // redemption, where an engine would silently fail a step it could have run.
 func TestIssuingAValueThatWouldReadAsARefusalIsRejectedAtIssueTime(t *testing.T) {
-	b := secrets.NewBroker()
-	_, err := b.Issue("t1", "TOKEN", "ERR not really an error", time.Minute)
+	ctx := context.Background()
+	b := stepBroker("acme", "harbor-robot", "ERR not really an error")
+	issuer := secrets.NewStepIssuer(b, nil)
+	_, err := issuer.Issue(ctx, attemptOne,
+		secretStep(&dholev1.StepSecret{Name: "harbor-robot", Env: "TOKEN"}), time.Minute)
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "not really an error",
 		"the refusal must not echo the value it refused")
+
+	// And where the value became one after its handle was issued, the
+	// redemption refuses rather than send a value that reads as an error.
+	ref := issue(t, b, secrets.Scope{TenantID: "acme"}, "harbor-robot", time.Minute)
+	_, err = b.Redeem(ctx, ref.GetHandle())
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "not really an error")
 }
 
 // TestABusRedeemerExchangesAHandleForItsValueOverTheRedemptionSubject is the
@@ -80,13 +91,12 @@ func TestABusRedeemerExchangesAHandleForItsValueOverTheRedemptionSubject(t *test
 	defer cancel()
 
 	plane, engineConn := redemptionBus(ctx, t)
-	broker := secrets.NewBroker()
+	broker := stepBroker("t1", "TOKEN", "correcthorsebatterystaple")
 	stop, err := secrets.ServeTenants(ctx, plane, broker, bus.SubjectSecretRedeem())
 	require.NoError(t, err)
 	t.Cleanup(stop)
 
-	ref, err := broker.Issue("t1", "TOKEN", "correcthorsebatterystaple", time.Minute)
-	require.NoError(t, err)
+	ref := issue(t, broker, secrets.Scope{TenantID: "t1"}, "TOKEN", time.Minute)
 
 	wire := &subjectRecorder{inner: engineConn}
 	redeemer := secrets.NewBusRedeemer(wire, bus.SubjectSecretRedeem())
@@ -117,14 +127,13 @@ func TestAHandleIsRefusedOnAnotherTenantsSubject(t *testing.T) {
 	defer cancel()
 
 	plane, engineConn := redemptionBus(ctx, t)
-	broker := secrets.NewBroker()
+	broker := stepBroker("acme", "TOKEN", "acme-value")
 	stop, err := secrets.ServeTenants(ctx, plane, broker, bus.SubjectSecretRedeem())
 	require.NoError(t, err)
 	t.Cleanup(stop)
 	redeemer := secrets.NewBusRedeemer(engineConn, bus.SubjectSecretRedeem())
 
-	acme, err := broker.Issue("acme", "TOKEN", "acme-value", time.Minute)
-	require.NoError(t, err)
+	acme := issue(t, broker, secrets.Scope{TenantID: "acme"}, "TOKEN", time.Minute)
 	_, err = redeemer.Redeem(ctx, "globex", acme)
 	require.Error(t, err, "tenant globex redeemed a handle issued for tenant acme")
 	require.NotContains(t, err.Error(), "acme-value")
@@ -133,13 +142,12 @@ func TestAHandleIsRefusedOnAnotherTenantsSubject(t *testing.T) {
 	_, err = redeemer.Redeem(ctx, "acme", acme)
 	require.Error(t, err, "a handle presented on the wrong tenant's subject is spent by being presented")
 
-	fresh, err := broker.Issue("acme", "TOKEN", "acme-value", time.Minute)
-	require.NoError(t, err)
+	fresh := issue(t, broker, secrets.Scope{TenantID: "acme"}, "TOKEN", time.Minute)
 	value, err := redeemer.Redeem(ctx, "acme", fresh)
 	require.NoError(t, err, "the owning tenant was refused its own handle")
 	require.Equal(t, "acme-value", value)
 
-	_, err = broker.RedeemFor("", fresh.GetHandle())
+	_, err = broker.RedeemFor(ctx, "", fresh.GetHandle())
 	require.Error(t, err, "a redemption naming no tenant is not a redemption for every tenant")
 }
 
@@ -153,13 +161,12 @@ func TestAnEngineFallsBackToTheLegacySubjectWhenNothingServesTheScopedOne(t *tes
 	defer cancel()
 
 	plane, engineConn := redemptionBus(ctx, t)
-	broker := secrets.NewBroker()
+	broker := stepBroker("acme", "TOKEN", "legacy-value")
 	stop, err := secrets.Serve(ctx, plane, broker, bus.SubjectSecretRedeem())
 	require.NoError(t, err)
 	t.Cleanup(stop)
 
-	ref, err := broker.Issue("acme", "TOKEN", "legacy-value", time.Minute)
-	require.NoError(t, err)
+	ref := issue(t, broker, secrets.Scope{TenantID: "acme"}, "TOKEN", time.Minute)
 
 	wire := &subjectRecorder{inner: engineConn}
 	value, err := secrets.NewBusRedeemer(wire, bus.SubjectSecretRedeem()).Redeem(ctx, "acme", ref)
@@ -211,36 +218,63 @@ func (r *subjectRecorder) all() []string {
 // been issued, not a sibling step, and not another run or another tenant's run
 // of the same id.
 func TestRevokingAnAttemptLeavesEveryOtherAttemptsHandles(t *testing.T) {
-	b := secrets.NewBroker()
-	issue := func(scope secrets.Scope) string {
+	ctx := context.Background()
+	b := stepBroker("acme", "TOKEN", "value", "globex", "TOKEN", "value")
+	issued := func(scope secrets.Scope) string {
 		t.Helper()
-		ref, err := b.IssueFor(scope, "TOKEN", "value", time.Minute)
-		require.NoError(t, err)
-		return ref.GetHandle()
+		return issue(t, b, scope, "TOKEN", time.Minute).GetHandle()
 	}
 	ended := secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push", Attempt: 1}
-	endedA, endedB := issue(ended), issue(ended)
-	retry := issue(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push", Attempt: 2})
-	sibling := issue(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "sign", Attempt: 1})
-	otherRun := issue(secrets.Scope{TenantID: "acme", RunID: "run-2", StepID: "push", Attempt: 1})
-	otherTenant := issue(secrets.Scope{TenantID: "globex", RunID: "run-1", StepID: "push", Attempt: 1})
+	endedA, endedB := issued(ended), issued(ended)
+	retry := issued(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push", Attempt: 2})
+	sibling := issued(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "sign", Attempt: 1})
+	otherRun := issued(secrets.Scope{TenantID: "acme", RunID: "run-2", StepID: "push", Attempt: 1})
+	otherTenant := issued(secrets.Scope{TenantID: "globex", RunID: "run-1", StepID: "push", Attempt: 1})
 
-	require.Equal(t, 2, b.RevokeAttempt(ended), "an ended attempt's two unspent handles were not both revoked")
+	n, err := b.RevokeAttempt(ctx, ended)
+	require.NoError(t, err)
+	require.Equal(t, 2, n, "an ended attempt's two unspent handles were not both revoked")
 	for _, h := range []string{endedA, endedB} {
-		_, err := b.Redeem(h)
+		_, err := b.Redeem(ctx, h)
 		require.Error(t, err, "a handle of an ended attempt is still redeemable")
 	}
-	require.Zero(t, b.RevokeAttempt(secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push"}),
-		"a scope naming no attempt is not every attempt")
+	n, err = b.RevokeAttempt(ctx, secrets.Scope{TenantID: "acme", RunID: "run-1", StepID: "push"})
+	require.NoError(t, err)
+	require.Zero(t, n, "a scope naming no attempt is not every attempt")
 
-	require.Equal(t, 2, b.RevokeRun("acme", "run-1"), "a run's remaining handles were not revoked with it")
+	n, err = b.RevokeRun(ctx, "acme", "run-1")
+	require.NoError(t, err)
+	require.Equal(t, 2, n, "a run's remaining handles were not revoked with it")
 	for _, h := range []string{retry, sibling} {
-		_, err := b.Redeem(h)
+		_, err := b.Redeem(ctx, h)
 		require.Error(t, err, "a handle of a revoked run is still redeemable")
 	}
 	for _, h := range []string{otherRun, otherTenant} {
-		_, err := b.Redeem(h)
+		_, err := b.Redeem(ctx, h)
 		require.NoError(t, err, "revoking one run took a handle of another")
 	}
-	require.Zero(t, b.RevokeRun("", "run-1"), "a revocation naming no tenant is not every tenant's")
+	n, err = b.RevokeRun(ctx, "", "run-1")
+	require.NoError(t, err)
+	require.Zero(t, n, "a revocation naming no tenant is not every tenant's")
+}
+
+// stepBroker is an in-memory broker whose step handles resolve from a source
+// holding the given tenant, name, value triples.
+func stepBroker(triples ...string) *secrets.Broker {
+	src := secrets.NewMapSource()
+	for i := 0; i+2 < len(triples); i += 3 {
+		src.Set(triples[i], triples[i+1], triples[i+2])
+	}
+	b := secrets.NewBroker()
+	secrets.NewStepIssuer(b, src)
+	return b
+}
+
+// issue mints a step handle for the secret called name, bound to the same name.
+func issue(t *testing.T, b *secrets.Broker, scope secrets.Scope, name string, ttl time.Duration) *dholev1.SecretRef {
+	t.Helper()
+	ref, err := b.Issue(context.Background(), scope,
+		secrets.Reference{Source: secrets.SourceStep, Secret: name, Binding: name}, ttl)
+	require.NoError(t, err)
+	return ref
 }

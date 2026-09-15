@@ -78,3 +78,33 @@ rules:
 		errOut.String())
 	require.Contains(t, out.String(), "acme.privileged-engine")
 }
+
+// TestPolicyTestExercisesASecretRule: a rule on input.secret_name is the one an
+// operator tightening the default writes first (ADR 0032), so `dhole policy
+// test` has to be able to ask about a secret as well as a step.
+func TestPolicyTestExercisesASecretRule(t *testing.T) {
+	const file = `revision: rev-1
+rules:
+  - id: signing-key-for-releases-only
+    expression: 'input.secret_name != "release-signing-key" || input.tier == "release"'
+    reason: only the release tier may read the signing key
+`
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(file), 0o600))
+
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	code := cli.Main([]string{
+		"policy", "test", "--policy", path, "--tier", "trusted",
+		"--subject", "secret:release-signing-key", "--secret-name", "release-signing-key",
+		"--expect-allow=false",
+	}, out, errOut)
+	require.Zerof(t, code, "the rule refuses the named secret outside the release tier: %s%s", out.String(), errOut.String())
+	require.Contains(t, out.String(), "signing-key-for-releases-only")
+
+	out, errOut = &bytes.Buffer{}, &bytes.Buffer{}
+	code = cli.Main([]string{
+		"policy", "test", "--policy", path, "--tier", "release",
+		"--subject", "secret:release-signing-key", "--secret-name", "release-signing-key",
+	}, out, errOut)
+	require.Zerof(t, code, "the release tier may read it: %s%s", out.String(), errOut.String())
+}

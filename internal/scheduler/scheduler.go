@@ -52,6 +52,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
+	"github.com/azrtydxb/dhole/internal/taint"
 	"github.com/azrtydxb/dhole/internal/wire"
 )
 
@@ -551,7 +552,7 @@ func (s *Scheduler) Advance(ctx context.Context, tenantID, runID string) error {
 		// a run judged under whatever policy was in force then, and handing
 		// them to this run would be the refused step succeeding by another
 		// route.
-		permitted, err := s.permit(ctx, tenantID, runID, step, state)
+		permitted, err := s.permit(ctx, tenantID, runID, pipeline, step, state)
 		if err != nil {
 			return err
 		}
@@ -1546,6 +1547,12 @@ type runState struct {
 	// the log recorded them. They are part of the run's GRAPH rather than of
 	// its progress: see spliceRealised.
 	fragments []realised
+	// inputs are the values the run was started with, as RUN_CREATED
+	// recorded them — wrapped, where a trigger marked them — and sanitised is
+	// the taint sources a gate recorded clearing, per gate step. Both are
+	// what a dispatch decision's taint is derived from (see taint.go).
+	inputs    map[string]*structpb.Value
+	sanitised map[string][]string
 }
 
 // load replays the run and folds its events into the state a decision needs.
@@ -1566,6 +1573,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 		cacheHit:      map[string]bool{},
 		gated:         map[string]bool{},
 		resumed:       map[string]bool{},
+		sanitised:     map[string][]string{},
 	}
 	for _, e := range events {
 		switch e.Type {
@@ -1577,6 +1585,7 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 			state.created = true
 			state.pipelineID = created.PipelineID
 			state.revisionID = created.RevisionID
+			state.inputs = created.Inputs
 		case runstore.StepDispatched:
 			if e.Attempt > state.attempts[e.StepID] {
 				state.attempts[e.StepID] = e.Attempt
@@ -1660,6 +1669,12 @@ func (s *Scheduler) load(ctx context.Context, tenantID, runID string) (*runState
 				return nil, fmt.Errorf("scheduler: run %q step %q: %w", runID, e.StepID, err)
 			}
 			state.unschedulable[e.StepID] = reason.Reason
+		case taint.EventSanitised:
+			record, err := taint.UnmarshalRecord(e.Payload)
+			if err != nil {
+				return nil, fmt.Errorf("scheduler: run %q step %q: %w", runID, e.StepID, err)
+			}
+			state.sanitised[e.StepID] = append(state.sanitised[e.StepID], record.Sources...)
 		case runstore.StepReady:
 		}
 	}
@@ -1799,7 +1814,7 @@ func predecessorsOf(p *dholev1.Pipeline, g *dag.Graph) map[string][]string {
 // for the same reason; a dispatcher that failed open would undo it on the one
 // path where it matters.
 func (s *Scheduler) permit(
-	ctx context.Context, tenantID, runID string, step *dholev1.Step, state *runState,
+	ctx context.Context, tenantID, runID string, pipeline *dholev1.Pipeline, step *dholev1.Step, state *runState,
 ) (bool, error) {
 	if s.pol == nil {
 		return true, nil
@@ -1813,15 +1828,27 @@ func (s *Scheduler) permit(
 		}, signed, upstream)
 	}
 
+	// The facts only the run and the fleet know (ADR 0032). A fleet that
+	// cannot be listed is an error rather than a denial, as it is for the
+	// dispatch that follows: the run is not refused for an outage, it is
+	// advanced again when the fleet answers.
+	engineCaps, err := s.reachableCapabilities(ctx, tenantID, step)
+	if err != nil {
+		return false, err
+	}
+	sources := taintSources(pipeline, step, state)
 	in := policy.Input{
-		Tier:         s.tier,
-		TenantID:     tenantID,
-		Subject:      "step:" + step.GetId(),
-		Capabilities: step.GetCapabilities(),
-		EffectClass:  step.GetEffectClass(),
-		PluginRef:    step.GetPluginRef(),
-		Signed:       signed,
-		Upstream:     upstream,
+		Tier:               s.tier,
+		TenantID:           tenantID,
+		Subject:            "step:" + step.GetId(),
+		Capabilities:       step.GetCapabilities(),
+		EffectClass:        step.GetEffectClass(),
+		PluginRef:          step.GetPluginRef(),
+		Signed:             signed,
+		Upstream:           upstream,
+		Tainted:            len(sources) > 0,
+		TaintSources:       sources,
+		EngineCapabilities: engineCaps,
 	}
 	allowed, err := s.decide(ctx, tenantID, runID, step, in, "")
 	if err != nil || !allowed {
@@ -2471,11 +2498,16 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 	// A span left open is never exported, and the run would be missing from
 	// the trace precisely because it failed.
 	defer obs.EndRun(tenantID, runID)
-	return s.append(ctx, tenantID, runstore.Event{
+	if err := s.append(ctx, tenantID, runstore.Event{
 		RunID:   runID,
 		Type:    RunFailed,
 		Payload: payload,
-	})
+	}); err != nil {
+		return err
+	}
+	// A failed run's queued siblings still carry handles (ADR 0031).
+	s.revokeRunSecrets(ctx, tenantID, runID)
+	return nil
 }
 
 // complete closes a run that has nothing ready and nothing in flight.
@@ -2497,10 +2529,14 @@ func (s *Scheduler) fail(ctx context.Context, tenantID, runID string, steps []st
 // is over either way.
 func (s *Scheduler) complete(ctx context.Context, tenantID, runID string) error {
 	defer obs.EndRun(tenantID, runID)
-	return s.append(ctx, tenantID, runstore.Event{
+	if err := s.append(ctx, tenantID, runstore.Event{
 		RunID: runID,
 		Type:  runstore.RunCompleted,
-	})
+	}); err != nil {
+		return err
+	}
+	s.revokeRunSecrets(ctx, tenantID, runID)
+	return nil
 }
 
 // append stamps an event with the current time and writes it. Events written

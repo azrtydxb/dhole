@@ -233,6 +233,11 @@ type policyOptions struct {
 	auditor    *recordingAudit
 	provenance *staticProvenance
 	pipeline   *dholev1.Pipeline
+	// engine, when set, is the policy engine itself — for a test that reads
+	// the Input a decision was made on — and source and auditor are unused.
+	engine policy.Engine
+	// engines is the fleet, when a test needs other than one plain engine.
+	engines []registry.Instance
 }
 
 func newPolicyHarness(ctx context.Context, t *testing.T, opts policyOptions) *policyHarness {
@@ -269,12 +274,19 @@ func newPolicyHarness(ctx context.Context, t *testing.T, opts policyOptions) *po
 	leases, err := lease.New(ctx, conn)
 	require.NoError(t, err)
 
-	engine, err := policy.New(opts.source, opts.auditor)
-	require.NoError(t, err)
+	engine := opts.engine
+	if engine == nil {
+		var err error
+		engine, err = policy.New(opts.source, opts.auditor)
+		require.NoError(t, err)
+	}
 
 	recorder := &recordingBus{}
 	ob := outbox.New(store, recorder, "test-plane")
 	fleet := staticFleet{instances: []registry.Instance{readyEngine("engine-1")}}
+	if opts.engines != nil {
+		fleet = staticFleet{instances: opts.engines}
+	}
 	defs := staticDefs{pipeline: opts.pipeline}
 
 	sched, err := scheduler.New(scheduler.Config{

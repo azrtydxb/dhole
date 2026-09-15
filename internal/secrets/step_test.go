@@ -48,7 +48,7 @@ func TestAStepIssuerMintsOneRedeemableHandlePerDeclaration(t *testing.T) {
 	require.Equal(t, "REGISTRY_PASSWORD", refs[0].GetName())
 	require.NotContains(t, refs[0].String(), stepValue, "a SecretRef carries a handle, never the value")
 
-	value, err := broker.Redeem(refs[0].GetHandle())
+	value, err := broker.Redeem(context.Background(), refs[0].GetHandle())
 	require.NoError(t, err)
 	require.Equal(t, stepValue, value)
 }
