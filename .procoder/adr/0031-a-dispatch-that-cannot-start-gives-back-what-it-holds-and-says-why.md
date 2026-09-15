@@ -89,8 +89,9 @@ gone waits in the queue until one that answers is up.
 The cost is churn while nobody answers: each waiting `at-most-once` dispatch is fetched,
 asked about and given back about once a second per dispatch, and its delivery count grows
 with every cycle. JetStream counts a dispatch in its NAK delay against the consumer's
-`max_ack_pending`, which is therefore still a bound engine authors must set to at least their
-slot count. One more failure is possible than before: a plane that renewed the lease and whose
+`max_ack_pending`, so an engine that bounds its fetching with that setting must set it above its
+slot count: at exactly the slot count, as many given-back dispatches as there are slots stop
+every other dispatch reaching it. The reference Python engine uses twice the slot count. One more failure is possible than before: a plane that renewed the lease and whose
 reply never reached the engine leaves an accepted lease nobody lists in a heartbeat, which
 is lost a TTL later if the dispatch is not refetched in time — recorded as a lost attempt,
 never run twice, and for an `at-most-once` step a replay a person decides.

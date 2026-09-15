@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -201,6 +202,15 @@ func (m *boundedMessage) Ack() error {
 	m.settle.Do(m.sub.releaseSlot)
 	if err != nil && !errors.Is(err, nats.ErrMsgAlreadyAckd) {
 		return fmt.Errorf("bus: ack: %w", err)
+	}
+	return nil
+}
+
+func (m *boundedMessage) NakWithDelay(delay time.Duration) error {
+	err := m.msg.NakWithDelay(delay)
+	m.settle.Do(m.sub.releaseSlot)
+	if err != nil {
+		return fmt.Errorf("bus: nak with delay: %w", err)
 	}
 	return nil
 }

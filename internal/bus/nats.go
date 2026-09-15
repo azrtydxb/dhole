@@ -586,10 +586,12 @@ type jsMessage struct {
 	msg jetstream.Msg
 }
 
-func (m *jsMessage) Data() []byte      { return m.msg.Data() }
-func (m *jsMessage) Ack() error        { return m.msg.Ack() }
-func (m *jsMessage) Nak() error        { return m.msg.Nak() }
-func (m *jsMessage) InProgress() error { return m.msg.InProgress() }
+func (m *jsMessage) Data() []byte { return m.msg.Data() }
+func (m *jsMessage) Ack() error   { return m.msg.Ack() }
+func (m *jsMessage) Nak() error   { return m.msg.Nak() }
+
+func (m *jsMessage) NakWithDelay(delay time.Duration) error { return m.msg.NakWithDelay(delay) }
+func (m *jsMessage) InProgress() error                      { return m.msg.InProgress() }
 
 // Health reports whether this connection can carry a message right now.
 //

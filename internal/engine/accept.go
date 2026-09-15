@@ -14,8 +14,8 @@ import (
 // there for a plane that is up but cannot reach its leases.
 const acceptTimeout = 5 * time.Second
 
-// acceptRetry is how long an at-most-once step waits between unanswered
-// acceptance requests.
+// acceptRetry is how long an at-most-once dispatch nobody confirmed stays out
+// of the queue before it is redelivered and asked about again.
 const acceptRetry = time.Second
 
 // verdict is what confirm decided about one dispatch.
@@ -30,6 +30,9 @@ const (
 	// stopping: the engine is shutting down before an at-most-once step was
 	// confirmed. It never started; give the delivery back.
 	stopping
+	// unconfirmed: an at-most-once step nobody answered for. It never started;
+	// give it back to the queue, after a delay, with its slot (ADR 0031).
+	unconfirmed
 )
 
 // confirm asks the control plane whether this dispatch may still start
@@ -49,37 +52,39 @@ const (
 //
 // No answer — no plane serving, a timeout, a plane that could not decide —
 // starts a pure or idempotent step, whose stale result the fence still
-// discards, and keeps an at-most-once step asking: its effect cannot be
+// discards, and does NOT start an at-most-once step: its effect cannot be
 // discarded afterwards, and it is the class required to hold its lease before
-// it executes (ADR 0002). The delivery is renewed meanwhile, since the pump
-// renews it from the moment it was fetched.
+// it executes (ADR 0002). That dispatch goes back to the queue with its slot
+// (unconfirmed, ADR 0031). It used to keep asking here, once a second, holding
+// the slot and the engine's room to fetch for as long as nobody answered — a
+// plane restarting, partitioned, or replaced in an upgrade — and a one-slot
+// engine ran nothing at all meanwhile, pure work included.
+//
+// It is asked about only while it holds a slot, here and on every redelivery.
+// A CURRENT answer accepts the lease, and a lease accepted by a dispatch that
+// then waits for a slot, listed in no heartbeat, is declared lost one TTL later.
 func (a *Agent) confirm(ctx context.Context, d *dholev1.JobDispatch) verdict {
 	if !d.GetConfirmAcceptance() {
 		return start
 	}
-	mustWait := d.GetStep().GetEffectClass() == dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE
-	for {
-		answer, err := a.ask(ctx, d)
-		switch {
-		case err == nil && answer == dholev1.Acceptance_ACCEPTANCE_FENCED:
-			return superseded
-		case err == nil && answer == dholev1.Acceptance_ACCEPTANCE_CURRENT:
-			return start
-		case !mustWait:
-			slog.Warn("starting a step the control plane did not confirm",
-				"engine", a.cfg.EngineID, "run", d.GetRunId(), "step", d.GetStepId(),
-				"attempt", d.GetAttempt(), "acceptance", answer, "error", err)
-			return start
-		}
-		slog.Warn("an at-most-once step waits for the control plane to confirm its fence",
+	answer, err := a.ask(ctx, d)
+	switch {
+	case err == nil && answer == dholev1.Acceptance_ACCEPTANCE_FENCED:
+		return superseded
+	case err == nil && answer == dholev1.Acceptance_ACCEPTANCE_CURRENT:
+		return start
+	case ctx.Err() != nil:
+		return stopping
+	case d.GetStep().GetEffectClass() != dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE:
+		slog.Warn("starting a step the control plane did not confirm",
 			"engine", a.cfg.EngineID, "run", d.GetRunId(), "step", d.GetStepId(),
 			"attempt", d.GetAttempt(), "acceptance", answer, "error", err)
-		select {
-		case <-ctx.Done():
-			return stopping
-		case <-time.After(acceptRetry):
-		}
+		return start
 	}
+	slog.Warn("an at-most-once step nobody confirmed goes back to the queue",
+		"engine", a.cfg.EngineID, "run", d.GetRunId(), "step", d.GetStepId(),
+		"attempt", d.GetAttempt(), "acceptance", answer, "error", err, "retry_in", acceptRetry)
+	return unconfirmed
 }
 
 // ask sends one acceptance request: the ACCEPTED status this engine is about to

@@ -1973,6 +1973,74 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       (a plain subscription) — both red. Tier engines still cannot subscribe to
       `job.accept.>` in any queue (`TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance`
       unchanged). `docs/wire-contract.md` says one plane answers.
+- [x] **An at-most-once dispatch nobody confirms holds its engine's slot.** Left
+      open by "An engine starts a dispatch that was superseded while it waited":
+      with no answer on `job.accept.*` — a plane restarting, partitioned from the
+      engine, or being replaced — an `at-most-once` dispatch keeps asking once a
+      second while holding a slot and its room to fetch, so a one-slot engine runs
+      nothing at all, pure work included. The fix (ADR 0031): one unanswered ask
+      and the engine stops renewing the delivery, NAKs it with a delay of
+      `acceptRetry`, and frees the slot and the room; whoever fetches it next asks
+      again, still holding a slot. Nothing but CURRENT starts it, and the ask is
+      still made holding a slot, so a CURRENT answer is followed at once by the
+      step and never by a wait for one. Files: `internal/bus/bus.go`,
+      `internal/bus/nats.go`, `internal/bus/backpressure.go`,
+      `internal/engine/accept.go`, `internal/engine/agent.go`,
+      `internal/engine/accept_test.go`, `testdata/engines/minimal-python/engine.py`,
+      `conformance/cases.go`, `docs/wire-contract.md`, `docs/writing-an-engine.md`.
+      Interfaces: produces `bus.Message.NakWithDelay(time.Duration) error`;
+      consumes `bus.Bus.Request`. Tests:
+      `TestAnUnconfirmedAtMostOnceStepGivesItsSlotBack` (expect FAIL "an
+      at-most-once dispatch nobody confirmed held the engine's only slot"),
+      the existing
+      `TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts`, and the conformance
+      case `unconfirmed-at-most-once-never-started` for both engines.
+      CLOSED 2026-09-15 as above. `confirm` asks once; no answer for an
+      at-most-once step is the `unconfirmed` verdict, and `handle` stops the
+      delivery renewal, `NakWithDelay(acceptRetry)`s and returns, freeing slot
+      and room. The Python engine does the same (`UNCONFIRMED`, `-NAK
+      {"delay": 1e9}` after stopping its keepalive) and its `max_ack_pending`
+      is now twice its slots: JetStream counts a message in its NAK delay as
+      pending, and at exactly the slot count two given-back dispatches starved
+      the pure one — shown by reverting only that line, which fails the new
+      conformance case. Red first: "an at-most-once dispatch nobody confirmed
+      held the engine's only slot: pure work behind it waited for a plane it
+      does not need"; the conformance case against the engines at HEAD, Go and
+      Python both: "two at-most-once dispatches nobody confirmed held both of the
+      engine's slots". Mutations, each restored with cp and checked with cmp, each
+      red: unconfirmed starting the step (all three engine tests); a NAK without
+      delay (the fetch loop meets "nats: Exceeded MaxWaiting" and the upgrade test
+      never finishes); holding the delivery instead of giving it back; the Python
+      engine starting it ("the engine started run … an at-most-once dispatch the
+      plane never confirmed"); the Python ack-pending bound at the slot count.
+      `docs/wire-contract.md` point 5 and the `max_ack_pending` rule, and
+      `docs/writing-an-engine.md`, say the same. Not built: a separate test that
+      the question is asked only while holding a slot — that ordering is
+      unchanged code from ADR 0029.
+- [x] **A rolling upgrade beside a plane that does not answer acceptance was
+      never shown safe.** Left open by the item above's ADR: a plane that sets
+      `confirm_acceptance` and one from before ADR 0029 that serves nothing on
+      `job.accept.*` share the bus; while the new plane is away, its at-most-once
+      dispatches wait for it. Nothing tested that they never run without it, and
+      that they run exactly once when it returns, while the older plane's work
+      — no flag — runs untouched beside them. Files:
+      `internal/engine/accept_test.go`, `docs/wire-contract.md`. Interfaces:
+      consumes the above. Tests:
+      `TestARollingUpgradeBesideAPlaneThatDoesNotAnswerRunsAtMostOnceWorkOnceItsPlaneReturns`.
+      CLOSED 2026-09-15. The test runs a one-slot engine against an older
+      plane's unflagged at-most-once dispatch and a newer plane's flagged one
+      with nobody serving acceptance: the older one runs, the newer one is asked
+      about at least three times round the queue and never acquires a sandbox or
+      publishes a status, and it runs exactly once when a responder appears. Red
+      against the engine before the item above: the older plane's dispatch never
+      ran ("no terminal JobStatus within 30s") — the waiting one held the slot.
+      Killed by the item above's mutations (unconfirmed starting: "stopped being
+      asked about"; NAK without delay). The scheduler side needs nothing new: an
+      unaccepted offer never expires (`TestAnOfferNobodyHasAcceptedDoesNotExpire`)
+      and a dispatched offer is never withdrawn
+      (`TestTheSweeperWithdrawsNoOfferThatWasDispatchedOrIsStillYoung`), and both
+      are true of a plane from before ADR 0029. `docs/wire-contract.md` has a
+      "Rolling upgrades" paragraph.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
