@@ -43,6 +43,10 @@ LINT_GOOS   ?= linux darwin windows
 # reached its buf steps in CI, because lint failed first; when it did, buf was
 # not installed at all.
 BUF_VERSION := v1.72.0
+# go test's own default is ten minutes PER PACKAGE, and internal/server — a
+# whole plane started over and over — takes about nine on an amd64 runner and
+# more on arm64, where it was killed by that default mid-test.
+TEST_TIMEOUT ?= 30m
 
 .PHONY: check lint golangci-lint-version buf-version web-check web-build web-e2e test test-race test-integration conformance build clean
 .PHONY: acceptance acceptance-ci acceptance-automation acceptance-agent
@@ -118,11 +122,11 @@ web-e2e:
 ## survived review and the gate for two tasks, and was found only because an
 ## unrelated agent happened to run the suite this way.
 test-race:
-	go test -race $(GO_PKGS)
+	go test -race -timeout $(TEST_TIMEOUT) $(GO_PKGS)
 
 ## test: the whole suite.
 test:
-	go test $(GO_PKGS)
+	go test -timeout $(TEST_TIMEOUT) $(GO_PKGS)
 
 ## test-integration: the suite with the services in docker-compose.test.yml
 ## reachable. Start them first with `docker compose -f docker-compose.test.yml
