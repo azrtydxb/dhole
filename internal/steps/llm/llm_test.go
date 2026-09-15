@@ -192,6 +192,68 @@ func TestMalformedObjectIsRetriedThenFailsWithProviderError(t *testing.T) {
 	})
 }
 
+// TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt is the llm half of a
+// plane-hosted step losing its lease mid-call (ADR 0033). The plane cancels the
+// step's context the moment its lease is refused, because another plane may
+// already be running the step: a retry asked after that is a second model
+// call for nobody, and a give-up recorded after it would fail a step somebody
+// else holds. The call that WAS made is still recorded — it cost money and
+// showed somebody's data to a provider whether or not anybody wants its answer.
+func TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt(t *testing.T) {
+	eachStore(t, func(t *testing.T, open storeOpener) {
+		ctx, stop := context.WithCancel(testContext(t))
+		defer stop()
+		// Retryable answers: without the context, the step would ask twice more.
+		garbage := reply(`{"summary":"the quarter went we`, resolvedA, 10, 5, provider.FinishStop)
+		model := &stubModel{
+			alias: alias, nativeJSON: true,
+			turns:  []stubTurn{{resp: garbage}, {resp: garbage}, {resp: garbage}},
+			during: stop, // the lease is lost while the first call is out
+		}
+		_, h := newHarnessWith(t, open, config(), model, nil)
+
+		obj, err := h.step.Run(ctx, runID, stepID, "summarise the report")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, obj)
+
+		require.Len(t, h.records(testContext(t), t), 1,
+			"a model call made as its step was stopped went unrecorded")
+		require.Equal(t, 1, model.callCount(), "a stopped step asked the model again")
+		require.NotContains(t, h.events(testContext(t), t), runstore.StepFailed,
+			"a stopped step recorded a give-up for a step another plane may hold")
+	})
+}
+
+// TestAnLLMStepRunAgainRecordsItsCallsAfterTheOnesBefore: a step is run more
+// than once whenever it is retried — an idempotent llm step that gave up is
+// dispatched again, and a plane that died mid-call is replaced by one that
+// calls again. Each run numbered its calls from one, and the record of a call
+// is unique per (run, step, attempt), so the second run's first call could not
+// be recorded and the step failed on its own bookkeeping, on every retry, until
+// the run ran out of attempts.
+func TestAnLLMStepRunAgainRecordsItsCallsAfterTheOnesBefore(t *testing.T) {
+	eachStore(t, func(t *testing.T, open storeOpener) {
+		ctx := testContext(t)
+		garbage := reply(`{"summary":"the quarter went we`, resolvedA, 10, 5, provider.FinishStop)
+		good := reply(`{"summary":"the quarter went well"}`, resolvedA, 10, 5, provider.FinishStop)
+		h := newHarness(t, open, config(), garbage, garbage, garbage, good)
+
+		_, err := h.step.Run(ctx, runID, stepID, "summarise the report")
+		require.ErrorIs(t, err, llm.ErrNoObject)
+
+		obj, err := h.step.Run(ctx, runID, stepID, "summarise the report")
+		require.NoError(t, err, "a step run again could not record its own model call")
+		require.JSONEq(t, `{"summary":"the quarter went well"}`, string(obj))
+
+		calls := h.records(ctx, t)
+		require.Len(t, calls, 4)
+		for i, c := range calls {
+			require.Equal(t, uint32(i+1), c.Attempt, //nolint:gosec // small loop index
+				"every call of the step is numbered after the calls before it")
+		}
+	})
+}
+
 // TestAnOffSchemaAnswerFailsTheStepAndLeavesTheRunToTheGraph is the default a
 // step type is entitled to choose, and halting the run was the wrong one.
 //
@@ -534,6 +596,9 @@ type stubModel struct {
 	turns []stubTurn
 	calls []provider.Call
 	resps []*provider.Response
+	// during, when set, runs inside every call: what else happens while the
+	// model is answering.
+	during func()
 }
 
 type stubTurn struct {
@@ -549,6 +614,9 @@ func (m *stubModel) Capabilities() provider.Capabilities {
 }
 
 func (m *stubModel) Generate(_ context.Context, call provider.Call) (*provider.Response, error) {
+	if m.during != nil {
+		m.during()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, call)

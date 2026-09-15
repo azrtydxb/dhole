@@ -978,27 +978,8 @@ func (s *Server) fenceOut(ctx context.Context, engineID string, held *dholev1.In
 
 // serveAcceptance answers engines asking, before they start a dispatch,
 // whether its fence is still the step's lease (Scheduler.Accept, ADR 0029).
-//
-// Every reply is sent, UNSPECIFIED with the reason included: an engine waiting
-// on an at-most-once step retries on it, and one with nothing to retry on
-// would wait out its whole timeout for a plane that had already decided it
-// could not decide.
 func (s *Server) serveAcceptance(startCtx, runCtx context.Context) error {
-	stop, err := s.infra.plane.Respond(startCtx, bus.SubjectAcceptWildcard(), func(raw []byte) (proto.Message, error) {
-		st := &dholev1.JobStatus{}
-		if err := proto.Unmarshal(raw, st); err != nil {
-			return &dholev1.AcceptReply{Error: "undecodable acceptance request: " + err.Error()}, nil
-		}
-		ctx, cancel := context.WithTimeout(runCtx, acceptanceTimeout)
-		defer cancel()
-		verdict, err := s.sched.Accept(ctx, st)
-		if err != nil {
-			s.log.Error("answering an acceptance request",
-				"run", st.GetRunId(), "step", st.GetStepId(), "error", err)
-			return &dholev1.AcceptReply{Error: err.Error()}, nil
-		}
-		return &dholev1.AcceptReply{Acceptance: verdict}, nil
-	})
+	stop, err := serveAcceptanceOn(startCtx, runCtx, s.infra.plane, s.sched.Accept, s.log)
 	if err != nil {
 		return err
 	}

@@ -633,7 +633,13 @@ class Engine:
                     # capability set: the server will not deliver a second message
                     # while the first is unacknowledged, and every later step looks
                     # like an engine that has gone deaf.
-                    "max_ack_pending": max(self.slots, 1),
+                    #
+                    # Twice that, because an at-most-once dispatch no plane
+                    # confirmed is given back with a delayed NAK, and the server
+                    # counts it as pending for the length of the delay: with the
+                    # bound at the slot count, as many of those as there are slots
+                    # would stop every other dispatch reaching this engine.
+                    "max_ack_pending": 2 * max(self.slots, 1),
                 },
             }
         ).encode()
@@ -686,6 +692,20 @@ class Engine:
                 log("not starting %s: the plane answered ACCEPTANCE_FENCED" % key)
                 self.nats.publish(ack_subject, b"")
                 return
+            if status is UNCONFIRMED:
+                # "Confirming a dispatch before starting it": nobody answered
+                # for an at-most-once step.  Given back to the queue with a
+                # delay, and the slot freed below, rather than held while this
+                # engine asks in a loop -- that runs nothing else meanwhile.
+                # The keepalive stops FIRST: a +WPI landing after the NAK
+                # restarts the whole ack_wait.
+                held.set()
+                log("giving %s back: no plane confirmed it" % key)
+                self.nats.publish(
+                    ack_subject,
+                    b"-NAK " + json.dumps({"delay": UNCONFIRMED_RETRY_NS}).encode(),
+                )
+                return
             # The ordering rule: the terminal status goes out BEFORE the ack.
             # Acking first would lose the step in silence if this process died
             # between the two.
@@ -720,8 +740,10 @@ class Engine:
         # anything runs or is held.  A dispatch that waited in the queue while
         # its attempt was declared lost and re-dispatched still carries the old
         # fence, and only the plane knows that.
-        if d["confirm_acceptance"] and not self.confirm(d):
-            return SUPERSEDED
+        if d["confirm_acceptance"]:
+            verdict = self.confirm(d)
+            if verdict is not True:
+                return verdict
 
         with self.jobs_lock:
             self.jobs[key] = job
@@ -738,36 +760,31 @@ class Engine:
     def confirm(self, d):
         """Ask the plane whether this dispatch may still start.
 
-        True to start, False only when the plane answers ACCEPTANCE_FENCED.
+        True to start; SUPERSEDED when the plane answers ACCEPTANCE_FENCED.
         No answer starts a pure or idempotent step -- the fence still discards
-        its stale result -- and keeps an at-most-once step asking, because its
-        effect cannot be discarded afterwards.
+        its stale result -- and returns UNCONFIRMED for an at-most-once step,
+        whose effect cannot be discarded afterwards: it goes back to the queue.
         """
         subject = "job.accept.%s.%s" % (d["run_id"], d["step_id"])
-        while self.running:
-            answer = None
-            try:
-                data, _, status = self.nats.request(
-                    subject, self.status_bytes(d, {"phase": PHASE_ACCEPTED}), timeout=5
-                )
-                if not status.startswith("NATS/1.0 5"):
-                    answer = one(parse(data), 1, 0)
-            except queue.Empty:
-                pass
-            except Exception as exc:  # noqa: BLE001
-                log("acceptance request for %s failed: %r" % (subject, exc))
-            if answer == ACCEPTANCE_FENCED:
-                return False
-            if answer == ACCEPTANCE_CURRENT:
-                return True
-            if d["effect_class"] != EFFECT_CLASS_AT_MOST_ONCE:
-                log(
-                    "starting %s unconfirmed: no answer on %s" % (d["step_id"], subject)
-                )
-                return True
-            log("an at-most-once step waits for the plane on %s" % subject)
-            time.sleep(1.0)
-        return False
+        answer = None
+        try:
+            data, _, status = self.nats.request(
+                subject, self.status_bytes(d, {"phase": PHASE_ACCEPTED}), timeout=5
+            )
+            if not status.startswith("NATS/1.0 5"):
+                answer = one(parse(data), 1, 0)
+        except queue.Empty:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            log("acceptance request for %s failed: %r" % (subject, exc))
+        if answer == ACCEPTANCE_FENCED:
+            return SUPERSEDED
+        if answer == ACCEPTANCE_CURRENT:
+            return True
+        if d["effect_class"] != EFFECT_CLASS_AT_MOST_ONCE:
+            log("starting %s unconfirmed: no answer on %s" % (d["step_id"], subject))
+            return True
+        return UNCONFIRMED
 
     def execute(self, job, workdir):
         d = job.d
@@ -1109,6 +1126,14 @@ class Engine:
 # run_job's answer for a dispatch the plane refused: not a status, because
 # nothing is published for it.
 SUPERSEDED = object()
+
+# What run_job returns for an at-most-once dispatch no plane confirmed: it
+# never started, and it goes back to the queue with its slot.
+UNCONFIRMED = object()
+
+# How long an unconfirmed at-most-once dispatch stays out of the queue, in the
+# nanoseconds a JetStream NAK delay is given in.
+UNCONFIRMED_RETRY_NS = 1_000_000_000
 
 
 class Counter:

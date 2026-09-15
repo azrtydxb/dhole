@@ -282,7 +282,11 @@ server believes it is working on them.
 
 `max_ack_pending` on that consumer must be at least the engine's slot count. Set
 lower, one stuck job stalls the whole queue for that capability set — including
-work other engines could have taken.
+work other engines could have taken. Set it above the slot count, too: an
+`at-most-once` dispatch given back with a delayed `-NAK` (see "Confirming a
+dispatch before starting it") still counts against it for the length of the
+delay, and at exactly the slot count that many of them stop anything else being
+delivered. Twice the slot count is what the reference Python engine uses.
 
 **Fetch only while there is room, and renew what you hold.** An engine binds one
 queue per capability subset and kind, so it usually has several, and the order
@@ -377,10 +381,19 @@ engine handed such a dispatch must ask before it starts it:
    again — publish no status, and free the slot. Nobody is waiting on that
    attempt, and the plane would discard its report anyway.
 5. **No answer** — no responder, a timeout, or `ACCEPTANCE_UNSPECIFIED`: start a
-   `pure` or `idempotent` step, whose stale result the fence still discards; keep
-   asking, about once a second and holding the delivery renewed, for an
-   `at-most-once` step, which starts only once a plane says CURRENT. Its effect
-   cannot be discarded afterwards.
+   `pure` or `idempotent` step, whose stale result the fence still discards. Do
+   NOT start an `at-most-once` step, whose effect cannot be discarded afterwards:
+   give it back. Stop renewing its delivery, negatively acknowledge it with a
+   delay of about a second (`-NAK {"delay": 1000000000}`), and free its slot.
+   The queue redelivers it after the delay — to you or to an engine that can
+   reach a plane — and whoever fetches it asks again, holding a slot again. It
+   starts only once a plane says CURRENT
+   ([ADR 0033](../.procoder/adr/0033-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
+   Keeping it and asking in a loop holds a slot for as long as nobody answers,
+   and an engine with one slot then runs nothing at all — pure work included.
+   Stop renewing BEFORE the delayed NAK: an in-progress acknowledgement that
+   lands after it restarts the whole ack wait. A dispatch in its NAK delay still
+   counts against the consumer's `max_ack_pending`.
 
 A dispatch WITHOUT `confirm_acceptance` comes from a plane that does not answer.
 Do not ask it: its engine credentials may not permit publishing on `job.accept.*`
@@ -390,6 +403,12 @@ asks either, and still works: it is stopped mid-run by the plane instead (see
 "Heartbeats and orphans"), later than a confirming engine would have been
 stopped but for the same reason.
 
+Control planes serve `job.accept.>` in the queue group `dhole-plane-accept`, so
+each request is answered — and its lease renewed — by one plane however many run
+([ADR 0033](../.procoder/adr/0033-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
+A plane from before that subscribes plainly and answers too while an upgrade is
+in progress; take the first reply, since every plane answers from the same lease.
+
 Only EQUALITY is involved on the engine's side: the plane decides which fence is
 current, and the engine echoes the one it was given. Engine credentials permit
 PUBLISHING on `job.accept.>` and not subscribing to it — an engine that could
@@ -398,6 +417,15 @@ subscribe could answer a sibling CURRENT for a dispatch the plane would refuse.
 No protocol version was bumped for this. The flag, not a version, is what tells
 an engine that somebody will answer, and the plane decides nothing on the basis
 of whether an engine asked.
+
+**Rolling upgrades.** Planes that set `confirm_acceptance` and planes from before
+it can share a bus. An older plane's dispatches carry no flag and run as they
+always did. A newer plane's `at-most-once` dispatch is started only on a CURRENT
+answer, and only planes that set the flag answer; so while every such plane is
+away — restarting into the new version, say — that dispatch goes round the
+queue unstarted, and when one is back it runs exactly once. An unaccepted offer
+never expires, so waiting costs the attempt nothing. `pure` and `idempotent`
+dispatches start either way.
 
 ## Protocol version negotiation
 
@@ -858,6 +886,15 @@ What can strand a waiting dispatch is the fleet losing every engine able to
 take it; the control plane checks for that on every sweep and records
 `STEP_UNSCHEDULABLE` with the reason, leaving the dispatch queued so an engine
 that returns runs it as the same attempt.
+
+A dispatch that engines CAN run and none has accepted within the lease TTL is
+recorded too, as `STEP_WAITING`, with a cause read from the engines' heartbeats:
+`capacity` when every matching engine lists as many jobs as it has slots, and
+`unconsumed` — naming the dispatch subject — when one of them has a free slot
+and has not taken it: its consumer is not fetching, it bound the queue under
+another name, or it cannot reach a plane to confirm the dispatch. An engine
+that lists in `in_flight` exactly what it is running is what makes the two
+tell apart.
 
 An engine that finds itself holding a job whose fence is no longer valid must
 stop that job. It has been superseded, and its output would be discarded anyway.

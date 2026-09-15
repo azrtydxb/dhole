@@ -43,6 +43,13 @@ func (h *harness) serveAcceptance(ctx context.Context, t *testing.T, verdicts ma
 	return p
 }
 
+// answer changes the verdict a fence gets from now on.
+func (p *acceptancePlane) answer(fence string, verdict dholev1.Acceptance) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.verdicts[fence] = verdict
+}
+
 func (p *acceptancePlane) askedFor(fence string) []*dholev1.JobStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -224,8 +231,9 @@ func TestAnUnansweredConfirmationStartsAPureStep(t *testing.T) {
 
 // TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts: the one class that may
 // not start on no answer. Its effect cannot be discarded afterwards, and ADR
-// 0002 already requires it to hold its lease before it executes. It waits,
-// holding its delivery, and starts as soon as a plane confirms it.
+// 0002 already requires it to hold its lease before it executes. It waits — in
+// the queue, given back after each unanswered ask (ADR 0033) — and starts as
+// soon as a plane confirms it.
 func TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -259,4 +267,136 @@ func TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts(t *testing.T) {
 		"the at-most-once step never started once a plane confirmed it")
 	require.NotEmpty(t, plane.askedFor(d.GetFenceToken()))
 	require.Len(t, exec.acquired(), 1)
+}
+
+// TestAnUnconfirmedAtMostOnceStepGivesItsSlotBack is what that wait used to
+// cost (ADR 0033). An at-most-once dispatch nobody answered kept asking while
+// it held a slot and the engine's room to fetch, so while its plane was away —
+// restarting, partitioned from this engine, replaced in an upgrade — a one-slot
+// engine ran NOTHING, including pure work ADR 0004 promises keeps running
+// without a plane. Now one unanswered ask gives the dispatch back to the queue
+// with a delay, and the slot goes to the work behind it.
+func TestAnUnconfirmedAtMostOnceStepGivesItsSlotBack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	charge := newDispatch("run-amo-slot", "charge", "echo", "charged")
+	charge.Step.EffectClass = dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE
+	charge.ConfirmAcceptance = true
+	build := newDispatch("run-amo-slot", "build", "echo", "built")
+	build.ConfirmAcceptance = true
+
+	// The plane can answer for the pure step and cannot decide the other:
+	// UNSPECIFIED is no answer, the same as a timeout without the wait.
+	plane := h.serveAcceptance(ctx, t, map[string]dholev1.Acceptance{
+		build.GetFenceToken(): dholev1.Acceptance_ACCEPTANCE_CURRENT,
+	})
+	chargeStatuses := h.statuses(ctx, t, "run-amo-slot", "charge")
+	buildStatuses := h.statuses(ctx, t, "run-amo-slot", "build")
+
+	exec := &recordingExecutor{Executor: process.New()}
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-amo-slot",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: exec,
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	h.publishDispatch(ctx, t, charge)
+	require.Eventually(t, func() bool { return len(plane.askedFor(charge.GetFenceToken())) > 0 },
+		30*time.Second, 10*time.Millisecond, "the engine never asked about the at-most-once dispatch")
+
+	h.publishDispatch(ctx, t, build)
+	waited, stop := context.WithTimeout(ctx, 15*time.Second)
+	defer stop()
+	select {
+	case st := <-awaitTerminalAsync(waited, buildStatuses):
+		require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, st.GetPhase())
+	case <-waited.Done():
+		t.Fatal("an at-most-once dispatch nobody confirmed held the engine's only slot: " +
+			"pure work behind it waited for a plane it does not need")
+	}
+	require.Len(t, exec.acquired(), 1, "the unconfirmed at-most-once step started")
+
+	// It was given back, not dropped: asked again on redelivery, and run
+	// exactly once as soon as a plane says it is current.
+	require.Eventually(t, func() bool { return len(plane.askedFor(charge.GetFenceToken())) > 1 },
+		30*time.Second, 10*time.Millisecond, "the given-back dispatch was never asked about again")
+	plane.answer(charge.GetFenceToken(), dholev1.Acceptance_ACCEPTANCE_CURRENT)
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, chargeStatuses).GetPhase())
+	require.Len(t, exec.acquired(), 2)
+}
+
+// TestARollingUpgradeBesideAPlaneThatDoesNotAnswerRunsAtMostOnceWorkOnceItsPlaneReturns
+// is the upgrade ADR 0033 calls safe by construction. An older plane — from
+// before ADR 0029 — dispatches without confirm_acceptance and serves nothing on
+// job.accept.*; a newer plane dispatches with it and is away (restarting into
+// the new version, say). The older plane's at-most-once work runs as it always
+// did. The newer plane's never starts while nobody can confirm it, however many
+// times it comes back round the queue — and runs exactly once when a plane that
+// answers is up again.
+func TestARollingUpgradeBesideAPlaneThatDoesNotAnswerRunsAtMostOnceWorkOnceItsPlaneReturns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	h := newHarness(t)
+	fromOld := newDispatch("run-upgrade-old", "deploy", "echo", "deployed by the old plane")
+	fromOld.Step.EffectClass = dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE
+	fromNew := newDispatch("run-upgrade-new", "deploy", "echo", "deployed by the new plane")
+	fromNew.Step.EffectClass = dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE
+	fromNew.ConfirmAcceptance = true
+
+	oldStatuses := h.statuses(ctx, t, "run-upgrade-old", "deploy")
+	newStatuses := h.statuses(ctx, t, "run-upgrade-new", "deploy")
+	// Every request that reaches the bus while the new plane is away is
+	// counted, and nothing answers it: the older plane does not serve the subject.
+	unanswered := make(chan struct{}, 64)
+	stopCounting, err := h.plane.SubscribeEphemeral(ctx, bus.SubjectAccept("run-upgrade-new", "deploy"),
+		func([]byte) { unanswered <- struct{}{} })
+	require.NoError(t, err)
+
+	exec := &recordingExecutor{Executor: process.New()}
+	h.start(ctx, t, engine.Config{
+		EngineID: "engine-upgrade",
+		Tier:     tier,
+		Bus:      h.engineBus,
+		Executor: exec,
+		Blobs:    h.blobs,
+		CAS:      h.cas,
+		Slots:    1,
+	})
+
+	h.publishDispatch(ctx, t, fromNew)
+	h.publishDispatch(ctx, t, fromOld)
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, oldStatuses).GetPhase(),
+		"the older plane's work waited behind a dispatch only the newer plane can confirm")
+
+	// Round the queue several times with nobody to confirm it.
+	for range 3 {
+		select {
+		case <-unanswered:
+		case <-ctx.Done():
+			t.Fatal("the newer plane's dispatch stopped being asked about while nobody answered")
+		}
+	}
+	stopCounting()
+	require.Len(t, exec.acquired(), 1, "an at-most-once dispatch ran with no plane to confirm its fence")
+	select {
+	case st := <-newStatuses:
+		t.Fatalf("an unconfirmed at-most-once dispatch published %s", st.GetPhase())
+	default:
+	}
+
+	// The newer plane is back.
+	plane := h.serveAcceptance(ctx, t, map[string]dholev1.Acceptance{
+		fromNew.GetFenceToken(): dholev1.Acceptance_ACCEPTANCE_CURRENT,
+	})
+	require.Equal(t, dholev1.Phase_PHASE_SUCCEEDED, awaitTerminal(ctx, t, newStatuses).GetPhase(),
+		"the at-most-once dispatch never ran once a plane that answers returned")
+	require.Len(t, exec.acquired(), 2, "one run for each plane's dispatch, and no more")
+	require.Empty(t, plane.askedFor(fromOld.GetFenceToken()), "the older plane's dispatch was asked about")
 }

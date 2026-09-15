@@ -53,8 +53,9 @@ The shape of the loop, in any language:
 4. For each `JobDispatch` carrying `confirm_acceptance`, once you have a slot
    for it and before anything else: ask on `job.accept.<run>.<step>` whether it
    is still current, and never start one the plane answers
-   `ACCEPTANCE_FENCED` — acknowledge it and publish nothing. See "Confirming a
-   dispatch before starting it" for what no answer means.
+   `ACCEPTANCE_FENCED` — acknowledge it and publish nothing. With no answer, an
+   `at-most-once` dispatch goes back to the queue with a delayed `-NAK` and its
+   slot is freed. See "Confirming a dispatch before starting it".
 5. For each `JobDispatch` you start: fetch the input ports, run the command,
    stream `LogChunk`s on `job.logs.<run>.<step>`, write the output ports, and
    publish a terminal `JobStatus` on `job.status.<run>.<step>`.

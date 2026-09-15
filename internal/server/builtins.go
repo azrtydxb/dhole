@@ -421,7 +421,16 @@ func (b *builtins) attempt(
 	// Renewed for as long as the work runs. A model call or a bounded loop can
 	// outlive the TTL, and a holder that stopped proving it was alive while it
 	// was still working would have its own step swept out from under it.
-	stopRenewing := b.renew(ctx, token)
+	//
+	// And the body runs under a context the renewal can END. A renewal refused
+	// as fenced — this plane's lease swept while it was partitioned, the step
+	// given to another plane — used to stop renewing and let the body run on,
+	// with only its result refused at the commit: a model call made for nobody,
+	// or an agent's tool calls made a second time beside the plane that now
+	// holds the step (ADR 0033).
+	body, loseLease := context.WithCancelCause(ctx)
+	defer loseLease(nil)
+	stopRenewing := b.renew(ctx, token, loseLease)
 	defer stopRenewing()
 
 	// The claim was a round trip. A pass whose lease had already expired and
@@ -472,12 +481,26 @@ func (b *builtins) attempt(
 		return token, err
 	}
 
-	outputs, err := do(ctx, job, attempt)
+	outputs, err := do(body, job, attempt)
+	if errors.Is(context.Cause(body), errLeaseLost) && ctx.Err() == nil {
+		// Whatever the body returned, it was stopped because this plane no
+		// longer holds the step. Nothing it could record belongs to it: a
+		// verdict would be refused by the fence anyway, and a failure written
+		// without one would decide a step another plane is running.
+		b.log.Warn("a builtin step's lease was lost while it ran; its body was stopped",
+			"run", job.runID, "step", job.step.GetId(), "attempt", attempt,
+			"cause", context.Cause(body))
+		return lease.Token{}, nil
+	}
 	if err != nil {
 		return token, err
 	}
 	return token, b.succeed(ctx, job, attempt, token, outputs)
 }
+
+// errLeaseLost is the cause a builtin step's body is cancelled with when its
+// plane can no longer show it holds the step's lease.
+var errLeaseLost = errors.New("the step's lease was lost while it ran")
 
 // claim takes the lease on a builtin step for one attempt.
 func (b *builtins) claim(ctx context.Context, job builtinJob, attempt uint32) (lease.Token, error) {
@@ -498,11 +521,19 @@ func (b *builtins) claim(ctx context.Context, job builtinJob, attempt uint32) (l
 }
 
 // renew keeps a lease alive while the step runs, and returns the function that
-// stops doing so.
+// stops doing so. lost is called, once, when the lease is gone.
 //
 // A third of the TTL, so two renewals can be missed — a slow database, a
 // reconnecting bus — before a step that is perfectly healthy is declared lost.
-func (b *builtins) renew(ctx context.Context, token lease.Token) func() {
+//
+// The lease is gone in two ways. A renewal refused as ErrFenced is certain:
+// somebody else holds the step. A renewal that has not SUCCEEDED for a whole
+// TTL is as good as certain: the bucket expires a lease a TTL after its last
+// renewal, by the server's clock, and a sweeper may already have handed the
+// step on. A plane that cannot reach its leases for that long cannot tell the
+// difference, and running on is the direction that makes an effect happen
+// twice.
+func (b *builtins) renew(ctx context.Context, token lease.Token, lost context.CancelCauseFunc) func() {
 	renewCtx, stop := context.WithCancel(ctx)
 	interval := b.ttl / 3
 	if interval < minRenewInterval {
@@ -513,22 +544,30 @@ func (b *builtins) renew(ctx context.Context, token lease.Token) func() {
 		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		renewed := time.Now()
 		for {
 			select {
 			case <-renewCtx.Done():
 				return
 			case <-ticker.C:
 			}
-			if err := b.leases.Renew(renewCtx, token); err != nil {
-				if errors.Is(err, lease.ErrFenced) {
-					// Somebody else holds this step now. Renewing again would
-					// be this plane propping up a claim it has lost; the work
-					// carries on and its result is refused at the commit.
-					return
-				}
-				if renewCtx.Err() == nil {
-					b.log.Warn("renewing a builtin step's lease", "fence", token.Fence, "error", err)
-				}
+			err := b.leases.Renew(renewCtx, token)
+			switch {
+			case err == nil:
+				renewed = time.Now()
+			case renewCtx.Err() != nil:
+				return
+			case errors.Is(err, lease.ErrFenced):
+				// Somebody else holds this step now. Renewing again would be
+				// this plane propping up a claim it has lost, and the body is
+				// stopped rather than left to have its effect for nobody.
+				lost(fmt.Errorf("%w: renewal refused: %w", errLeaseLost, err))
+				return
+			case time.Since(renewed) >= b.ttl:
+				lost(fmt.Errorf("%w: no renewal succeeded for %s: %w", errLeaseLost, b.ttl, err))
+				return
+			default:
+				b.log.Warn("renewing a builtin step's lease", "fence", token.Fence, "error", err)
 			}
 		}
 	}()

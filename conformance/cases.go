@@ -87,6 +87,7 @@ func cases() []kase {
 		leaseRenewalCase(),
 		fenceRefusalCase(),
 		supersededDispatchCase(),
+		unconfirmedAtMostOnceCase(),
 	}
 }
 
@@ -823,6 +824,128 @@ func supersededDispatchCase() kase {
 			}
 			return h.checkFence(current, status)
 		},
+	}
+}
+
+// unconfirmedAtMostOnceCase: docs/wire-contract.md, "Confirming a dispatch
+// before starting it", point 5. An at-most-once dispatch nobody confirms must
+// never start — and must not hold a slot while nobody answers, or an engine
+// whose plane is away runs nothing at all.
+//
+// The suite runs the engine with two slots, so it gives the engine TWO such
+// dispatches and then a pure one: an engine that keeps them while it waits has
+// no slot left for the pure step.
+func unconfirmedAtMostOnceCase() kase {
+	return kase{
+		name: "unconfirmed-at-most-once-never-started",
+		obligation: "A JobDispatch carrying confirm_acceptance for an at-most-once step that the plane does not " +
+			"answer (ACCEPTANCE_UNSPECIFIED) is never started — no status, no log — and does not keep an engine " +
+			"slot while it waits: it is given back to the queue (a delayed -NAK) and asked about again when it " +
+			"is redelivered. It starts exactly once when the plane answers ACCEPTANCE_CURRENT. The suite runs " +
+			"the engine with two slots.",
+		timeout: 90 * time.Second,
+		run: func(ctx context.Context, h *harness) error {
+			var waiting []*dholev1.JobDispatch
+			var watches []*statusWatch
+			for _, name := range []string{"charge", "refund"} {
+				d := h.newDispatch(name)
+				d.ConfirmAcceptance = true
+				d.Step.EffectClass = dholev1.EffectClass_EFFECT_CLASS_AT_MOST_ONCE
+				d.Command = []string{"sh", "-c", "printf 'the effect happened\\n'"}
+				h.answerAcceptance(d.GetFenceToken(), dholev1.Acceptance_ACCEPTANCE_UNSPECIFIED)
+				waiting = append(waiting, d)
+				watches = append(watches, h.watchStatus(d))
+				if err := h.dispatch(ctx, d); err != nil {
+					return err
+				}
+			}
+
+			asked := time.Now().Add(20 * time.Second)
+			for len(h.acceptRequests(waiting[0])) == 0 || len(h.acceptRequests(waiting[1])) == 0 {
+				if time.Now().After(asked) {
+					return fmt.Errorf("no acceptance request within 20s for both at-most-once dispatches carrying " +
+						"confirm_acceptance")
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			pure := h.newDispatch("meanwhile")
+			pure.Command = []string{"sh", "-c", "printf 'pure work\\n'"}
+			pureWatch := h.watchStatus(pure)
+			if err := h.dispatch(ctx, pure); err != nil {
+				return err
+			}
+			pureCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			status, err := pureWatch.await(pureCtx, terminal, "a terminal JobStatus")
+			cancel()
+			if err != nil {
+				return fmt.Errorf("%w; two at-most-once dispatches nobody confirmed held both of the engine's "+
+					"slots — an unconfirmed at-most-once dispatch is given back to the queue, not kept while "+
+					"the engine waits for an answer", err)
+			}
+			if status.GetPhase() != dholev1.Phase_PHASE_SUCCEEDED {
+				return fmt.Errorf("expected PHASE_SUCCEEDED for the pure dispatch, got %s (error %q)",
+					status.GetPhase(), status.GetError())
+			}
+
+			for i, d := range waiting {
+				if len(watches[i].ch) > 0 || len(h.logChunks(d)) > 0 {
+					return fmt.Errorf("the engine started run %s step %s, an at-most-once dispatch the plane never "+
+						"confirmed; its effect cannot be taken back", d.GetRunId(), d.GetStepId())
+				}
+			}
+			for deadline := time.Now().Add(20 * time.Second); len(h.acceptRequests(waiting[0])) < 2; {
+				if time.Now().After(deadline) {
+					return fmt.Errorf("run %s step %s was asked about once and never again within 20s; an "+
+						"unconfirmed at-most-once dispatch goes back to the queue and is asked about when it is "+
+						"redelivered", waiting[0].GetRunId(), waiting[0].GetStepId())
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			for _, d := range waiting {
+				h.answerAcceptance(d.GetFenceToken(), dholev1.Acceptance_ACCEPTANCE_CURRENT)
+			}
+			for i, d := range waiting {
+				status, err := watches[i].await(ctx, terminal, "a terminal JobStatus")
+				if err != nil {
+					return fmt.Errorf("%w; an at-most-once dispatch must start once the plane answers "+
+						"ACCEPTANCE_CURRENT", err)
+				}
+				if status.GetPhase() != dholev1.Phase_PHASE_SUCCEEDED {
+					return fmt.Errorf("expected PHASE_SUCCEEDED for run %s step %s once confirmed, got %s (error %q)",
+						d.GetRunId(), d.GetStepId(), status.GetPhase(), status.GetError())
+				}
+			}
+			// Room for a second copy to start.
+			time.Sleep(3 * time.Second)
+			for i, d := range waiting {
+				started := 0
+				for _, st := range append(watches[i].seen, drain(watches[i].ch)...) {
+					if st.GetPhase() == dholev1.Phase_PHASE_ACCEPTED {
+						started++
+					}
+				}
+				if started != 1 {
+					return fmt.Errorf("run %s step %s published PHASE_ACCEPTED %d times; a confirmed at-most-once "+
+						"dispatch runs exactly once", d.GetRunId(), d.GetStepId(), started)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// drain takes whatever is buffered on ch without waiting.
+func drain(ch chan *dholev1.JobStatus) []*dholev1.JobStatus {
+	var out []*dholev1.JobStatus
+	for {
+		select {
+		case st := <-ch:
+			out = append(out, st)
+		default:
+			return out
+		}
 	}
 }
 

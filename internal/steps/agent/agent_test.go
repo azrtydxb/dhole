@@ -304,6 +304,51 @@ func TestAgentIsTenantScoped(t *testing.T) {
 	require.Contains(t, err.Error(), "tenant scope required")
 }
 
+// TestAnAgentWhoseContextEndsTakesNoFurtherAction is the agent half of a
+// plane-hosted step losing its lease mid-loop (ADR 0033). The plane cancels
+// the step's context the moment its lease is refused, because another plane may
+// already be running the step — and an agent acts through Dhole's own API, so
+// every action it takes after that is a run started, a gate decided or an
+// operation applied a second time. The model can ask for several actions in
+// one turn and the SDK executes them in order without looking at the context,
+// so the refusal has to be in the action path itself.
+func TestAnAgentWhoseContextEndsTakesNoFurtherAction(t *testing.T) {
+	ctx, stop := context.WithCancel(testContext(t))
+	defer stop()
+	h := newHarness(t, config(format, fetch), nil)
+	inv := &stoppingInvoker{stop: stop}
+	st, err := agent.New(config(format, fetch), agent.Options{
+		Model: h.model, Invoker: inv, Gate: h.gate, Store: h.store, TenantID: h.tenant,
+	})
+	require.NoError(t, err)
+	h.model.script(&provider.Response{
+		Content: []provider.ContentPart{
+			provider.ToolCallPart{ID: "c1", Name: format, Args: json.RawMessage(`{}`)},
+			provider.ToolCallPart{ID: "c2", Name: fetch, Args: json.RawMessage(`{}`)},
+		},
+		FinishReason: provider.FinishToolCalls,
+	})
+
+	_, err = st.Run(ctx, testRun, agentStep, "tidy up and fetch the report")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []string{format}, inv.actions(),
+		"an agent whose step was stopped took the next action in its batch anyway")
+	require.Equal(t, 1, h.model.callCount(), "a stopped agent asked its model for another turn")
+}
+
+// stoppingInvoker ends the step's context as its first action runs: the lease
+// is lost while the agent is acting.
+type stoppingInvoker struct {
+	countingInvoker
+	stop context.CancelFunc
+}
+
+func (i *stoppingInvoker) Invoke(ctx context.Context, inv agent.Invocation) (json.RawMessage, error) {
+	out, err := i.countingInvoker.Invoke(ctx, inv)
+	i.stop()
+	return out, err
+}
+
 // --- harness ------------------------------------------------------------
 
 func config(granted ...string) agent.Config {

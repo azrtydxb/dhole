@@ -601,6 +601,16 @@ func (a *Agent) handle(ctx context.Context, msg bus.Message, stopRenew func()) {
 		outcome, stepErr = obs.OutcomeCancelled, ctx.Err()
 		_ = msg.Nak()
 		return
+	case unconfirmed:
+		// Given back with a delay, so the queue neither hands it straight back
+		// to this engine nor to a neighbour to ask about in a tight loop. The
+		// renewal stops FIRST: an in-progress acknowledgement landing after the
+		// delayed nak restarts the whole ack wait, and the dispatch would sit
+		// out of the queue for that long instead of the delay.
+		stopRenew()
+		outcome, stepErr = obs.OutcomeCancelled, errors.New("at-most-once step not confirmed; given back to the queue")
+		_ = msg.NakWithDelay(acceptRetry)
+		return
 	case start:
 	}
 	outcome, stepErr = outcomeOf(status)

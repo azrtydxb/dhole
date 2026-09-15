@@ -2057,6 +2057,200 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       cancelled 4.8s after its lease was. No protocol version bump: the flag
       is what tells an engine somebody answers (ADR 0029). `buf breaking`
       against main is clean after the merge.
+- [x] **A step the plane hosts runs its body to the end after its lease is taken
+      away.** Left open by "A step the plane hosts runs once per plane": a plane
+      whose renewal is refused — its lease swept while it was partitioned — runs
+      the step body to completion and only its RESULT is refused at the commit,
+      so an llm or agent step can have its external effect twice across a
+      partition longer than the TTL. The fix (ADR 0033): `builtins.attempt` runs
+      the body under a context of its own that `renew` cancels when `Renew`
+      answers `ErrFenced`, or when no renewal has succeeded for a whole TTL (the
+      KV has expired the lease by then and a sweeper may have given the step
+      away); a body that ended that way records nothing. `llm.Step.Run` asks no
+      further attempt and records no give-up once its context has ended, and the
+      agent step takes no further action — a later tool call in the same batch is
+      refused before it is recorded or invoked. Files: `internal/server/builtins.go`,
+      `internal/server/builtin_claim_test.go`, `internal/steps/llm/llm.go`,
+      `internal/steps/llm/llm_test.go`, `internal/steps/agent/agent.go`,
+      `internal/steps/agent/agent_test.go`. Interfaces: consumes
+      `lease.Manager.Renew` and `lease.ErrFenced`; produces nothing new. Tests:
+      `TestAHostedStepWhoseRenewalIsRefusedStopsItsBody` (expect FAIL "a plane
+      whose renewal was refused ran the step body on"),
+      `TestAHostedStepWhoseRenewalLapsesForATTLStopsItsBody`,
+      `TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt` and
+      `TestAnAgentWhoseContextEndsTakesNoFurtherAction`.
+      CLOSED 2026-09-15 as above. `builtins.attempt` runs the body under
+      `context.WithCancelCause`; `renew` cancels it with `errLeaseLost` on
+      `ErrFenced` or once `time.Since(last successful renewal) >= ttl`, and a
+      body whose cause is `errLeaseLost` returns no token and no error, so `run`
+      records nothing. `llm.Step.Run` returns `ctx.Err()` before another attempt
+      or a give-up, and records the call it made on a detached, bounded context
+      (`recordTimeout`) — a call made while the step was being stopped used to
+      go unrecorded, since the recorder used the cancelled context.
+      `agent.Step.invoke` refuses an action once its context has ended, before
+      the grant, the record or the invoker: the SDK executes a turn's tool calls
+      in order without looking at the context. Red first:
+      `TestAHostedStepWhoseRenewalIsRefusedStopsItsBody` ("a plane whose renewal
+      was refused ran the step body on: its model call or agent tool calls
+      happen beside the plane that holds the step now"),
+      `TestAHostedStepWhoseRenewalLapsesForATTLStopsItsBody` ("a plane that
+      could not renew its lease for a whole TTL ran the step body on"),
+      `TestAnLLMStepWhoseContextEndsAsksNoFurtherAttempt` ("a model call made as
+      its step was stopped went unrecorded": the recorder had failed on the
+      cancelled context, which is also the only reason the loop had stopped),
+      `TestAnAgentWhoseContextEndsTakesNoFurtherAction` ("an agent whose step was
+      stopped took the next action in its batch anyway": actual `[format fetch]`).
+      Written with them and shown by mutation: the lapse test's "one failed
+      renewal inside the TTL is not a lost lease" half. Mutations, each restored
+      with cp and checked with cmp, each red: a fenced renewal not cancelling;
+      no lapse rule; a lapse on any failed renewal ("a step whose lease was still
+      renewed had its body stopped"); the body run under the worker's context;
+      a stopped body reported as an error; the llm loop retrying after
+      cancellation (two records); the call recorded on the cancelled context;
+      the agent's action check removed. No wire change.
+      Found by the server suite on the way: recording the call on a detached
+      context made `TestABuiltinStepInFlightWhenThePlaneDiesIsRecoveredByANewPlane`
+      fail — the dead plane's call was now recorded, and the replacement plane's
+      first call collided with it on `llm_calls (tenant, run, step, attempt)`
+      ("UNIQUE constraint failed"), failing the step on every retry. The
+      recorder's failure on a cancelled context had been hiding that every re-run
+      of an llm step numbered its calls from one. `llm.Step.Run` now numbers
+      after the calls already recorded for the step
+      (`TestAnLLMStepRunAgainRecordsItsCallsAfterTheOnesBefore`, red with the
+      constraint error; numbering from one again is red).
+- [x] **Every plane answers every acceptance request.** Left open by "An engine
+      starts a dispatch that was superseded while it waited": `serveAcceptance`
+      subscribes to `job.accept.>` with a plain subscription, so with N planes
+      each request is N lease renewals and N replies of which the engine reads
+      one. The fix (ADR 0033): the plane serves it in the queue group
+      `dhole-plane-accept` through a new `bus.NATS.RespondQueue`, so one member
+      answers. A plane from before this change, subscribed plainly beside a new
+      one, answers as well; the engine takes the first reply, and both are the
+      same lease compare. Files: `internal/bus/nats.go`, `internal/bus/subjects.go`,
+      `internal/server/acceptance.go`, `internal/server/acceptance_test.go`,
+      `internal/server/server.go`, `docs/wire-contract.md`. Interfaces: produces
+      `(*bus.NATS).RespondQueue(ctx, subject, queue string, fn func([]byte) (proto.Message, error)) (func(), error)`
+      and `bus.AcceptQueue`; consumes `(*scheduler.Scheduler).Accept`. Tests:
+      `TestEachAcceptanceRequestIsAnsweredByOnePlane` (expect FAIL "every plane
+      answered every acceptance request") and
+      `TestAnOlderPlaneBesideANewerOneStillAnswersEachFenceByItsLease`.
+      CLOSED 2026-09-15 as above; the responder moved out of server.go into
+      `serveAcceptanceOn` so two and three planes can be driven over one
+      embedded bus without starting a server each. Red first, both: "every plane
+      answered every acceptance request" (expected 20 renewals, got 60 from three
+      planes) and the mixed fleet's count ("the older plane answers every request
+      and exactly one newer plane answers each": the plain subscribers doubled
+      it). Both verdicts stay correct in the mix — a current fence CURRENT, a
+      superseded one FENCED, ten times each. Mutation: an empty queue name
+      (a plain subscription) — both red. Tier engines still cannot subscribe to
+      `job.accept.>` in any queue (`TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance`
+      unchanged). `docs/wire-contract.md` says one plane answers.
+- [x] **An at-most-once dispatch nobody confirms holds its engine's slot.** Left
+      open by "An engine starts a dispatch that was superseded while it waited":
+      with no answer on `job.accept.*` — a plane restarting, partitioned from the
+      engine, or being replaced — an `at-most-once` dispatch keeps asking once a
+      second while holding a slot and its room to fetch, so a one-slot engine runs
+      nothing at all, pure work included. The fix (ADR 0033): one unanswered ask
+      and the engine stops renewing the delivery, NAKs it with a delay of
+      `acceptRetry`, and frees the slot and the room; whoever fetches it next asks
+      again, still holding a slot. Nothing but CURRENT starts it, and the ask is
+      still made holding a slot, so a CURRENT answer is followed at once by the
+      step and never by a wait for one. Files: `internal/bus/bus.go`,
+      `internal/bus/nats.go`, `internal/bus/backpressure.go`,
+      `internal/engine/accept.go`, `internal/engine/agent.go`,
+      `internal/engine/accept_test.go`, `testdata/engines/minimal-python/engine.py`,
+      `conformance/cases.go`, `docs/wire-contract.md`, `docs/writing-an-engine.md`.
+      Interfaces: produces `bus.Message.NakWithDelay(time.Duration) error`;
+      consumes `bus.Bus.Request`. Tests:
+      `TestAnUnconfirmedAtMostOnceStepGivesItsSlotBack` (expect FAIL "an
+      at-most-once dispatch nobody confirmed held the engine's only slot"),
+      the existing
+      `TestAnAtMostOnceStepWaitsForAnAnswerBeforeItStarts`, and the conformance
+      case `unconfirmed-at-most-once-never-started` for both engines.
+      CLOSED 2026-09-15 as above. `confirm` asks once; no answer for an
+      at-most-once step is the `unconfirmed` verdict, and `handle` stops the
+      delivery renewal, `NakWithDelay(acceptRetry)`s and returns, freeing slot
+      and room. The Python engine does the same (`UNCONFIRMED`, a delayed
+      `-NAK` after stopping its keepalive) and its `max_ack_pending`
+      is now twice its slots: JetStream counts a message in its NAK delay as
+      pending, and at exactly the slot count two given-back dispatches starved
+      the pure one — shown by reverting only that line, which fails the new
+      conformance case. Red first: "an at-most-once dispatch nobody confirmed
+      held the engine's only slot: pure work behind it waited for a plane it
+      does not need"; the conformance case against the engines at HEAD, Go and
+      Python both: "two at-most-once dispatches nobody confirmed held both of the
+      engine's slots". Mutations, each restored with cp and checked with cmp, each
+      red: unconfirmed starting the step (all three engine tests); a NAK without
+      delay (the fetch loop meets "nats: Exceeded MaxWaiting" and the upgrade test
+      never finishes); holding the delivery instead of giving it back; the Python
+      engine starting it ("the engine started run … an at-most-once dispatch the
+      plane never confirmed"); the Python ack-pending bound at the slot count.
+      `docs/wire-contract.md` point 5 and the `max_ack_pending` rule, and
+      `docs/writing-an-engine.md`, say the same. Not built: a separate test that
+      the question is asked only while holding a slot — that ordering is
+      unchanged code from ADR 0029.
+- [x] **A rolling upgrade beside a plane that does not answer acceptance was
+      never shown safe.** Left open by the item above's ADR: a plane that sets
+      `confirm_acceptance` and one from before ADR 0029 that serves nothing on
+      `job.accept.*` share the bus; while the new plane is away, its at-most-once
+      dispatches wait for it. Nothing tested that they never run without it, and
+      that they run exactly once when it returns, while the older plane's work
+      — no flag — runs untouched beside them. Files:
+      `internal/engine/accept_test.go`, `docs/wire-contract.md`. Interfaces:
+      consumes the above. Tests:
+      `TestARollingUpgradeBesideAPlaneThatDoesNotAnswerRunsAtMostOnceWorkOnceItsPlaneReturns`.
+      CLOSED 2026-09-15. The test runs a one-slot engine against an older
+      plane's unflagged at-most-once dispatch and a newer plane's flagged one
+      with nobody serving acceptance: the older one runs, the newer one is asked
+      about at least three times round the queue and never acquires a sandbox or
+      publishes a status, and it runs exactly once when a responder appears. Red
+      against the engine before the item above: the older plane's dispatch never
+      ran ("no terminal JobStatus within 30s") — the waiting one held the slot.
+      Killed by the item above's mutations (unconfirmed starting: "stopped being
+      asked about"; NAK without delay). The scheduler side needs nothing new: an
+      unaccepted offer never expires (`TestAnOfferNobodyHasAcceptedDoesNotExpire`)
+      and a dispatched offer is never withdrawn
+      (`TestTheSweeperWithdrawsNoOfferThatWasDispatchedOrIsStillYoung`), and both
+      are true of a plane from before ADR 0029. `docs/wire-contract.md` has a
+      "Rolling upgrades" paragraph.
+- [x] **A dispatch nobody fetches waits without a reason.** Left open by "Work
+      queued behind a busy engine is declared lost before anyone could start it"
+      ("a capable engine whose consumer never fetches leaves a dispatch waiting
+      without a reason, which is the next item's territory"), and not taken up by
+      the item after it. `surfaceStranded` speaks only when NO engine matches a
+      waiting dispatch; a matching engine that never fetches — a dead pump, a
+      queue bound under the wrong name, an engine that cannot reach a plane to
+      confirm — and a matching engine that is simply full are indistinguishable
+      in the run log from a step that is running. The fix (ADR 0033): a waiting
+      offer older than `offerGrace` whose step matches registered engines records
+      `STEP_WAITING` with cause `capacity` when every matching engine's last
+      heartbeat lists as many jobs as it has slots, and `unconsumed` — naming the
+      dispatch subject — when one has a free slot. Recorded once per cause,
+      cleared by STEP_DISPATCHED; the dispatch stays queued. Files:
+      `internal/scheduler/scheduler.go`, `internal/scheduler/waiting_test.go`,
+      `docs/wire-contract.md`. Interfaces: produces `scheduler.StepWaiting`,
+      `scheduler.WaitingReason{Cause, Reason}`, `scheduler.WaitingForCapacity`,
+      `scheduler.WaitingUnconsumed`, `scheduler.MarshalWaitingReason` and
+      `scheduler.UnmarshalWaitingReason`; consumes `lease.Manager.Unaccepted`,
+      `scheduler.Fleet.Instances` and `registry.Instance.InFlight`. Tests:
+      `TestADispatchMatchingEnginesHaveNotTakenSaysNothingIsConsumingItsQueue`
+      (expect FAIL "a dispatch that matching engines with free slots never took
+      said nothing about why it waits") and
+      `TestADispatchWaitingForBusyEnginesSaysItWaitsForCapacity`.
+      CLOSED 2026-09-15 as above. `surfaceOne` calls `recordWaiting` for an
+      offer older than `offerGrace` whose step matches; slots are
+      `max(Slots, 1)` per engine and busy is `min(len(InFlight), slots)`; the fold
+      keeps `state.waiting[step]` (the cause) and STEP_DISPATCHED clears it;
+      `dispatchSubject` is shared with `dispatch`. Red first: "a dispatch that
+      matching engines with free slots never took said nothing about why it
+      waits" and "a dispatch waiting behind busy engines said nothing about
+      why". The tests move the scheduler clock across the window. Mutations,
+      each red: no record; no age window ("a dispatch still inside the heartbeat
+      window was reported waiting"); always unconsumed; always capacity; no
+      dedup; dedup ignoring the cause ("a wait whose cause changed was not
+      recorded again"); the cause not folded. Not killed: dropping the clear on
+      STEP_DISPATCHED, which only a second dispatch of the same step after a
+      recorded wait exercises. `docs/wire-contract.md` describes the event.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot
