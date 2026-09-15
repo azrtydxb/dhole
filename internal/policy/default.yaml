@@ -1,0 +1,40 @@
+# The dispatch policy `dhole serve` runs when no --policy is given (ADR 0031).
+#
+# It permits every step and every secret a step declares, ON PURPOSE: a fresh
+# install runs what it ran before, and every decision is still evaluated and
+# recorded in policy_audit, so the trail exists before anyone has written a
+# rule. Tighten it by copying this file, editing it, testing it with
+# `dhole policy test --policy FILE`, and starting the plane with
+# `dhole serve --policy FILE` (or `controlPlane.policy` in the chart).
+#
+# Beneath this document, and beneath any file that replaces it, the plane
+# evaluates a floor no configuration removes: tainted data may not reach a
+# non-PURE step or an engine advertising PRIVILEGED (ADR 0015), and work in
+# the `untrusted` tier may not run unsigned plugins, on privileged engines, or
+# at-most-once. Nothing written here can permit what the floor refuses.
+#
+# Every rule must hold for a decision to allow. A rule that is false denies,
+# and its id and reason are what the run log and the audit row name.
+revision: default/1
+rules:
+  - id: default.permit
+    expression: "true"
+    reason: the built-in default permits every step and every secret
+
+  # Examples to tighten with — replace the rule above, or add beside it:
+  #
+  # - id: signing-key-for-releases-only
+  #   expression: 'input.secret_name != "release-signing-key" || input.tier == "release"'
+  #   reason: only the release tier may read the signing key
+  #
+  # - id: registry-credential-for-the-push-plugin-only
+  #   expression: 'input.secret_name != "harbor-robot" || input.plugin_ref.startsWith("acme/push:")'
+  #   reason: only the push plugin may read the registry credential
+  #
+  # - id: no-secret-on-untrusted-data
+  #   expression: '!input.tainted || input.secret_name == ""'
+  #   reason: a step reading untrusted data may not be given a secret
+  #
+  # - id: effect-class-must-be-declared
+  #   expression: input.effect_class != "UNSPECIFIED"
+  #   reason: every step declares what it does to the world

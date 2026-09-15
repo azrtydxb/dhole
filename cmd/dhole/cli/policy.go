@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
 	dholev1 "github.com/azrtydxb/dhole/gen/dhole/v1"
 	"github.com/azrtydxb/dhole/internal/policy"
@@ -21,26 +20,24 @@ func policyCmd(o *options) *cobra.Command {
 		Args:  noArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	cmd.AddCommand(policyTestCmd(o))
+	cmd.AddCommand(policyTestCmd(o), policyDefaultCmd(o))
 	return cmd
 }
 
-// policyFile is a tier policy as somebody writes it down.
-type policyFile struct {
-	Revision string        `json:"revision"`
-	Rules    []policyRule  `json:"rules"`
-	Defaults *policyInputs `json:"defaults,omitempty"`
-}
-
-type policyRule struct {
-	ID         string `json:"id"`
-	Expression string `json:"expression"`
-	Reason     string `json:"reason"`
-}
-
-// policyInputs is what the file may fix so a test case need not restate it.
-type policyInputs struct {
-	Upstream string `json:"upstream,omitempty"`
+// policyDefaultCmd prints the dispatch policy `dhole serve` runs when it is
+// given none (ADR 0031), exactly as the binary embeds it. It is the document an
+// operator copies, tightens, tests with `dhole policy test` and hands back to
+// `dhole serve --policy`.
+func policyDefaultCmd(o *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "default",
+		Short: "print the built-in dispatch policy dhole serve runs without --policy",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			_, err := o.env.Stdout.Write(policy.DefaultDocument())
+			return err
+		},
+	}
 }
 
 // policyDecision is the answer, in the shape a script reads.
@@ -70,6 +67,7 @@ func policyTestCmd(o *options) *cobra.Command {
 		engineCaps  []string
 		signed      bool
 		upstream    string
+		secretName  string
 		expectAllow bool
 	)
 	cmd := &cobra.Command{
@@ -87,21 +85,20 @@ func policyTestCmd(o *options) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read %s: %w", file, err)
 			}
-			var parsed policyFile
-			if err := yaml.Unmarshal(raw, &parsed); err != nil {
-				return fmt.Errorf("parse %s: %w", file, err)
+			// The reader `dhole serve --policy` uses, so what is tested here
+			// is what the plane would load.
+			parsed, err := policy.ParseDocument(raw)
+			if err != nil {
+				return fmt.Errorf("%s: %w", file, err)
 			}
-
-			tierPolicy := policy.TierPolicy{Revision: parsed.Revision}
-			for _, rule := range parsed.Rules {
-				tierPolicy.Rules = append(tierPolicy.Rules, policy.Rule{
-					ID: rule.ID, Expression: rule.Expression, Reason: rule.Reason,
-				})
+			tierPolicy, err := parsed.TierPolicy()
+			if err != nil {
+				// A policy that does not compile is a message to its author,
+				// here, rather than an outage shaped like a deny later.
+				return fmt.Errorf("%s: %w", file, err)
 			}
 			source := policy.NewStaticSource()
 			if err := source.Set(tier, tierPolicy); err != nil {
-				// A policy that does not compile is a message to its author,
-				// here, rather than an outage shaped like a deny later.
 				return fmt.Errorf("%s: %w", file, err)
 			}
 			engine, err := policy.New(source, policy.DiscardAudit{})
@@ -141,6 +138,7 @@ func policyTestCmd(o *options) *cobra.Command {
 				Tainted:            len(taintFlag) > 0,
 				TaintSources:       taintFlag,
 				EngineCapabilities: engineCapabilities,
+				SecretName:         secretName,
 			})
 			if err != nil {
 				return err
@@ -175,6 +173,8 @@ func policyTestCmd(o *options) *cobra.Command {
 		"capability the ENGINE the step would run on advertises; repeatable")
 	flags.BoolVar(&signed, "signed", false, "the plugin carries a verified signature")
 	flags.StringVar(&upstream, "upstream", "", "registry or source the artifact came from")
+	flags.StringVar(&secretName, "secret-name", "",
+		"the step secret being decided, read as input.secret_name; empty decides the step itself")
 	flags.BoolVar(&expectAllow, "expect-allow", true, "fail unless the decision is this")
 	return cmd
 }
