@@ -156,12 +156,21 @@ process holding one.
 ## Policy
 
 A step declaring secrets must declare `CAPABILITY_SECRETS`, which a tier policy
-can refuse with a rule on `input.capabilities`. Where a dispatch policy is
-configured, each declared secret is also decided on its own, and a rule can name
-the secret with `input.secret_name` ([policy](policy.md)); a refusal is the
-step's `STEP_POLICY_DENIED`, naming the secret. There is no default rule: a
-tier's policy decides.
+can refuse with a rule on `input.capabilities`. Each declared secret is also
+decided on its own, with the step's facts plus `input.secret_name`
+([policy](policy.md)); a refusal is the step's `STEP_POLICY_DENIED`, naming the
+secret, and every decision — allows included — is a row in `policy_audit`.
 
-Two things remain open. `dhole serve` does not yet wire a dispatch-time policy
-at all, so on the single binary nothing is evaluated; and the dispatch path does
-not set `input.tainted`.
+`dhole serve` always evaluates a dispatch policy
+([ADR 0031](../.procoder/adr/0031-the-plane-always-evaluates-a-dispatch-policy-over-a-floor.md)).
+Unconfigured, it is the built-in default, which permits every secret; replace it
+with `dhole serve --policy FILE` or `controlPlane.policy` to restrict one:
+
+```yaml
+- id: registry-robot-for-trusted-pushes-only
+  expression: 'input.secret_name != "harbor-robot" || (input.tier == "trusted" && !input.tainted)'
+  reason: the registry robot is for trusted pushes, never for a step reading webhook data
+```
+
+`input.tainted` is set at dispatch from the step's inputs, so a rule can keep a
+secret away from a step that reads data an untrusted trigger admitted.

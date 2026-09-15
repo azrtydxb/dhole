@@ -56,6 +56,7 @@ import (
 	"github.com/azrtydxb/dhole/internal/executor"
 	"github.com/azrtydxb/dhole/internal/lease"
 	"github.com/azrtydxb/dhole/internal/outbox"
+	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/registry"
 	"github.com/azrtydxb/dhole/internal/runstore"
 	"github.com/azrtydxb/dhole/internal/scheduler"
@@ -241,6 +242,12 @@ type Config struct {
 	// operator says it is. Nil means the plane holds none, and a step
 	// declaring one is refused, naming it, before it is dispatched.
 	StepSecrets secrets.Source
+	// Policy is the dispatch policy for this plane's tier (ADR 0031). Nil is
+	// the built-in default, policy.Default(), which permits every step and
+	// every secret — and is still evaluated, and every decision still
+	// recorded. There is no value that turns evaluation off. Whatever is set
+	// here sits above a floor it cannot relax: taint.DispatchFloor.
+	Policy *policy.TierPolicy
 	// LeaseTTL is how long a step's lease lives before its holder is presumed
 	// dead and the step is swept back. Zero means scheduler.DefaultLeaseTTL.
 	//
@@ -295,6 +302,9 @@ type Server struct {
 	// In memory, and deliberately: a table of live handles in the run database
 	// would be the secret at rest that SecretRef exists to avoid.
 	broker *secrets.Broker
+	// policySource holds the dispatch policy the scheduler evaluates, so a
+	// running plane's policy can be replaced (SetPolicy). Guarded by mu.
+	policySource *policy.StaticSource
 	// partitions is this process's share of the run-id ring. Nil means the
 	// plane owns every run — see ownsRun.
 	partitions *planePartitions
@@ -351,6 +361,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Mode == ModeDistributed && cfg.BusURL == "" {
 		return nil, errors.New("server: distributed mode needs a bus URL")
+	}
+	if err := validPolicy(cfg.Policy); err != nil {
+		return nil, err
 	}
 	if cfg.DeploymentID == "" {
 		cfg.DeploymentID = derivedDeploymentID(cfg.BlobRoot)
@@ -501,6 +514,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
+	// The dispatch policy, always (ADR 0031): the operator's or the built-in
+	// default, over the floor, with every decision on the audit trail.
+	pol, provenance, policySource, err := s.dispatchPolicy(in)
+	if err != nil {
+		in.close()
+		return err
+	}
+
 	sched, err := scheduler.New(scheduler.Config{
 		Store:       in.store,
 		Outbox:      out,
@@ -538,6 +559,10 @@ func (s *Server) Start(ctx context.Context) error {
 		// plane's own credentials go through: one way a credential reaches a
 		// running thing (ADR 0024, 0027).
 		Secrets: secrets.NewStepIssuer(s.broker, s.cfg.StepSecrets),
+		// Policy before the cache and before any engine, for every step and
+		// each secret it declares (ADR 0012, 0030, 0031).
+		Policy:     pol,
+		Provenance: provenance,
 	})
 	if err != nil {
 		in.close()
@@ -567,6 +592,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.setTriggerStore(trigger.NewStore(in.db, in.dialect))
 
 	s.infra, s.fleet, s.defs, s.out, s.sched, s.leases, s.partitions = in, fleet, defs, out, sched, leases, parts
+	s.policySource = policySource
 	s.builtins, s.timers = built, wait.NewTimers(in.store)
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -1138,6 +1164,7 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	s.infra.close()
 	s.infra = nil
+	s.policySource = nil
 	s.builtins, s.timers = nil, nil
 	s.stopAllTriggers()
 	return nil

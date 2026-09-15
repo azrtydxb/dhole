@@ -64,6 +64,10 @@ spec:
             {{- range $i, $s := .Values.controlPlane.secrets }}
             - --secret={{ $s.tenant }}/{{ $s.name }}=DHOLE_STEP_SECRET_{{ $i }}
             {{- end }}
+            {{- /* Without either, the plane runs the built-in default policy. */}}
+            {{- if or .Values.controlPlane.policy.rules .Values.controlPlane.policy.existingConfigMap }}
+            - --policy=/etc/dhole/policy/{{ .Values.controlPlane.policy.key | default "policy.yaml" }}
+            {{- end }}
           env:
             - name: DHOLE_BUS_URL
               value: {{ include "dhole.busURL" . | quote }}
@@ -140,9 +144,22 @@ spec:
               mountPath: /var/lib/dhole
             - name: tmp
               mountPath: /tmp
+            {{- if or .Values.controlPlane.policy.rules .Values.controlPlane.policy.existingConfigMap }}
+            # The whole ConfigMap, never a subPath: Kubernetes updates a
+            # mounted ConfigMap in place only when it is mounted whole, and the
+            # plane re-reads its policy file while it runs.
+            - name: policy
+              mountPath: /etc/dhole/policy
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if or .Values.controlPlane.policy.rules .Values.controlPlane.policy.existingConfigMap }}
+        - name: policy
+          configMap:
+            name: {{ .Values.controlPlane.policy.existingConfigMap | default (printf "%s-policy" (include "dhole.fullname" .)) }}
+        {{- end }}
         - name: state
         {{- if .Values.controlPlane.persistence.enabled }}
           persistentVolumeClaim:

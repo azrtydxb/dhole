@@ -15,6 +15,7 @@ import (
 
 	"github.com/azrtydxb/dhole/internal/blobstore"
 	"github.com/azrtydxb/dhole/internal/obs"
+	"github.com/azrtydxb/dhole/internal/policy"
 	"github.com/azrtydxb/dhole/internal/secrets"
 	"github.com/azrtydxb/dhole/internal/server"
 	"github.com/azrtydxb/dhole/internal/tenant"
@@ -30,7 +31,7 @@ import (
 // same control plane and puts it in front of somebody else's Postgres, NATS
 // and engines.
 func serveCmd(o *options) *cobra.Command {
-	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr, triggerFile string
+	var mode, storeDSN, busURL, blobRoot, deploymentID, otlpEndpoint, apiAddr, triggerFile, policyFile string
 	var otlpInsecure, noAPI bool
 	var apiOrigins, modelSecrets, stepSecrets []string
 	cmd := &cobra.Command{
@@ -38,6 +39,15 @@ func serveCmd(o *options) *cobra.Command {
 		Short: "run the control plane",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// The dispatch policy is read first of all (ADR 0031). A file that
+			// cannot work refuses start-up before anything is opened: the
+			// alternative is a plane that starts and refuses every step, or
+			// one that half-starts and leaves a database behind for nothing.
+			tierPolicy, err := loadPolicyFile(policyFile)
+			if err != nil {
+				return err
+			}
+
 			// Telemetry is installed before anything can emit, and its
 			// shutdown is deferred immediately: spans are batched, so what is
 			// not flushed is not exported, and the unflushed tail belongs to
@@ -120,6 +130,10 @@ func serveCmd(o *options) *cobra.Command {
 				SecretSource: modelSource,
 				StepSecrets:  stepSource,
 
+				// Nil is the built-in default: evaluated and recorded, never
+				// skipped.
+				Policy: tierPolicy,
+
 				APIAddr:           apiAddr,
 				NoAPI:             noAPI,
 				APIAllowedOrigins: apiOrigins,
@@ -140,6 +154,16 @@ func serveCmd(o *options) *cobra.Command {
 			}
 			_, _ = fmt.Fprintf(o.env.Stdout, "dhole %s (%s): %s control plane, bus %s, API %s\n",
 				version.Version(), version.Commit(), mode, srv.BusURL(), apiEndpoint(srv))
+			if tierPolicy == nil {
+				_, _ = fmt.Fprintf(o.env.Stdout,
+					"dispatch policy: the built-in default (revision %s), which permits every step and secret "+
+						"above the taint floor; `dhole policy default` prints it, --policy replaces it\n",
+					policy.Default().Revision)
+			} else {
+				_, _ = fmt.Fprintf(o.env.Stdout, "dispatch policy: %s (revision %s), re-read every %s\n",
+					policyFile, tierPolicy.Revision, policyReloadInterval)
+				go watchPolicyFile(ctx, policyFile, policyReloadInterval, tierPolicy, srv, o.env.Stderr)
+			}
 
 			// The bootstrap credential, once, at the moment it is minted.
 			//
@@ -193,6 +217,9 @@ func serveCmd(o *options) *cobra.Command {
 	flags.StringArrayVar(&stepSecrets, "secret", nil,
 		"TENANT/NAME=ENVVAR: a secret a pipeline step in TENANT may declare by NAME, and the "+
 			"environment variable its value is read from; repeatable, and none by default")
+	flags.StringVar(&policyFile, "policy", os.Getenv("DHOLE_POLICY"),
+		"YAML dispatch policy for this plane's tier, replacing the built-in default "+
+			"(`dhole policy default`); re-read while the plane runs")
 	flags.StringVar(&triggerFile, "triggers", os.Getenv("DHOLE_TRIGGERS"),
 		"YAML file declaring the cron schedules and webhook endpoints this plane runs")
 	return cmd

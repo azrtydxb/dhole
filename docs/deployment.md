@@ -155,6 +155,7 @@ The values worth knowing:
 | `controlPlane.persistence.enabled` | `false`  | whether the CAS survives a reschedule                                                            |
 | `engines`                          | one tier | a list; one Deployment per trust tier                                                            |
 | `controlPlane.secrets`             | `[]`     | secrets a pipeline step may declare, per tenant, from Secrets ([step secrets](secrets.md))       |
+| `controlPlane.policy`              | unset    | the dispatch policy, inline or from a ConfigMap; unset is the default ([policy](policy.md))      |
 | `engines[].busCredentialsSecret`   | unset    | the Secret holding that tier's own bus URL. Unset means the shared URL, which reaches every tier |
 | `image.tag`                        | `""`     | empty means the chart's `appVersion`, never `latest`                                             |
 

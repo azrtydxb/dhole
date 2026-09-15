@@ -1,0 +1,19 @@
+{{- /* The dispatch policy written inline in the values (ADR 0031). An existing
+       ConfigMap is the operator's own and is not rendered here. */}}
+{{- with .Values.controlPlane.policy }}
+{{- if and .rules .existingConfigMap }}
+{{- fail "controlPlane.policy: set rules or existingConfigMap, not both; one of them would silently win" }}
+{{- end }}
+{{- if .rules }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dhole.fullname" $ }}-policy
+  labels:
+    {{- include "dhole.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+data:
+  {{ .key | default "policy.yaml" }}: |
+    {{- .rules | nindent 4 }}
+{{- end }}
+{{- end }}
