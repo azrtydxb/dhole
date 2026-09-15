@@ -10,6 +10,116 @@ Rules are written in CEL ([ADR 0019](../.procoder/adr/0019-policy-is-expressed-i
 data rather than code, so a tenant can supply its own without a rebuild, and not
 Turing-complete, so evaluation always terminates.
 
+## The policy `dhole serve` runs
+
+`dhole serve` always evaluates a dispatch policy: every ready step, and then each
+secret it declares, is decided before the cache or an engine sees it, and every
+decision — allows included — is a row in the `policy_audit` table of the run
+database ([ADR 0032](../.procoder/adr/0032-the-plane-always-evaluates-a-dispatch-policy-over-a-floor.md)).
+There is no setting that skips evaluation.
+
+With no configuration it is the **built-in default**, which permits every step
+and every secret. It is a real document, not an absence; print it with:
+
+```
+dhole policy default
+```
+
+```yaml
+revision: default/1
+rules:
+  - id: default.permit
+    expression: "true"
+    reason: the built-in default permits every step and every secret
+```
+
+An allow names no rule, so its audit row's reason names the revision instead —
+`every rule of tier "trusted" (revision floor/1(builtin/1)+default/1) permitted this`.
+Read the trail straight from the database:
+
+```sql
+SELECT at, subject, allow, rule, reason FROM policy_audit
+ WHERE tenant_id = 'default' ORDER BY at DESC LIMIT 50;
+```
+
+### Tightening it
+
+Copy the default, edit it, test it, and hand it to the plane. It **replaces** the
+default whole:
+
+```
+dhole policy default > policy.yaml
+$EDITOR policy.yaml
+dhole policy test --policy policy.yaml --tier trusted \
+  --subject secret:release-signing-key --secret-name release-signing-key --expect-allow=false
+dhole serve --policy policy.yaml          # or DHOLE_POLICY=policy.yaml
+```
+
+In the chart, set `controlPlane.policy.rules` to the document, or point
+`controlPlane.policy.existingConfigMap` (and `key`) at a ConfigMap you manage.
+
+A file that does not parse, a rule that does not compile or does not answer a
+bool, and a file with no rules all **stop `dhole serve` at start-up**, naming the
+file and the rule. A file with no rules is refused rather than run because a tier
+with no rules denies everything; to permit everything, say so with a rule.
+
+The plane re-reads the file every ten seconds. A changed file is installed under
+its revision with a hash of its content appended, so an edited rule takes effect
+even if you forget to bump `revision`. A changed file that cannot work is logged
+and **not** installed — the policy in force stays.
+
+Restrict a secret to a tier:
+
+```yaml
+- id: signing-key-for-releases-only
+  expression: 'input.secret_name != "release-signing-key" || input.tier == "release"'
+  reason: only the release tier may read the signing key
+```
+
+Refuse tainted input on a privileged engine, and keep secrets away from it
+entirely (the first half is already the floor; the second is yours to choose):
+
+```yaml
+- id: untrusted-off-privileged-engines
+  expression: '!input.tainted || !("PRIVILEGED" in input.engine_capabilities)'
+  reason: untrusted data may not run on an engine that holds host privilege
+- id: no-secret-on-untrusted-data
+  expression: '!input.tainted || input.secret_name == ""'
+  reason: a step reading untrusted data may not be given a secret
+```
+
+### The floor
+
+Beneath whichever document is in force, the plane evaluates a floor **first**,
+and nothing in a policy file can permit what it refuses:
+
+| Rule                                  | Refuses                                                       |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `taint.privileged-engine`             | tainted data reaching any engine that advertises `PRIVILEGED` |
+| `taint.effectful-step`                | tainted data reaching a step that is not `PURE`               |
+| `tier.untrusted-signed-plugins`       | an unsigned plugin in the `untrusted` tier                    |
+| `tier.untrusted-unprivileged-engines` | a `PRIVILEGED` engine in the `untrusted` tier                 |
+| `tier.untrusted-no-at-most-once`      | an at-most-once step in the `untrusted` tier                  |
+
+These are ADR 0015 and the spec's security constraint, not defaults. The
+practical consequence: a step that is not `PURE` and reads a value a `git`
+trigger or an untrusted `http` trigger bound is refused with `STEP_POLICY_DENIED`
+naming `taint.effectful-step`. Make that step `PURE`, or do not bind the
+untrusted value to it.
+
+### Where the taint keys come from at dispatch
+
+`input.tainted` and `input.taint_sources` are derived from the run's own log when
+the decision is made: the taint marks on the values the run was started with that
+are bound to the step's free input ports, plus the taint of every step that feeds
+one of its ports, however far upstream. A step on which a sanitisation gate
+recorded `TAINT_SANITISED` passes on its inputs' sources less the ones it cleared.
+
+`input.engine_capabilities` is every capability advertised by an engine the step
+could be placed on — a dispatch goes onto the tier's work queue and any matching
+engine may take it — so a tainted step is refused if **any** engine it can reach
+is privileged. A step the plane hosts itself (`builtin:`) reaches no engine.
+
 ## The shape of a policy file
 
 ```yaml
@@ -163,8 +273,8 @@ worth having is mostly `--expect-allow=false` cases.
 
 The flags map one-to-one onto the variables above: `--tier`, `--tenant`,
 `--subject`, `--plugin-ref`, `--effect-class`, `--capability` (repeatable),
-`--engine-capability` (repeatable), `--signed`, `--upstream`, and
-`--taint-source` (repeatable). Naming any taint source is what makes the step
+`--engine-capability` (repeatable), `--signed`, `--upstream`, `--secret-name`,
+and `--taint-source` (repeatable). Naming any taint source is what makes the step
 tainted: there is no run in which data is untrusted by nobody, so a `--tainted`
 flag separate from its sources could describe a state the system cannot produce.
 

@@ -225,7 +225,7 @@ func (e *CELEngine) Evaluate(ctx context.Context, in Input) (Decision, error) {
 
 // decide is the evaluation itself, without the audit write.
 func (e *CELEngine) decide(ctx context.Context, in Input) Decision {
-	rules, err := e.programs(ctx, in)
+	rules, revision, err := e.programs(ctx, in)
 	if err != nil {
 		return Decision{Reason: "policy error: " + err.Error()}
 	}
@@ -259,9 +259,12 @@ func (e *CELEngine) decide(ctx context.Context, in Input) Decision {
 			return Decision{Rule: r.id, Reason: reason}
 		}
 	}
+	// The revision is in the reason because an allow names no rule: without
+	// it, the audit row of a permitted step could not say WHICH policy
+	// permitted it, and "why was this allowed" is the harder question.
 	return Decision{
 		Allow:  true,
-		Reason: fmt.Sprintf("every rule of tier %q permitted this", in.Tier),
+		Reason: fmt.Sprintf("every rule of tier %q (revision %s) permitted this", in.Tier, revision),
 	}
 }
 
@@ -276,13 +279,13 @@ func boolValue(v ref.Val) (bool, bool) {
 
 // programs returns the tier's compiled rules, compiling and caching them on
 // first use of that (tier, revision).
-func (e *CELEngine) programs(ctx context.Context, in Input) ([]compiledRule, error) {
+func (e *CELEngine) programs(ctx context.Context, in Input) ([]compiledRule, string, error) {
 	p, ok, err := e.source.Policy(ctx, in.TenantID, in.Tier)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !ok || len(p.Rules) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 
 	key := cacheKey{tier: in.Tier, revision: p.Revision}
@@ -290,15 +293,15 @@ func (e *CELEngine) programs(ctx context.Context, in Input) ([]compiledRule, err
 	cached, hit := e.cache[key]
 	e.mu.RUnlock()
 	if hit {
-		return cached, nil
+		return cached, p.Revision, nil
 	}
 
 	compiled, err := compile(e.env, p)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	e.mu.Lock()
 	e.cache[key] = compiled
 	e.mu.Unlock()
-	return compiled, nil
+	return compiled, p.Revision, nil
 }

@@ -1335,6 +1335,78 @@ Interfaces: adds a revision-history query to `defstore.Store`; gives the editing
       for globex". Restored and `cmp`-verified. LEFT OPEN: the chart has no value for
       `--secret-account`, and dispatch into a tenant's own account is not wired either — the plane
       still dials one bus URL — so this makes redemption reachable there, not the whole path.
+- [x] **`dhole serve` evaluates no dispatch policy, and dispatch never sets the taint keys.**
+      Left open by the item above; decided by the owner (.procoder/ask/decisions.md, "Which
+      dispatch policy `dhole serve` runs") and by ADR 0032. The plane passes no
+      `scheduler.Config.Policy`, so no step and no secret is put to a rule and `policy_audit`
+      stays empty; `permit` never sets `input.tainted`, `input.taint_sources` or
+      `input.engine_capabilities`, so ADR 0015's rules could not hold at dispatch even if one
+      were wired.
+      Files: `internal/policy/default.yaml`, `internal/policy/document.go` (the policy file
+      format, moved out of the CLI), `internal/policy/floor.go`, `internal/policy/cel.go`
+      (the allow reason naming the revision), `internal/taint/policy.go`
+      (`DispatchFloor`), `internal/scheduler/taint.go` and `internal/scheduler/scheduler.go`
+      (`permit`, and `RUN_CREATED` inputs and `TAINT_SANITISED` folded into `runState`),
+      `internal/server/server.go` and `internal/server/policy.go` (`Config.Policy`,
+      `(*Server).SetPolicy`), `cmd/dhole/cli/serve.go` (`--policy`, `DHOLE_POLICY`, re-reading the
+      file), `cmd/dhole/cli/policy.go` (`dhole policy default`), `charts/dhole`
+      (`controlPlane.policy`), `docs/policy.md`, `docs/secrets.md`.
+      Interfaces: produces `policy.Document`, `policy.ParseDocument(raw []byte) (Document, error)`,
+      `(Document).TierPolicy() (TierPolicy, error)`, `policy.DefaultDocument() []byte`,
+      `policy.Default() TierPolicy`, `policy.WithFloor(inner Source, floor TierPolicy) Source`,
+      `policy.UntrustedTierRules() []Rule`, `taint.DispatchFloor() policy.TierPolicy`,
+      `server.Config.Policy *policy.TierPolicy` (nil is the built-in default),
+      `(*server.Server).SetPolicy(policy.TierPolicy) error`; consumes `scheduler.Config.Policy`
+      and `.Provenance`, `plugins.NewProvenance`, `taint.Sources`, `scheduler.Match`.
+      Tests, red first: `TestTheDefaultPolicyIsEvaluatedAndRecordedForAStepAndItsSecret`,
+      `TestAnOperatorPolicyRefusingASecretFailsTheRun`,
+      `TestATaintedInputReachesTheRuleAsInputTainted` (server e2e through the embedded plane);
+      `TestTheDispatchDecisionCarriesTheTaintOfTheStepsInputs`,
+      `TestTheDispatchDecisionCarriesTheCapabilitiesOfTheEnginesAStepCanReach` (scheduler);
+      `TestTheFloorHoldsUnderAPermissivePolicy`, `TestTheFloorDoesNotTurnAMissingPolicyIntoAPermit`,
+      `TestTheFlooredDefaultStaysWithinThePolicyBudget` (taint); `TestTheServerRefusesAPolicyThatCannotWork`
+      (server); `TestPolicyTestExercisesASecretRule` (cli); `TestTheDefaultDocumentPermitsEverythingAndIsValid`,
+      `TestADocumentThatCannotWorkIsRefusedWhereItIsRead`,
+      `TestTheFloorIsEvaluatedFirstAndOnlyNarrows` (policy);
+      `TestServeRefusesToStartOnAnInvalidPolicy`, `TestPolicyDefaultPrintsTheBuiltInDocument`,
+      `TestAChangedPolicyFileIsInstalledAndAnInvalidOneIsNot` (cli);
+      `TestAnInlinePolicyIsRenderedIntoAConfigMapAndNamedOnTheCommandLine`,
+      `TestAnExistingPolicyConfigMapIsMountedAndNamedOnTheCommandLine`,
+      `TestNoPolicyValuesRenderNoPolicyFlag` (charts).
+      CLOSED 2026-09-15. `server.Start` always builds a CEL engine over
+      `policy.WithFloor(StaticSource, taint.DispatchFloor())`, audited by `SQLAudit` in the run
+      database, with `plugins.Provenance`
+      over the run database's signatures and upstreams; `Config.Policy` nil is `policy.Default()`.
+      `default.yaml` is one rule, `default.permit` = `true`, printed by `dhole policy default`. The
+      floor is `taint.privileged-engine`, `taint.effectful-step` and three `tier.untrusted-*` rules;
+      it is composed only onto a tier that has rules. `permit` sets `Tainted`/`TaintSources` from
+      `RUN_CREATED` inputs on free ports plus edge-fed upstream taint, less `TAINT_SANITISED`
+      sources, and `EngineCapabilities` as the union over `Match` (none for `builtin:`). An allow's
+      reason names the composed revision. `dhole serve --policy` / `DHOLE_POLICY` loads
+      `policy.ParseDocument` (strict YAML; no rules refused) before anything opens and re-reads it
+      every 10s under `<revision>@<sha256[:12]>`, keeping the policy in force on a bad reload.
+      `dhole policy test` gained `--secret-name`. Chart: `controlPlane.policy.rules` renders
+      `<fullname>-policy`, or `existingConfigMap`+`key`; both is a render failure; mounted whole at
+      `/etc/dhole/policy`. The run id was NOT added to `policy_audit` (SQLite has no idempotent
+      ADD COLUMN; ADR 0032). Red first: compile (`undefined: policy.DefaultDocument`,
+      `taint.DispatchFloor`, `cfg.Policy`, `loadPolicyFile`); then behavioural: "the permissive
+      default let through what the floor refuses" (stub floor), "a step bound to a value a git
+      trigger admitted reached policy clean", "no decision was asked about step:on-process" /
+      capabilities nil, "the plane recorded no policy decision about step:push: map[]", "run never
+      recorded RUN_FAILED" (operator secret rule, tainted rule, floor), "a policy that cannot work
+      was accepted", and every chart assertion. Mutations, 30 each red then restored and
+      `cmp`-verified: revision dropped from the allow reason; floor onto an empty tier; floor
+      revision omitted; empty document accepted; non-strict YAML; floor without taint rules /
+      without untrusted rules / admitting at-most-once; run inputs unread; edges not followed;
+      sanitisation ignored; sources unsorted; `Tainted` and `EngineCapabilities` unset; every
+      engine instead of matched; builtin judged against engines; server wiring no policy, ignoring
+      `Config.Policy`, omitting the floor, discarding audit, not validating; serve reading the
+      policy after start; reload revision without the hash; reload installing a broken file;
+      `policy default` printing nothing; `--secret-name` dropped; chart flag, subPath mount,
+      `existingConfigMap` ignored, both-set accepted. LEFT OPEN: a non-`PURE` step reading
+      untrusted-trigger data is now refused and no sanitisation gate step type is wired (question
+      in .procoder/ask/decisions.md); a tainted step is refused if ANY reachable engine is
+      privileged; no API reads `policy_audit`; the definition-save guard is still unwired in serve.
 - [x] **The port layout on disk is two conventions and neither is written down.** The engine puts an
       input at the sandbox path `<port>` and reads an output from `<port>`; the conformance suite
       (and the reference Python engine) use `inputs/<port>` and `outputs/<port>`. So
