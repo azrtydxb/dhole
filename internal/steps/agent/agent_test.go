@@ -444,10 +444,20 @@ type stubModel struct {
 	lastCall provider.Call
 }
 
+// lastPrompt is the last call as text a case can search.
+//
+// JSON rather than fmt's %+v. A tool result is a byte slice, and fmt prints a
+// byte slice as a list of numbers on the Go this module builds with (1.26) —
+// so a reason carried in a tool result was invisible to Contains in CI while
+// a newer local toolchain printed it as text and the test passed.
 func (m *stubModel) lastPrompt() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return fmt.Sprintf("%+v", m.lastCall)
+	b, err := json.Marshal(m.lastCall)
+	if err != nil {
+		return fmt.Sprintf("%+v (not JSON: %v)", m.lastCall, err)
+	}
+	return string(b)
 }
 
 func (m *stubModel) script(resps ...*provider.Response) {
