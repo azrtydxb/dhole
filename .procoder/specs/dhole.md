@@ -108,8 +108,11 @@ and agent orchestration are profiles over a shared core.
   model credentials (ADR 0027). A declared secret the plane does not hold refuses the step
   before anything is dispatched, naming the secret. An engine redeems on its tenant's
   subject and the plane refuses a handle presented for another tenant; an attempt's unspent
-  handles are revoked when it ends; a `builtin:` step declaring secrets is refused; and a
-  configured dispatch policy decides each declared secret (ADR 0030).
+  handles are revoked when it ends, and a run's when the run ends; a `builtin:` step declaring
+  secrets is refused; and a configured dispatch policy decides each declared secret
+  (ADR 0030). A handle is a reference shared by every plane, holding no value: any replica
+  redeems it exactly once and any replica revokes it, and a tenant in its own NATS account
+  redeems inside that account (ADR 0031).
 
 ## Out of scope
 
@@ -220,6 +223,10 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
 - A secret handle presented on another tenant's redemption subject; an attempt that ends,
   or a run cancelled with its dispatch still queued, while its handles are unspent; a
   `builtin:` step declaring secrets; two plane passes refusing the same step's secret.
+- A handle issued by one plane replica and redeemed, spent concurrently or revoked through
+  another; a run failed by the scheduler, an approval or a halting step while a sibling's
+  dispatch is still queued with its handles; a tenant whose engines sit in its own NATS
+  account.
 - Two engines claiming the same step after a partition; a zombie engine reporting a result
   for an attempt that has already been superseded.
 - A dispatch superseded while it waited — re-dispatched after a loss, or redelivered after
@@ -412,7 +419,13 @@ sequence)`. SQLite single-node, Postgres clustered. Owned by the control plane.
       `TestARedemptionOnAnotherTenantsSubjectIsRefusedEndToEnd`,
       `TestAnEndedAttemptsUnspentHandlesAreRevoked`,
       `TestABuiltinStepDeclaringASecretIsRefused`,
-      `TestPolicyDecidesEachSecretAStepDeclares`.
+      `TestPolicyDecidesEachSecretAStepDeclares`; a handle issued on one plane is redeemed on
+      another exactly once, revoked from either, and never stored as a value, and a tenant in its
+      own account redeems end to end —
+      `TestAHandleIssuedOnOnePlaneIsRedeemedOnAnother`,
+      `TestAHandleIsSpentOnceWhicheverPlanesPresentItConcurrently`,
+      `TestEveryRunTerminalPathRevokesTheRunsHandles`,
+      `TestATenantInItsOwnAccountRedeemsThroughTheEmbeddedServer`.
 - [ ] [S-1] [S-9] [S-6] `TestAcceptanceCICacheHit` (`make acceptance-ci`): the CI acceptance
       pipeline builds a container image and hits the cache on a second run with unchanged
       inputs; fails if the second run rebuilds the image or reports no cache hit.

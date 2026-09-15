@@ -552,12 +552,22 @@ The `ERR ` prefix costs one thing, and it is stated here rather than discovered:
 a VALUE whose bytes begin with `ERR ` cannot be told from a refusal. An issuer
 must therefore refuse to ISSUE such a value — at issue time, where a person can
 see it, rather than at redemption, where an engine would fail a step it could
-have run. Dhole's own broker refuses it.
+have run. Dhole's step issuer refuses it, and a redemption of a value that
+became one after its handle was issued is refused rather than sent.
 
 Rules that bind both ends:
 
 - **The control plane serves it.** A reference nothing can redeem is not a
   feature. The plane answers on this subject for as long as it is running.
+- **Exactly one plane answers.** A deployment of several control-plane replicas
+  serves the subject from every one of them, in one queue group
+  (`dhole-secret-redeem`), so each request gets one reply. Any replica can
+  answer any handle: a handle is a shared reference, not something held by the
+  replica that issued it (ADR 0031). An engine takes the first reply and must
+  not expect a second.
+- **In the tenant's account.** Where a tenant has its own NATS account, its
+  engines request inside it, and the plane answers there too — the tenant being
+  the account's, whatever token the subject carries.
 - **The subject names the tenant, and the plane checks it.** A handle issued for
   one tenant and presented on another tenant's subject is refused with the same
   refusal as every other rule, and it is spent: single use means spent by being

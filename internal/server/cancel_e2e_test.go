@@ -253,20 +253,26 @@ func TestCancellingARunRevokesItsHandles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	srv := startWithAPI(ctx, t)
+	src := secrets.NewMapSource()
+	src.Set(tenantID, "harbor-robot", "correcthorsebatterystaple")
+	srv := startSecretPlane(ctx, t, t.TempDir(), src)
 	pipelines := apiClient(t, srv)
 	token := srv.BootstrapToken()
 
 	runID, err := srv.Submit(ctx, tenantID, sleeper("cancel-my-handles"))
 	require.NoError(t, err)
 
-	queued, err := srv.Secrets().IssueFor(secrets.Scope{
+	harbor := secrets.Reference{Source: secrets.SourceStep, Secret: "harbor-robot", Binding: "REGISTRY_PASSWORD"}
+	queued, err := srv.Secrets().Issue(ctx, secrets.Scope{
 		TenantID: tenantID, RunID: runID, StepID: "queued", Attempt: 1,
-	}, "REGISTRY_PASSWORD", "correcthorsebatterystaple", time.Minute)
+	}, harbor, time.Minute)
 	require.NoError(t, err)
-	elsewhere, err := srv.Secrets().IssueFor(secrets.Scope{
-		TenantID: tenantID, RunID: "another-run", StepID: "queued", Attempt: 1,
-	}, "REGISTRY_PASSWORD", "correcthorsebatterystaple", time.Minute)
+	// Its run is open, or the sweep would take it for reasons of its own.
+	other, err := srv.Submit(ctx, tenantID, sleeper("keep-my-handles"))
+	require.NoError(t, err)
+	elsewhere, err := srv.Secrets().Issue(ctx, secrets.Scope{
+		TenantID: tenantID, RunID: other, StepID: "queued", Attempt: 1,
+	}, harbor, time.Minute)
 	require.NoError(t, err)
 
 	req := connect.NewRequest(&dholev1.CancelRunRequest{RunId: runID, Reason: "the operator asked"})
@@ -274,8 +280,8 @@ func TestCancellingARunRevokesItsHandles(t *testing.T) {
 	_, err = pipelines.CancelRun(ctx, req)
 	require.NoError(t, err)
 
-	_, err = srv.Secrets().Redeem(queued.GetHandle())
+	_, err = srv.Secrets().Redeem(ctx, queued.GetHandle())
 	require.Error(t, err, "a cancelled run's unspent handle is still redeemable")
-	_, err = srv.Secrets().Redeem(elsewhere.GetHandle())
+	_, err = srv.Secrets().Redeem(ctx, elsewhere.GetHandle())
 	require.NoError(t, err, "cancelling one run revoked another run's handle")
 }
