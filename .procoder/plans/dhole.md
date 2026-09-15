@@ -1946,6 +1946,33 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       after the calls already recorded for the step
       (`TestAnLLMStepRunAgainRecordsItsCallsAfterTheOnesBefore`, red with the
       constraint error; numbering from one again is red).
+- [x] **Every plane answers every acceptance request.** Left open by "An engine
+      starts a dispatch that was superseded while it waited": `serveAcceptance`
+      subscribes to `job.accept.>` with a plain subscription, so with N planes
+      each request is N lease renewals and N replies of which the engine reads
+      one. The fix (ADR 0031): the plane serves it in the queue group
+      `dhole-plane-accept` through a new `bus.NATS.RespondQueue`, so one member
+      answers. A plane from before this change, subscribed plainly beside a new
+      one, answers as well; the engine takes the first reply, and both are the
+      same lease compare. Files: `internal/bus/nats.go`, `internal/bus/subjects.go`,
+      `internal/server/acceptance.go`, `internal/server/acceptance_test.go`,
+      `internal/server/server.go`, `docs/wire-contract.md`. Interfaces: produces
+      `(*bus.NATS).RespondQueue(ctx, subject, queue string, fn func([]byte) (proto.Message, error)) (func(), error)`
+      and `bus.AcceptQueue`; consumes `(*scheduler.Scheduler).Accept`. Tests:
+      `TestEachAcceptanceRequestIsAnsweredByOnePlane` (expect FAIL "every plane
+      answered every acceptance request") and
+      `TestAnOlderPlaneBesideANewerOneStillAnswersEachFenceByItsLease`.
+      CLOSED 2026-09-15 as above; the responder moved out of server.go into
+      `serveAcceptanceOn` so two and three planes can be driven over one
+      embedded bus without starting a server each. Red first, both: "every plane
+      answered every acceptance request" (expected 20 renewals, got 60 from three
+      planes) and the mixed fleet's count ("the older plane answers every request
+      and exactly one newer plane answers each": the plain subscribers doubled
+      it). Both verdicts stay correct in the mix — a current fence CURRENT, a
+      superseded one FENCED, ten times each. Mutation: an empty queue name
+      (a plain subscription) — both red. Tier engines still cannot subscribe to
+      `job.accept.>` in any queue (`TestATierEngineMayAskToAcceptButNotAnswerAnAcceptance`
+      unchanged). `docs/wire-contract.md` says one plane answers.
 - [x] **A consumer of an empty queue spends the engine's concurrency budget.**
       Found 2026-09-11 on kw. `Agent.pump` takes a slot BEFORE it knows whether
       its queue has a message, waits `slotYield` for one, and gives the slot

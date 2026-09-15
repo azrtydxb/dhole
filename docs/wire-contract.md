@@ -390,6 +390,12 @@ asks either, and still works: it is stopped mid-run by the plane instead (see
 "Heartbeats and orphans"), later than a confirming engine would have been
 stopped but for the same reason.
 
+Control planes serve `job.accept.>` in the queue group `dhole-plane-accept`, so
+each request is answered — and its lease renewed — by one plane however many run
+([ADR 0031](../.procoder/adr/0031-a-dispatch-that-cannot-start-gives-back-what-it-holds-and-says-why.md)).
+A plane from before that subscribes plainly and answers too while an upgrade is
+in progress; take the first reply, since every plane answers from the same lease.
+
 Only EQUALITY is involved on the engine's side: the plane decides which fence is
 current, and the engine echoes the one it was given. Engine credentials permit
 PUBLISHING on `job.accept.>` and not subscribing to it — an engine that could

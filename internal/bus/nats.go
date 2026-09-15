@@ -305,6 +305,33 @@ func (n *NATS) Respond(ctx context.Context, subject string, fn func([]byte) (pro
 	return func() { _ = sub.Unsubscribe() }, nil
 }
 
+// RespondQueue is Respond in a queue group: of every connection serving subject
+// in the same queue, the server delivers each request to ONE. It is how several
+// control planes serve one question without all of them answering it — and
+// doing the work behind the answer — every time it is asked.
+func (n *NATS) RespondQueue(
+	ctx context.Context, subject, queue string, fn func([]byte) (proto.Message, error),
+) (func(), error) {
+	sub, err := n.conn.QueueSubscribe(subject, queue, func(m *nats.Msg) {
+		out, err := fn(m.Data)
+		if err != nil {
+			return
+		}
+		data, err := proto.Marshal(out)
+		if err != nil {
+			return
+		}
+		_ = m.Respond(data)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bus: respond on %q in queue %q: %w", subject, queue, err)
+	}
+	if err := n.confirmSubscribed(ctx, sub, subject); err != nil {
+		return nil, err
+	}
+	return func() { _ = sub.Unsubscribe() }, nil
+}
+
 // SubscribeEphemeral delivers raw payloads at most once, with no durability.
 // The returned stop function is idempotent and never blocks.
 func (n *NATS) SubscribeEphemeral(ctx context.Context, subject string, fn func([]byte)) (func(), error) {
