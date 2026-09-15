@@ -1998,8 +1998,8 @@ Interfaces: produces `pool.Manager` with `Acquire(ctx, key string, mk func() (ex
       CLOSED 2026-09-15 as above. `confirm` asks once; no answer for an
       at-most-once step is the `unconfirmed` verdict, and `handle` stops the
       delivery renewal, `NakWithDelay(acceptRetry)`s and returns, freeing slot
-      and room. The Python engine does the same (`UNCONFIRMED`, `-NAK
-      {"delay": 1e9}` after stopping its keepalive) and its `max_ack_pending`
+      and room. The Python engine does the same (`UNCONFIRMED`, a delayed
+      `-NAK` after stopping its keepalive) and its `max_ack_pending`
       is now twice its slots: JetStream counts a message in its NAK delay as
       pending, and at exactly the slot count two given-back dispatches starved
       the pure one — shown by reverting only that line, which fails the new
