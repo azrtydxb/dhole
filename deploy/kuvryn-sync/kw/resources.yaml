@@ -1,0 +1,824 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhole
+  namespace: dhole
+  labels:
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane
+      app.kubernetes.io/instance: dhole
+      app.kubernetes.io/name: dhole
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/instance: dhole
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: dhole
+        app.kubernetes.io/version: 0.1.0
+        helm.sh/chart: dhole-0.1.0
+    spec:
+      containers:
+      - args:
+        - serve
+        - --mode=distributed
+        - --bus-url=$(DHOLE_BUS_URL)
+        - --store-dsn=$(DHOLE_STORE_DSN)
+        - --blob-root=/var/lib/dhole
+        - --api-addr=0.0.0.0:7777
+        - --secret=default/nexus-push=DHOLE_STEP_SECRET_0
+        env:
+        - name: DHOLE_BUS_URL
+          value: nats://dhole-nats:4222
+        - name: DHOLE_STORE_DSN
+          valueFrom:
+            secretKeyRef:
+              key: dsn
+              name: dhole-store
+        - name: DHOLE_OBJECT_STORE
+          value: s3
+        - name: DHOLE_S3_BUCKET
+          value: dhole
+        - name: DHOLE_S3_ENDPOINT
+          value: http://minio.dhole-test.svc.cluster.local:9000
+        - name: DHOLE_S3_REGION
+          value: us-east-1
+        - name: DHOLE_S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: accessKeyId
+              name: dhole-s3
+        - name: DHOLE_S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: secretAccessKey
+              name: dhole-s3
+        - name: DHOLE_S3_SESSION_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: sessionToken
+              name: dhole-s3
+              optional: true
+        - name: DHOLE_STEP_SECRET_0
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: nexus-push
+        image: 192.168.10.131/azrtydxb/dhole:eb1fbec
+        imagePullPolicy: Always
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: api
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: dhole
+        ports:
+        - containerPort: 7777
+          name: api
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: api
+            scheme: HTTP
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            memory: 1Gi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/dhole
+          name: state
+        - mountPath: /tmp
+          name: tmp
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+      serviceAccount: dhole
+      serviceAccountName: dhole
+      terminationGracePeriodSeconds: 90
+      volumes:
+      - emptyDir: {}
+        name: tmp
+      - emptyDir: {}
+        name: state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhole-engine-trusted
+  namespace: dhole
+  labels:
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    dhole.dev/tier: trusted
+    helm.sh/chart: dhole-0.1.0
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: engine
+      app.kubernetes.io/instance: dhole
+      app.kubernetes.io/name: dhole
+      dhole.dev/engine: trusted
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: engine
+        app.kubernetes.io/instance: dhole
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: dhole
+        app.kubernetes.io/version: 0.1.0
+        dhole.dev/engine: trusted
+        dhole.dev/tier: trusted
+        helm.sh/chart: dhole-0.1.0
+    spec:
+      containers:
+      - env:
+        - name: DHOLE_BUS_URL
+          value: nats://dhole-nats:4222
+        - name: DHOLE_ENGINE_ID
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: DHOLE_TIER
+          value: trusted
+        - name: DHOLE_SLOTS
+          value: '6'
+        - name: DHOLE_STATE_DIR
+          value: /var/lib/dhole-engine
+        - name: DHOLE_OBJECT_STORE
+          value: s3
+        - name: DHOLE_S3_BUCKET
+          value: dhole
+        - name: DHOLE_S3_ENDPOINT
+          value: http://minio.dhole-test.svc.cluster.local:9000
+        - name: DHOLE_S3_REGION
+          value: us-east-1
+        - name: DHOLE_S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: accessKeyId
+              name: dhole-s3
+        - name: DHOLE_S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: secretAccessKey
+              name: dhole-s3
+        - name: DHOLE_S3_SESSION_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: sessionToken
+              name: dhole-s3
+              optional: true
+        - name: DHOLE_EXECUTOR
+          value: kubernetes
+        - name: DHOLE_SANDBOX_NAMESPACE
+          value: dhole
+        - name: DHOLE_SANDBOX_SERVICE_ACCOUNT
+          value: dhole-deploy
+        - name: DHOLE_SANDBOX_CPU_REQUEST
+          value: 250m
+        - name: DHOLE_SANDBOX_CPU_LIMIT
+          value: '2'
+        - name: DHOLE_SANDBOX_MEMORY_REQUEST
+          value: 256Mi
+        - name: DHOLE_SANDBOX_MEMORY_LIMIT
+          value: 3Gi
+        image: 192.168.10.131/azrtydxb/dhole-engine:eb1fbec
+        imagePullPolicy: Always
+        name: engine
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/dhole-engine
+          name: state
+        - mountPath: /tmp
+          name: tmp
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+      serviceAccount: dhole
+      serviceAccountName: dhole
+      terminationGracePeriodSeconds: 120
+      volumes:
+      - emptyDir: {}
+        name: state
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhole-engine-untrusted
+  namespace: dhole
+  labels:
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    dhole.dev/tier: untrusted
+    helm.sh/chart: dhole-0.1.0
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: engine
+      app.kubernetes.io/instance: dhole
+      app.kubernetes.io/name: dhole
+      dhole.dev/engine: untrusted
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: engine
+        app.kubernetes.io/instance: dhole
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: dhole
+        app.kubernetes.io/version: 0.1.0
+        dhole.dev/engine: untrusted
+        dhole.dev/tier: untrusted
+        helm.sh/chart: dhole-0.1.0
+    spec:
+      containers:
+      - env:
+        - name: DHOLE_BUS_URL
+          value: nats://dhole-nats:4222
+        - name: DHOLE_ENGINE_ID
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: DHOLE_TIER
+          value: untrusted
+        - name: DHOLE_SLOTS
+          value: '6'
+        - name: DHOLE_STATE_DIR
+          value: /var/lib/dhole-engine
+        - name: DHOLE_OBJECT_STORE
+          value: s3
+        - name: DHOLE_S3_BUCKET
+          value: dhole
+        - name: DHOLE_S3_ENDPOINT
+          value: http://minio.dhole-test.svc.cluster.local:9000
+        - name: DHOLE_S3_REGION
+          value: us-east-1
+        - name: DHOLE_S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: accessKeyId
+              name: dhole-s3
+        - name: DHOLE_S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: secretAccessKey
+              name: dhole-s3
+        - name: DHOLE_S3_SESSION_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: sessionToken
+              name: dhole-s3
+              optional: true
+        - name: DHOLE_EXECUTOR
+          value: kubernetes
+        - name: DHOLE_SANDBOX_NAMESPACE
+          value: dhole
+        - name: DHOLE_SANDBOX_CPU_REQUEST
+          value: 250m
+        - name: DHOLE_SANDBOX_CPU_LIMIT
+          value: '2'
+        - name: DHOLE_SANDBOX_MEMORY_REQUEST
+          value: 256Mi
+        - name: DHOLE_SANDBOX_MEMORY_LIMIT
+          value: 3Gi
+        image: 192.168.10.131/azrtydxb/dhole-engine:eb1fbec
+        imagePullPolicy: Always
+        name: engine
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/dhole-engine
+          name: state
+        - mountPath: /tmp
+          name: tmp
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+      serviceAccount: dhole
+      serviceAccountName: dhole
+      terminationGracePeriodSeconds: 120
+      volumes:
+      - emptyDir: {}
+        name: state
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhole-engine-vm
+  namespace: dhole
+  labels:
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    dhole.dev/tier: trusted
+    helm.sh/chart: dhole-0.1.0
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: engine
+      app.kubernetes.io/instance: dhole
+      app.kubernetes.io/name: dhole
+      dhole.dev/engine: vm
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: engine
+        app.kubernetes.io/instance: dhole
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: dhole
+        app.kubernetes.io/version: 0.1.0
+        dhole.dev/engine: vm
+        dhole.dev/tier: trusted
+        helm.sh/chart: dhole-0.1.0
+    spec:
+      containers:
+      - env:
+        - name: DHOLE_BUS_URL
+          value: nats://dhole-nats:4222
+        - name: DHOLE_ENGINE_ID
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: DHOLE_TIER
+          value: trusted
+        - name: DHOLE_SLOTS
+          value: '1'
+        - name: DHOLE_STATE_DIR
+          value: /var/lib/dhole-engine
+        - name: DHOLE_OBJECT_STORE
+          value: s3
+        - name: DHOLE_S3_BUCKET
+          value: dhole
+        - name: DHOLE_S3_ENDPOINT
+          value: http://minio.dhole-test.svc.cluster.local:9000
+        - name: DHOLE_S3_REGION
+          value: us-east-1
+        - name: DHOLE_S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: accessKeyId
+              name: dhole-s3
+        - name: DHOLE_S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: secretAccessKey
+              name: dhole-s3
+        - name: DHOLE_S3_SESSION_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: sessionToken
+              name: dhole-s3
+              optional: true
+        - name: DHOLE_EXECUTOR
+          value: vm
+        - name: DHOLE_VM_HYPERVISOR
+          value: /usr/local/bin/firecracker
+        - name: DHOLE_VM_KERNEL
+          value: /vm/vmlinux
+        - name: DHOLE_VM_MEM_MIB
+          value: '512'
+        - name: DHOLE_VM_ROOTFS
+          value: /vm/rootfs.cpio.gz
+        image: 192.168.10.131/azrtydxb/dhole-engine:vm-eb1fbec
+        imagePullPolicy: Always
+        name: engine
+        resources:
+          limits:
+            devices.kubevirt.io/kvm: '1'
+            memory: 2Gi
+          requests:
+            cpu: 200m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/dhole-engine
+          name: state
+        - mountPath: /tmp
+          name: tmp
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        supplementalGroups:
+        - 994
+      serviceAccount: dhole
+      serviceAccountName: dhole
+      terminationGracePeriodSeconds: 120
+      volumes:
+      - emptyDir: {}
+        name: state
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhole-nats
+  namespace: dhole
+  labels:
+    app.kubernetes.io/component: nats
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: nats
+      app.kubernetes.io/instance: dhole
+      app.kubernetes.io/name: dhole
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: nats
+        app.kubernetes.io/instance: dhole
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: dhole
+        app.kubernetes.io/version: 0.1.0
+        helm.sh/chart: dhole-0.1.0
+    spec:
+      containers:
+      - args:
+        - -c
+        - /etc/nats/nats.conf
+        image: nats:2.12-alpine
+        imagePullPolicy: IfNotPresent
+        name: nats
+        ports:
+        - containerPort: 4222
+          name: client
+          protocol: TCP
+        - containerPort: 8222
+          name: monitor
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: monitor
+            scheme: HTTP
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/nats
+          name: config
+        - mountPath: /data
+          name: data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: dhole-nats
+        name: config
+      - emptyDir: {}
+        name: data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhole-postgres
+  namespace: dhole
+  labels:
+    app.kubernetes.io/component: postgres
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: postgres
+      app.kubernetes.io/instance: dhole
+      app.kubernetes.io/name: dhole
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: postgres
+        app.kubernetes.io/instance: dhole
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: dhole
+        app.kubernetes.io/version: 0.1.0
+        helm.sh/chart: dhole-0.1.0
+    spec:
+      containers:
+      - env:
+        - name: POSTGRES_DB
+          value: dhole
+        - name: POSTGRES_USER
+          value: dhole
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: dhole-store
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        image: postgres:17-alpine
+        imagePullPolicy: IfNotPresent
+        name: postgres
+        ports:
+        - containerPort: 5432
+          name: postgres
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - dhole
+          failureThreshold: 3
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir: {}
+        name: data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dhole
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: api
+    port: 7777
+    protocol: TCP
+    targetPort: api
+  selector:
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/name: dhole
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dhole-nats
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: client
+    port: 4222
+    protocol: TCP
+    targetPort: client
+  - name: monitor
+    port: 8222
+    protocol: TCP
+    targetPort: monitor
+  selector:
+    app.kubernetes.io/component: nats
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/name: dhole
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dhole-postgres
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: postgres
+    port: 5432
+    protocol: TCP
+    targetPort: postgres
+  selector:
+    app.kubernetes.io/component: postgres
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/name: dhole
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+data:
+  nats.conf: "port: 4222\nhttp: 8222\njetstream {\n  store_dir: \"/data\"\n  max_file_store:\
+    \ \"10G\"\n}\n"
+kind: ConfigMap
+metadata:
+  name: dhole-nats
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dhole
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '3600'
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: dhole.kw.watteel.lab
+    http:
+      paths:
+      - backend:
+          service:
+            name: dhole
+            port:
+              number: 7777
+        path: /
+        pathType: Prefix

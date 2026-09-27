@@ -1,5 +1,8 @@
 # Dhole
 
+kw deployment is managed by [Kuvryn Sync](deploy/kuvryn-sync/README.md).
+
+
 An everything-pipeline engine: durable, typed workflows that run anywhere, driven by
 anything, editable by humans and agents alike.
 

@@ -1,0 +1,32 @@
+apiVersion: sync.kuvryn.io/v1alpha1
+kind: Application
+metadata:
+  name: dhole
+  namespace: dhole
+spec:
+  serviceAccountName: kuvryn-sync-deployer
+  source:
+    repositoryRef:
+      name: dhole
+    revision: main
+    path: deploy/kuvryn-sync/kw
+    render:
+      type: yaml
+  destination:
+    namespace: dhole
+  sync:
+    automatic: true
+    conflictPolicy: fail
+    prune: true
+    selfHeal: true
+  strategy:
+    type: rolling
+    failurePolicy:
+      action: rollback
+      maxAttempts: 2
+      timeout: 10m
+  health:
+    timeout: 10m
+  history:
+    limit: 10
+  deletionPolicy: Orphan

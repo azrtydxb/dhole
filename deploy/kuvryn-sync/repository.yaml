@@ -1,0 +1,11 @@
+apiVersion: sync.kuvryn.io/v1alpha1
+kind: Repository
+metadata:
+  name: dhole
+  namespace: dhole
+spec:
+  type: git
+  git:
+    url: https://github.com/azrtydxb/dhole.git
+    revision: main
+  pollInterval: 60s
