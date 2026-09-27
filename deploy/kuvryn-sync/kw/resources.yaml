@@ -822,3 +822,76 @@ spec:
               number: 7777
         path: /
         pathType: Prefix
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dhole
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dhole-sandbox
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - ''
+  resources:
+  - pods/log
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dhole-sandbox
+  namespace: dhole
+  labels:
+    app.kubernetes.io/instance: dhole
+    app.kubernetes.io/managed-by: kuvryn-sync
+    app.kubernetes.io/name: dhole
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: dhole-0.1.0
+  annotations:
+    sync.kuvryn.io/prune: disabled
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dhole-sandbox
+subjects:
+- kind: ServiceAccount
+  name: dhole
+  namespace: dhole

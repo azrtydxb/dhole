@@ -30,3 +30,7 @@ spec:
   history:
     limit: 10
   deletionPolicy: Orphan
+  decryption:
+    provider: sops
+    secretRef:
+      name: kuvryn-sync-sops
