@@ -1,0 +1,90 @@
+name: go-ai-sdk bump
+
+# Keeps this product on the newest go-ai-sdk without anyone remembering to.
+# go-ai-sdk's release fan-out sends a repository_dispatch the moment it is
+# tagged; this opens a bump PR and turns on auto-merge, so it lands as soon as
+# the required CI checks on main pass — and never if they fail, which is the
+# point: a breaking v0.x release stays a red PR rather than a broken main.
+#
+# The PR is pushed with the azrtydxb-sdk-bump App's token, not GITHUB_TOKEN:
+# GitHub does not start workflows for pushes made with GITHUB_TOKEN, so CI
+# would never run and auto-merge would wait forever.
+#
+# The daily schedule is the safety net for a dispatch that never arrived; it
+# resolves @latest and does nothing when already current.
+
+on:
+  repository_dispatch:
+    types: [go-ai-sdk-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "go-ai-sdk version, e.g. v0.6.0 (default: latest)"
+        required: false
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions: {}
+
+concurrency:
+  group: go-ai-sdk-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: token
+        with:
+          app-id: ${{ vars.SDK_BUMP_APP_ID }}
+          private-key: ${{ secrets.SDK_BUMP_PRIVATE_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.token.outputs.token }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bump go-ai-sdk
+        id: bump
+        env:
+          VERSION: ${{ github.event.client_payload.version || inputs.version || 'latest' }}
+        run: |
+          if ! [[ "$VERSION" =~ ^(latest|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "::error::'$VERSION' is not a version"; exit 1
+          fi
+          go get "github.com/azrtydxb/go-ai-sdk@${VERSION}"
+          go mod tidy
+          resolved=$(go list -m -f '{{.Version}}' github.com/azrtydxb/go-ai-sdk)
+          echo "resolved=$resolved" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- go.mod go.sum; then
+            echo "already on go-ai-sdk $resolved"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open PR and enable auto-merge
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          RESOLVED: ${{ steps.bump.outputs.resolved }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+        run: |
+          bot_id=$(gh api "users/${APP_SLUG}%5Bbot%5D" -q .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          branch="bump/go-ai-sdk-${RESOLVED}"
+          git switch -c "$branch"
+          git commit -am "Bump go-ai-sdk to ${RESOLVED}"
+          git push --force origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number -q '.[].number')" ]; then
+            gh pr create --head "$branch" --title "Bump go-ai-sdk to ${RESOLVED}" \
+              --body "Automated by the go-ai-sdk bump workflow. Merges itself once the required checks pass; if they fail, ${RESOLVED} broke something here and needs a hand."
+          fi
+          gh pr merge "$branch" --auto --squash --delete-branch
+          # An older bump PR is superseded by this one; leaving it open only
+          # invites someone to merge a downgrade after this lands.
+          gh pr list --state open --json headRefName -q '.[].headRefName' \
+            | { grep '^bump/go-ai-sdk-' || true; } | { grep -vxF "$branch" || true; } \
+            | while read -r old; do gh pr close "$old" --delete-branch --comment "Superseded by ${branch}."; done
