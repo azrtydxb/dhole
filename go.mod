@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.3
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.112.0
-	github.com/azrtydxb/go-ai-sdk v0.4.1
+	github.com/azrtydxb/go-ai-sdk v0.6.0
 	github.com/containerd/containerd/v2 v2.3.5
 	github.com/containerd/errdefs v1.0.0
 	github.com/coreos/go-oidc/v3 v3.21.0
