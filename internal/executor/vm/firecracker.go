@@ -193,10 +193,11 @@ func readLine(r io.Reader) (string, error) {
 		if _, err := io.ReadFull(r, b[:]); err != nil {
 			return string(line), err
 		}
-		if b[0] == '\n' {
+		c := b[0]
+		if c == '\n' {
 			return string(line), nil
 		}
-		line = append(line, b[0])
+		line = append(line, c)
 		if len(line) > 256 {
 			return string(line), errors.New("the vsock handshake reply has no newline")
 		}

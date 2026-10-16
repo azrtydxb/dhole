@@ -27,8 +27,28 @@ DHOLE_TEST_KUBECONFIG     ?=
 # packaged containerd means root.
 DHOLE_TEST_CONTAINERD_SOCK ?=
 LDFLAGS     := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT)
+# The golangci-lint CI installs, and the one `make check` expects to find. Two
+# versions of the same linter do not report the same findings — gosec's G602
+# fired in CI on v2.6.2 over code a developer's v2.13.2 passed — so a gate run
+# on another version is a different gate, and `make check` says so.
+GOLANGCI_LINT_VERSION := v2.13.2
+# Every operating system the tree carries build-tagged files for. The linter
+# only sees the files that build for the GOOS it runs under, so a gate run on
+# a Mac never linted the Linux-only VM guest agent, and one run on Linux never
+# lints the Windows Job Object engine: both had findings that were red only
+# on the machine nobody was sitting at. Each pass cross-typechecks; nothing is
+# compiled or executed for the target, so all three run on any host.
+LINT_GOOS   ?= linux darwin windows
+# The buf CI installs for `buf lint` and `buf breaking`. The gate had never
+# reached its buf steps in CI, because lint failed first; when it did, buf was
+# not installed at all.
+BUF_VERSION := v1.72.0
+# go test's own default is ten minutes PER PACKAGE, and internal/server — a
+# whole plane started over and over — takes about nine on an amd64 runner and
+# more on arm64, where it was killed by that default mid-test.
+TEST_TIMEOUT ?= 30m
 
-.PHONY: check web-check web-build web-e2e test test-race test-integration conformance build clean
+.PHONY: check lint golangci-lint-version buf-version web-check web-build web-e2e test test-race test-integration conformance build clean
 .PHONY: acceptance acceptance-ci acceptance-automation acceptance-agent
 
 ## check: the commit gate — formatting, vet, lint. Fails on the first problem.
@@ -38,7 +58,7 @@ check:
 		echo "gofmt: these files are not formatted:"; echo "$$unformatted"; exit 1; \
 	fi
 	go vet $(GO_PKGS)
-	golangci-lint run $(GO_DIRS)
+	$(MAKE) lint
 	buf lint
 	@# Breaking-change detection needs a main to compare against; on a branch
 	@# whose main has no proto tree yet there is nothing to break.
@@ -46,6 +66,34 @@ check:
 		{ git rev-parse --verify main:proto >/dev/null 2>&1 && exit 1 || \
 		  echo "buf breaking: main has no proto tree yet — skipped"; }
 	$(MAKE) web-check
+
+## lint: golangci-lint over every package, once per GOOS in LINT_GOOS.
+## A version other than GOLANGCI_LINT_VERSION is WARNED about rather than
+## refused, so a machine with a newer linter can still commit — but the warning
+## is the reason a finding CI reports can be absent here.
+##
+## --allow-parallel-runners because the linter's lock is one file in the
+## system temp directory, shared by every checkout on the machine: without it a
+## second worktree's gate fails outright while the first one lints. Nothing
+## here runs --fix, which is the only thing the lock protects against.
+lint:
+	@want=$(GOLANGCI_LINT_VERSION); have=$$(golangci-lint --version 2>/dev/null | sed -n 's/.*version v\{0,1\}\([^ ]*\).*/v\1/p'); \
+	if [ "$$have" != "$$want" ]; then \
+		echo "lint: WARNING golangci-lint is $${have:-missing}, CI runs $$want — findings may differ from CI's"; \
+		echo "lint:   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$$want"; \
+	fi
+	@set -e; for goos in $(LINT_GOOS); do \
+		echo "golangci-lint (GOOS=$$goos)"; \
+		GOOS=$$goos golangci-lint run --allow-parallel-runners $(GO_DIRS); \
+	done
+
+## golangci-lint-version: the pinned linter version, for CI to install.
+golangci-lint-version:
+	@echo $(GOLANGCI_LINT_VERSION)
+
+## buf-version: the pinned buf version, for CI to install.
+buf-version:
+	@echo $(BUF_VERSION)
 
 ## web-check: the web app's half of the gate — typecheck, lint, unit tests.
 ## It SKIPS when web/node_modules is absent rather than failing: `make check`
@@ -74,11 +122,11 @@ web-e2e:
 ## survived review and the gate for two tasks, and was found only because an
 ## unrelated agent happened to run the suite this way.
 test-race:
-	go test -race $(GO_PKGS)
+	go test -race -timeout $(TEST_TIMEOUT) $(GO_PKGS)
 
 ## test: the whole suite.
 test:
-	go test $(GO_PKGS)
+	go test -timeout $(TEST_TIMEOUT) $(GO_PKGS)
 
 ## test-integration: the suite with the services in docker-compose.test.yml
 ## reachable. Start them first with `docker compose -f docker-compose.test.yml

@@ -39,7 +39,7 @@ func TestALoopBodyThatDispatchesToAnEngineRunsOnTheEngineOncePerIteration(t *tes
 	// The condition is about the pass that has just finished, so `iteration >=
 	// 2` is two passes and no more — neither the first nor the ceiling.
 	runID, err := srv.Submit(ctx, tenantID,
-		engineLoopPipeline("loop-on-an-engine", "spin", 4, "iteration >= 2", `{"done":false}`))
+		engineLoopPipeline("loop-on-an-engine", "spin", 4, "iteration >= 2", `{"done":false}`, 0))
 	require.NoError(t, err)
 
 	events := awaitRunCompleted(ctx, t, srv, runID)
@@ -68,7 +68,7 @@ func TestMaxIterationsBoundsTheNumberOfIterationsALoopAddsToTheRunsGraph(t *test
 	// ceiling, which is what makes the ceiling testable. The state it is asked
 	// about comes out of the ENGINE's own output.
 	runID, err := srv.Submit(ctx, tenantID,
-		engineLoopPipeline("loop-at-its-ceiling", "spin", 2, "state.work.done", `{"done":false}`))
+		engineLoopPipeline("loop-at-its-ceiling", "spin", 2, "state.work.done", `{"done":false}`, 0))
 	require.NoError(t, err)
 
 	awaitStepEvent(ctx, t, srv, runID, loop.ControllerID("spin", 3), runstore.StepFailed)
@@ -102,13 +102,26 @@ func TestARestartedPlaneContinuesALoopFromTheFragmentsInItsLogRatherThanRealisin
 	dir := t.TempDir()
 	first := startEmbeddedOn(ctx, t, dir)
 
+	// Each body takes a few seconds, so there is a window in which the only
+	// thing in flight is a body step on an engine.
 	runID, err := first.Submit(ctx, tenantID,
-		engineLoopPipeline("loop-across-a-restart", "spin", 4, "iteration >= 3", `{"done":false}`))
+		engineLoopPipeline("loop-across-a-restart", "spin", 4, "iteration >= 3", `{"done":false}`, 3))
 	require.NoError(t, err)
 
-	// Stop the plane the moment the loop has grown the run once. Everything
+	// Stop the plane the moment the loop has grown the run once: the first
+	// body step is dispatched, and no loop CONTROLLER is running. Everything
 	// after this is the second plane's work, read off the log alone.
-	awaitStepEvent(ctx, t, first, runID, "spin.1.work", runstore.StepSucceeded)
+	//
+	// Not at spin.1.work's success, which is where this used to stop. The
+	// plane dispatches the next controller, spin.2, the instant the body
+	// succeeds, and a controller is a plane-hosted step carrying the loop's
+	// AT_MOST_ONCE class: a stop that lands while it runs abandons it, and the
+	// second plane rightly parks it for an authorised replay instead of
+	// finishing the run. Whether the stop won that race depended on the
+	// machine — it lost on the arm64 runner and the run never completed. An
+	// interrupted body step is IDEMPOTENT and simply retried, so stopping
+	// inside the body is the restart this test is about, every time.
+	awaitStepEvent(ctx, t, first, runID, "spin.1.work", runstore.StepDispatched)
 	stopPlane(t, first)
 
 	second := startEmbeddedOn(ctx, t, dir)
@@ -129,13 +142,16 @@ func TestARestartedPlaneContinuesALoopFromTheFragmentsInItsLogRatherThanRealisin
 
 // engineLoopPipeline is a loop whose body is a FRAGMENT — a dhole.v1.Pipeline
 // in `config.body` — containing one step no builtin can claim.
-func engineLoopPipeline(id, stepID string, ceiling int, condition, answer string) *dholev1.Pipeline {
+//
+// bodySeconds, when positive, makes the body sleep that long before it
+// answers.
+func engineLoopPipeline(id, stepID string, ceiling int, condition, answer string, bodySeconds int) *dholev1.Pipeline {
 	// Marshalled rather than typed out: the reference carries JSON, the answer
 	// carries JSON, and the body that holds both is JSON. Every level of that
 	// escaping was got wrong by hand first, and the run stopped dead with the
 	// scheduler unable to decode the step it had been handed.
 	args, err := json.Marshal(map[string]any{
-		"args": []string{"/bin/sh", "-c", fmt.Sprintf("printf %%s %s > outputs/out", shellQuote(answer))},
+		"args": []string{"/bin/sh", "-c", fmt.Sprintf("sleep %d; printf %%s %s > outputs/out", bodySeconds, shellQuote(answer))},
 	})
 	if err != nil {
 		panic(err)

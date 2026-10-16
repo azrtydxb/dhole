@@ -8,7 +8,9 @@
 package charts_test
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -49,8 +51,27 @@ func renderNotes(t *testing.T, args ...string) string {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not on PATH: the chart cannot be rendered here")
 	}
-	out, err := exec.Command("helm",
-		append([]string{"install", "dhole", "./dhole", "--dry-run"}, args...)...).CombinedOutput()
+	// Helm 4, because only its client-side dry run renders an install without
+	// a cluster: helm 3's --dry-run still checks the API server is reachable
+	// before it renders anything. On a developer's machine with helm 3 that is
+	// a skip that says so; in CI, which installs helm 4, it is a failure,
+	// because a skip there would be a check that silently stopped running.
+	version, err := exec.Command("helm", "version", "--short").Output()
+	require.NoError(t, err, "helm version")
+	if !strings.HasPrefix(strings.TrimSpace(string(version)), "v4.") {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("helm %s cannot render NOTES.txt without a cluster; CI must install helm 4", version)
+		}
+		t.Skipf("helm %s cannot render NOTES.txt without a cluster; install helm 4 to run this", version)
+	}
+	cmd := exec.Command("helm",
+		append([]string{"install", "dhole", "./dhole", "--dry-run=client"}, args...)...)
+	// Never a real cluster. Without this helm reads the developer's own
+	// kubeconfig, so the test passed on any machine that could reach a
+	// cluster — contacting it to do so — and failed on a CI runner that
+	// could not, with "Kubernetes cluster unreachable".
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+filepath.Join(t.TempDir(), "no-cluster"))
+	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "helm install --dry-run failed: %s", out)
 	return string(out)
 }

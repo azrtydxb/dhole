@@ -119,8 +119,7 @@ func (c *Conn) Write(t FrameType, payload []byte) error {
 	if len(payload) > MaxFrame {
 		return ErrFrameTooLarge
 	}
-	var hdr [5]byte
-	hdr[0] = byte(t)
+	hdr := [5]byte{byte(t)}
 	binary.BigEndian.PutUint32(hdr[1:], uint32(len(payload))) // #nosec G115 -- MaxFrame is checked above
 	c.mu.Lock()
 	defer c.mu.Unlock()

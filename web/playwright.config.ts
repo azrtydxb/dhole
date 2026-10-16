@@ -83,7 +83,11 @@ export default defineConfig({
       timeout: 180_000,
     },
     {
-      command: "npm run dev",
+      // The port is passed rather than left to vite.config.ts, and strictly:
+      // a vite that found its default port taken would quietly bind the next
+      // one, and the suite would then wait on — or, locally, reuse — whatever
+      // else was listening on the port it was told to use.
+      command: `npm run dev -- --port ${new URL(webUrl).port} --strictPort`,
       url: webUrl,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
