@@ -20,7 +20,11 @@ jobs:
   gate:
     name: gate (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # `test` alone takes 10-12 minutes; push runs add the race and conformance
+    # steps on top of it. The old 20 was the sum's optimistic edge and GitHub
+    # cancelled the job mid-step when the race detector ran slow. The budget
+    # has to cover the worst push, not the average one.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

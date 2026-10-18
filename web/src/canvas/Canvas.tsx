@@ -600,28 +600,9 @@ export function Canvas({
             the whole edit state out of this file: the controls and the
             mutations they drive stay together, which is what keeps a refused
             operation reported next to the button that caused it. */}
-        {authoringHost !== null && createPortal(authoring, authoringHost)}
-        {refusal !== null && (
-          <p
-            data-testid="edge-error"
-            role="alert"
-            style={{
-              position: "absolute",
-              top: 12,
-              left: "50%",
-              transform: "translateX(-50%)",
-              margin: 0,
-              padding: "7px 14px",
-              fontSize: 10,
-              color: "var(--err)",
-              background: "var(--panel)",
-              border: "1px solid var(--err)",
-              borderRadius: 5,
-            }}
-          >
-            {refusal}
-          </p>
-        )}
+        {authoringHost !== null
+          ? createPortal(authoring, authoringHost)
+          : authoring}
       </div>
     );
   }
