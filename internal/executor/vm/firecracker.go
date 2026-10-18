@@ -193,10 +193,14 @@ func readLine(r io.Reader) (string, error) {
 		if _, err := io.ReadFull(r, b[:]); err != nil {
 			return string(line), err
 		}
-		if b[0] == '\n' {
+		// Compare and append through the slice rather than b[0]: the index
+		// is provably in range for a [1]byte, but gosec's bounds analysis
+		// cannot see that for a fixed-size array, and the slice form needs no
+		// suppression to be obviously safe.
+		if string(b[:]) == "\n" {
 			return string(line), nil
 		}
-		line = append(line, b[0])
+		line = append(line, b[:]...)
 		if len(line) > 256 {
 			return string(line), errors.New("the vsock handshake reply has no newline")
 		}
