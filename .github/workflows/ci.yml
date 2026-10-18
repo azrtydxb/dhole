@@ -3,7 +3,11 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -38,6 +42,7 @@ jobs:
       - name: test
         run: make test
       - name: test (race)
+        if: ${{ github.event_name != 'pull_request' }}
         run: make test-race
       # Linux is the primary target and was the one platform NOT running the
       # compliance suite — macOS ran it and Windows deliberately does not. The
@@ -46,6 +51,7 @@ jobs:
       # caught. The reference engine needs python3 and a POSIX shell, both of
       # which every Linux runner has.
       - name: conformance
+        if: ${{ github.event_name != 'pull_request' }}
         run: make conformance ENGINE="python3 testdata/engines/minimal-python/engine.py"
 
   # The containerd executor (Task 36). It is a job of its own rather than a
@@ -62,6 +68,7 @@ jobs:
   # reading.
   containerd:
     name: containerd executor (${{ matrix.runner }})
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -119,6 +126,7 @@ jobs:
   # something other than reading.
   vm:
     name: vm executor (firecracker)
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -206,6 +214,7 @@ jobs:
 
   web:
     name: web
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -240,6 +249,7 @@ jobs:
   # internal/executor/process are files nobody ever compiles, let alone runs.
   engine-macos:
     name: engine (macos-latest)
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -259,6 +269,7 @@ jobs:
 
   engine-windows:
     name: engine (windows-latest)
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:

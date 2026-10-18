@@ -128,3 +128,21 @@ jobs:
         run: go build -o "$RUNNER_TEMP/dhole-engine" ./cmd/dhole-engine
       - name: conformance (go engine, the one that ships)
         run: make conformance ENGINE="$RUNNER_TEMP/dhole-engine"
+
+  integration:
+    name: integration (services)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: start the test services
+        run: docker compose -f docker-compose.test.yml up -d --wait
+      - name: integration
+        run: make test-integration
+      - name: stop the test services
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
