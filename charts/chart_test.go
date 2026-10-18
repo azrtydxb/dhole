@@ -8,12 +8,16 @@
 package charts_test
 
 import (
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 )
 
 // render runs `helm template` and returns the manifest, skipping when helm is
@@ -41,23 +45,80 @@ func renderErr(t *testing.T, args ...string) (string, error) {
 
 // renderNotes returns the chart's NOTES.txt as an operator sees it.
 //
-// `helm template` does not render notes, so a mistake in NOTES.txt is invisible
-// to every other test in this file. A dry-run install does render them, which
-// is both how the text is asserted and how the template itself is type-checked.
+// `helm template` does not render the top chart's notes, so a mistake in
+// NOTES.txt is invisible to every other test in this file — and `helm install
+// --dry-run=client` is NOT a way to render them without a cluster on the Helm a
+// runner ships: in Helm 3 the install path reaches the cluster whenever
+// ClientOnly is false, and only `helm template` ever sets ClientOnly, so a
+// client dry run still fails with "Kubernetes cluster unreachable" where there
+// is no cluster.
+//
+// The notes are therefore rendered through helm's OWN template engine, in the
+// client-only mode `helm template` uses: a temporary copy of the chart hands
+// NOTES.txt to `.Files` and carries a one-template manifest that `tpl`s it into
+// a ConfigMap, which `helm template` renders without ever contacting a cluster.
+// The template runs with the same context, values and helper functions a real
+// install gives it, so the text is asserted and the template is type-checked.
 func renderNotes(t *testing.T, args ...string) string {
 	t.Helper()
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not on PATH: the chart cannot be rendered here")
 	}
-	// --dry-run=client, not plain --dry-run: the latter resolves to a
-	// SERVER-side dry run on the Helm a CI runner ships, which dials the
-	// cluster and fails with "Kubernetes cluster unreachable" wherever there
-	// is none. Notes are rendered by the client dry run too, so this keeps
-	// the assertion and makes the test hermetic.
+	dir := t.TempDir()
+	chartDir := filepath.Join(dir, "dhole")
+	copyChart(t, "./dhole", chartDir)
+
+	// `templates/` is not exposed to `.Files`, so the notes move beside the
+	// chart's values and a manifest renders them.
+	notes, err := os.ReadFile(filepath.Join(chartDir, "templates", "NOTES.txt"))
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(chartDir, "files"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(chartDir, "files", "NOTES.tmpl"), notes, 0o644))
+	require.NoError(t, os.Remove(filepath.Join(chartDir, "templates", "NOTES.txt")))
+
+	const manifest = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dhole-notes
+data:
+  notes: |
+{{ tpl (.Files.Get "files/NOTES.tmpl") . | indent 4 }}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(chartDir, "templates", "zz-notes.yaml"), []byte(manifest), 0o644))
+
 	out, err := exec.Command("helm",
-		append([]string{"install", "dhole", "./dhole", "--dry-run=client"}, args...)...).CombinedOutput()
-	require.NoError(t, err, "helm install --dry-run=client failed: %s", out)
-	return string(out)
+		append([]string{"template", "dhole", chartDir, "--show-only", "templates/zz-notes.yaml"}, args...)...).CombinedOutput()
+	require.NoError(t, err, "rendering the chart's notes failed: %s", out)
+
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &cm), "the rendered notes did not parse: %s", out)
+	return cm.Data["notes"]
+}
+
+// copyChart copies a chart directory, so a test can render a modified copy
+// without touching the checked-in chart.
+func copyChart(t *testing.T, src, dst string) {
+	t.Helper()
+	require.NoError(t, filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	}))
 }
 
 // TestJetStreamSizeIsInNATSUnitsNotKubernetesOnes pins the translation.
