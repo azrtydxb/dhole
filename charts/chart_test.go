@@ -49,9 +49,14 @@ func renderNotes(t *testing.T, args ...string) string {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not on PATH: the chart cannot be rendered here")
 	}
+	// --dry-run=client, not plain --dry-run: the latter resolves to a
+	// SERVER-side dry run on the Helm a CI runner ships, which dials the
+	// cluster and fails with "Kubernetes cluster unreachable" wherever there
+	// is none. Notes are rendered by the client dry run too, so this keeps
+	// the assertion and makes the test hermetic.
 	out, err := exec.Command("helm",
-		append([]string{"install", "dhole", "./dhole", "--dry-run"}, args...)...).CombinedOutput()
-	require.NoError(t, err, "helm install --dry-run failed: %s", out)
+		append([]string{"install", "dhole", "./dhole", "--dry-run=client"}, args...)...).CombinedOutput()
+	require.NoError(t, err, "helm install --dry-run=client failed: %s", out)
 	return string(out)
 }
 
