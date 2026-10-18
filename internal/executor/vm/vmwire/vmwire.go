@@ -119,8 +119,11 @@ func (c *Conn) Write(t FrameType, payload []byte) error {
 	if len(payload) > MaxFrame {
 		return ErrFrameTooLarge
 	}
-	var hdr [5]byte
-	hdr[0] = byte(t)
+	// The frame type is set in the composite literal rather than with
+	// hdr[0] = ...: the index is provably in range for a [5]byte, but gosec's
+	// bounds analysis cannot see that for a fixed-size array, and a literal
+	// needs no suppression to be obviously safe.
+	hdr := [5]byte{byte(t)}
 	binary.BigEndian.PutUint32(hdr[1:], uint32(len(payload))) // #nosec G115 -- MaxFrame is checked above
 	c.mu.Lock()
 	defer c.mu.Unlock()

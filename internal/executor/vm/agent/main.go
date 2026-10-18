@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,7 +53,11 @@ func main() {
 	if err := os.Setenv("PATH", guestPath); err != nil {
 		fatal(fmt.Errorf("set the guest PATH: %w", err))
 	}
-	if err := os.MkdirAll(vmwire.SandboxRoot, 0o755); err != nil {
+	// 0o750, not 0o755: every process in the guest already runs as root, so
+	// there is nothing the sandbox needs from "other" permissions. The
+	// narrower mode costs nothing and keeps the root unreadable by a stray
+	// unprivileged uid a step may have dropped to.
+	if err := os.MkdirAll(vmwire.SandboxRoot, 0o750); err != nil {
 		fatal(fmt.Errorf("create the sandbox root: %w", err))
 	}
 	if err := serve(); err != nil {
@@ -81,7 +86,10 @@ func mountGuestFilesystems() {
 		{"devtmpfs", "/dev", "devtmpfs"},
 		{"tmpfs", "/tmp", "tmpfs"},
 	} {
-		if err := os.MkdirAll(m.target, 0o755); err != nil {
+		// 0o750: these mount points are immediately shadowed by the
+		// filesystem mounted on top, so their own mode is never what a step
+		// sees. Nothing is gained by making them world-readable first.
+		if err := os.MkdirAll(m.target, 0o750); err != nil {
 			fmt.Fprintf(os.Stderr, "dhole-vm-agent: mkdir %s: %v\n", m.target, err)
 			continue
 		}
@@ -318,10 +326,12 @@ func (a *agent) put(c *vmwire.Conn, req vmwire.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create the parents of %q: %w", req.Name, err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644) // #nosec G304 -- resolve() confined it to the sandbox root
+	// 0o600: the file is written by the guest's root and read back through
+	// the get RPC, never by another uid, so "other" bits have no reader.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- resolve() confined it to the sandbox root
 	if err != nil {
 		return err
 	}
@@ -374,7 +384,7 @@ func (a *agent) mkdir(req vmwire.Request) error {
 	if err != nil {
 		return err
 	}
-	return os.MkdirAll(path, 0o755)
+	return os.MkdirAll(path, 0o750)
 }
 
 func (a *agent) signalAll(name string) error {
@@ -448,9 +458,13 @@ func exitCode(state *os.ProcessState, waitErr error) int32 {
 		return int32(128 + status.Signal()) // #nosec G115 -- signal numbers are below 64
 	}
 	code := state.ExitCode()
-	if code < 0 {
+	if code < 0 || code > math.MaxInt32 {
 		// Never negative on the wire: a negative int32 sign-extends to ten
-		// bytes as a varint and hangs the decoder on the far side.
+		// bytes as a varint and hangs the decoder on the far side. The upper
+		// bound cannot be reached on POSIX (an exit status is 8 bits), but the
+		// guard makes the int -> int32 narrowing total rather than relying on
+		// that: WaitStatus.ExitCode returns a plain int, and a value above
+		// MaxInt32 would wrap to a negative wire code.
 		return 1
 	}
 	return int32(code)
