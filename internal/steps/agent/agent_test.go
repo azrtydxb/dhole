@@ -492,7 +492,17 @@ type stubModel struct {
 func (m *stubModel) lastPrompt() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return fmt.Sprintf("%+v", m.lastCall)
+	// Rendered as JSON, not with %+v, because a tool result is a
+	// json.RawMessage and its rendering changed between Go versions: 1.27
+	// aliases it to jsontext.Value (a Stringer, so %+v prints the JSON) while
+	// 1.26 prints the raw bytes as decimal numbers. An assertion on the
+	// reason in a resumed conversation therefore passed on one toolchain and
+	// failed on the other. JSON renders both identically.
+	b, err := json.Marshal(m.lastCall)
+	if err != nil {
+		return fmt.Sprintf("%+v", m.lastCall)
+	}
+	return string(b)
 }
 
 func (m *stubModel) script(resps ...*provider.Response) {

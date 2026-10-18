@@ -5,6 +5,22 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 COMMIT      ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/azrtydxb/dhole/internal/version
 
+# The lint toolchain the gate pins. CI installs both with `go install` so a
+# developer and CI run the exact same versions; bump BUF_VERSION when the
+# `buf.yaml` `version:` changes.
+GOLANGCI_LINT_VERSION ?= v2.6.2
+BUF_VERSION           ?= v1.47.2
+
+.PHONY: tools buf-version
+## tools: install the pinned gate toolchain (golangci-lint, buf).
+tools:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
+
+## buf-version: print the pinned buf version (used by CI).
+buf-version:
+	@echo $(BUF_VERSION)
+
 # Endpoints for `make test-integration`, matching docker-compose.test.yml.
 # Overridable so the suite can be pointed at services running elsewhere.
 DHOLE_TEST_S3_ENDPOINT    ?= http://127.0.0.1:59000

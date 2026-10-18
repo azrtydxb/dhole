@@ -627,7 +627,8 @@ func (c *identityCache) of(rootfs string) (string, error) {
 // hypervisor.
 //
 // Two things have to be true and only the first is obvious. /dev/kvm must be
-// there, or there is no virtualisation at all. But a host that virtualises
+// openable, not merely present: a node that cannot be opened gives the guest
+// nothing either. But a host that virtualises
 // perfectly well may still refuse to nest, and on every architecture that
 // refusal is spelled in the same place: the kvm module's `nested` parameter.
 // Advertising the capability on the strength of /dev/kvm alone is the mistake
@@ -635,9 +636,17 @@ func (c *identityCache) of(rootfs string) (string, error) {
 // /dev/kvm inside the guest, find nothing, and fail in a way that reads as its
 // own bug.
 func nestedVirtAvailable() bool {
-	if _, err := os.Stat("/dev/kvm"); err != nil {
+	// /dev/kvm must be OPENABLE, not merely present. A device node that exists
+	// but cannot be opened — a runner with the module loaded and no permission
+	// to the node, say — advertises a capability the guest then fails to use,
+	// which is the exact failure this function exists to avoid. The guest
+	// needs read/write to run a VM, so that is what is required here; a
+	// read-only check would advertise a host that cannot actually nest.
+	dev, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+	if err != nil {
 		return false
 	}
+	_ = dev.Close()
 	for _, param := range []string{
 		"/sys/module/kvm_intel/parameters/nested",
 		"/sys/module/kvm_amd/parameters/nested",

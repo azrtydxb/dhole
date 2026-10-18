@@ -33,10 +33,12 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-      - name: install golangci-lint
-        # CI runs the same `make check` a developer runs, so the linter is
-        # installed rather than invoked through a separate action.
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+      - name: install gate tools
+        # CI runs the same `make check` a developer runs, so the tools are
+        # installed from the Makefile pins (golangci-lint + buf) rather than
+        # through separate actions. `make check` shells out to `buf lint`, so
+        # buf must be on PATH or the gate fails with `buf: No such file`.
+        run: make tools
       - name: check
         run: make check
       - name: test

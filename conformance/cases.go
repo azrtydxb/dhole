@@ -221,9 +221,14 @@ func dispatchSuccessCase() kase {
 				return fmt.Errorf("the authoritative log at %q does not contain the step's stdout "+
 					"(%d bytes: %q)", status.GetLogKey(), len(log), truncate(log, 200))
 			}
-			if len(h.logChunks(d)) == 0 {
-				return fmt.Errorf("no LogChunk arrived on %s; the live copy is best-effort but it is not optional — "+
-					"a GUI watching this run would show nothing at all", h.logsSubject(d))
+			// The chunk is published before the terminal status, but the two
+			// reach the suite on separate subscriptions, each dispatched in
+			// its own goroutine — so the status can be handled before the
+			// log. Await the live copy rather than reading the counter at the
+			// instant the status lands, which raced on CI and read empty.
+			if err := h.awaitLogContains(ctx, d, "hello conformance", 10*time.Second); err != nil {
+				return fmt.Errorf("%w; the live copy is best-effort but it is not optional — a GUI watching "+
+					"this run would show nothing at all", err)
 			}
 			return nil
 		},
