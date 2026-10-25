@@ -80,7 +80,7 @@ spec:
             secretKeyRef:
               key: password
               name: nexus-push
-        image: 192.168.10.131/azrtydxb/dhole:eb1fbec
+        image: ant.kw.watteel.lab/oci-hosted/azrtydxb/dhole:eb1fbec
         imagePullPolicy: Always
         livenessProbe:
           failureThreshold: 3
@@ -235,7 +235,7 @@ spec:
           value: 256Mi
         - name: DHOLE_SANDBOX_MEMORY_LIMIT
           value: 3Gi
-        image: 192.168.10.131/azrtydxb/dhole-engine:eb1fbec
+        image: ant.kw.watteel.lab/oci-hosted/azrtydxb/dhole-engine:eb1fbec
         imagePullPolicy: Always
         name: engine
         resources: {}
@@ -359,7 +359,7 @@ spec:
           value: 256Mi
         - name: DHOLE_SANDBOX_MEMORY_LIMIT
           value: 3Gi
-        image: 192.168.10.131/azrtydxb/dhole-engine:eb1fbec
+        image: ant.kw.watteel.lab/oci-hosted/azrtydxb/dhole-engine:eb1fbec
         imagePullPolicy: Always
         name: engine
         resources: {}
@@ -481,7 +481,7 @@ spec:
           value: '512'
         - name: DHOLE_VM_ROOTFS
           value: /vm/rootfs.cpio.gz
-        image: 192.168.10.131/azrtydxb/dhole-engine:vm-eb1fbec
+        image: ant.kw.watteel.lab/oci-hosted/azrtydxb/dhole-engine:vm-eb1fbec
         imagePullPolicy: Always
         name: engine
         resources:
