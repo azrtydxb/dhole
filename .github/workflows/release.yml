@@ -86,10 +86,9 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-      # QEMU so the arm64 image can be assembled on an amd64 runner. The
-      # binaries themselves are cross-compiled by the Go toolchain and never
-      # emulated; only the image layer assembly is.
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      # No QEMU: the Go toolchain cross-compiles the binaries, and the
+      # Dockerfile only COPYs one into a distroless base (no RUN), so building
+      # the arm64 image on this amd64 runner executes nothing foreign.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
