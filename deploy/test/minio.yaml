@@ -27,7 +27,7 @@ spec:
     spec:
       containers:
         - name: minio
-          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          image: cgr.dev/chainguard/minio@sha256:ddfab4c402bf32e7701600d16d8c40dbccfab4c4e5340eef4c324394349c7926
           args: ["server", "/data", "--console-address", ":9001"]
           envFrom:
             - secretRef: { name: dhole-test-minio }
