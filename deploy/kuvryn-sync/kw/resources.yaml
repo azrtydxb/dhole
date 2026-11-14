@@ -810,8 +810,15 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 64m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # TLS from the lab CA: cert-manager's ingress-shim issues dhole-tls from
+    # cluster-ca (the Sync deployer cannot create Certificate objects).
+    cert-manager.io/cluster-issuer: cluster-ca
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - dhole.kw.watteel.lab
+      secretName: dhole-tls
   rules:
     - host: dhole.kw.watteel.lab
       http:
